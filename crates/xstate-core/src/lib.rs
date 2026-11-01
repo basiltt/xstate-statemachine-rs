@@ -42,7 +42,7 @@ pub mod logic;
 pub mod machine;
 pub mod observer;
 pub mod pure;
-mod pyjson;
+pub mod pyjson;
 pub mod snapshot;
 
 pub use clock::{Clock, RealClock, SimulatedClock};

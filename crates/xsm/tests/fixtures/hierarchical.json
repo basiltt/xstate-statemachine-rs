@@ -1,0 +1,28 @@
+{
+  "id": "checkout",
+  "version": "2.1",
+  "initial": "cart",
+  "context": { "items": 0, "token": "secret-123" },
+  "states": {
+    "cart": {
+      "entry": "showCart",
+      "on": {
+        "ADD": { "actions": "countItem" },
+        "PAY": { "target": "payment", "guard": "hasItems", "actions": ["charge"] }
+      }
+    },
+    "payment": {
+      "initial": "waiting",
+      "states": {
+        "waiting": {
+          "after": { "500": "retry" },
+          "on": { "CONFIRM": "done" }
+        },
+        "retry": { "on": { "AGAIN": "waiting" } },
+        "done": { "type": "final" }
+      },
+      "onDone": "receipt"
+    },
+    "receipt": {}
+  }
+}

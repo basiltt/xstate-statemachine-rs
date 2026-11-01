@@ -1,0 +1,9 @@
+{
+  "id": "toggle",
+  "version": "1.0",
+  "initial": "inactive",
+  "states": {
+    "inactive": { "on": { "TOGGLE": "active" } },
+    "active": { "on": { "TOGGLE": "inactive" } }
+  }
+}

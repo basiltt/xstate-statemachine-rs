@@ -10,12 +10,16 @@ This is the Rust port of the Python library
 snapshot format and store layouts (a Rust worker can resume an instance a Python worker saved),
 same CLI; built for speed with Rust's type system doing the checking.
 
-> **Status: Phase 1 in progress — the core engine works.** `xstate-core` parses XState v5
-> JSON, compiles it, and runs it with a synchronous interpreter; `xstate-tokio` runs it as an
-> async actor with timers, async services and child actors. The engine matches XState v5 on
-> every conformance case and produces Python-identical snapshots and structure hashes.
-> Persistence stores, the CLI and the remaining integrations follow. See
-> [`docs/feasibility-report.md`](docs/feasibility-report.md) and [`docs/adr/`](docs/adr/).
+> **Status: Phases 1–3 landed — engine, persistence, observability, inspector and CLI.**
+> `xstate-core` parses XState v5 JSON, compiles it, and runs it with a synchronous
+> interpreter; `xstate-tokio` runs it as an async actor with timers, async services and child
+> actors; `xstate-persistence` saves and resumes instances in Python-compatible stores;
+> `xstate-inspect` streams Stately Inspector messages and `xstate-observability` records
+> metrics; `xsm` is the command-line tool. The engine matches XState v5 on every conformance
+> case and produces Python-identical snapshots, structure hashes and inspector recordings.
+> Remaining integrations (Redis/sqlx stores, typed DSL macros, EDA, axum, agents, Python
+> bindings) follow. See [`docs/feasibility-report.md`](docs/feasibility-report.md) and
+> [`docs/adr/`](docs/adr/).
 
 ## Quick start
 
@@ -52,10 +56,12 @@ assert_eq!(door.state_ids(), ["door.opened"]);
 | [`xstate-persistence`](crates/xstate-persistence) | stores, locks, `persisted` wrapper, durable deadlines, idempotency inbox, audit log |
 | [`xstate-testing`](crates/xstate-testing) | stub logic, simulated clock fixtures, path walking, coverage |
 | [`xstate-conformance`](crates/xstate-conformance) | fixture model and harness for the conformance suite (dev only) |
-| [`xsm`](crates/xsm) | command-line tool |
+| [`xstate-inspect`](crates/xstate-inspect) | Stately Inspector protocol: observer, allow-lists and redaction, JSONL recording and replay |
+| [`xstate-observability`](crates/xstate-observability) | `metrics`-facade observer with the Python `PrometheusPlugin` metric set and label hygiene |
+| [`xsm`](crates/xsm) | command-line tool: validate, inspect, diagram, docs, simulate, paths, snapshots |
 
 Planned for later phases: `xstate-macros` (typed DSL), `xstate-eda`, `xstate-patterns`,
-`xstate-observability`, `xstate-inspect`, `xstate-axum`, `xstate-agents`, `xstate-py`.
+`xstate-axum`, `xstate-agents`, `xstate-py`.
 
 ## Conformance
 

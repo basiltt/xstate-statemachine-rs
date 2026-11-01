@@ -17,7 +17,7 @@ tracing = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-metrics-util = "0.19"
+metrics-util = { version = "0.19", features = ["debugging"] }
 
 [lints]
 workspace = true

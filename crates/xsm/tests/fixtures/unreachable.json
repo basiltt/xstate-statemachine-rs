@@ -1,0 +1,9 @@
+{
+  "id": "island",
+  "initial": "a",
+  "states": {
+    "a": { "on": { "GO": "b" } },
+    "b": {},
+    "orphan": { "on": { "BACK": "a" } }
+  }
+}

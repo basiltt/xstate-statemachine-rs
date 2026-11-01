@@ -129,6 +129,23 @@ impl<C> ActiveState<C> {
         ids.sort();
         ids
     }
+
+    /// XState-style hierarchical state value (`"idle"`, `{"a": {"b": "c"}}`, `{}` when done
+    /// at the root).
+    #[must_use]
+    pub fn value(&self, machine: &Machine) -> Value {
+        crate::snapshot::state_value(machine, &|s| self.is_active(s), StateId::ROOT)
+    }
+
+    /// Tags of every active state, deduplicated and sorted.
+    #[must_use]
+    pub fn tags(&self, machine: &Machine) -> Vec<String> {
+        let mut tags: Vec<String> =
+            self.configuration().flat_map(|s| machine.node(s).tags.iter().cloned()).collect();
+        tags.sort();
+        tags.dedup();
+        tags
+    }
 }
 
 impl<C: Context> ActiveState<C> {

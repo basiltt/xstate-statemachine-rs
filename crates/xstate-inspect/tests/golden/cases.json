@@ -1,0 +1,86 @@
+{
+  "_comment": "Inspector golden cases. `conformance/tools/inspect_golden.py` runs each case through the Python InspectorPlugin and writes `<name>.jsonl`; `tests/golden.rs` runs the same case through InspectorObserver and compares byte for byte. The clock starts at 1700000000.0 s and advances 0.5 s per call.",
+  "cases": [
+    {
+      "name": "toggle_default",
+      "options": {},
+      "config": {
+        "id": "toggle",
+        "initial": "inactive",
+        "context": {"count": 0, "api_key": "k-123", "user": {"name": "Ada", "email": "ada@example.com"}},
+        "states": {
+          "inactive": {"tags": ["off"], "on": {"TOGGLE": {"target": "active", "actions": "bump"}}},
+          "active": {"tags": ["on", "lit"], "on": {"TOGGLE": "inactive", "FINISH": "done"}},
+          "done": {"type": "final"}
+        }
+      },
+      "events": [
+        {"type": "TOGGLE", "payload": {"n": 1, "password": "hunter2"}},
+        {"type": "UNKNOWN"},
+        {"type": "TOGGLE"},
+        {"type": "TOGGLE"},
+        {"type": "FINISH"}
+      ]
+    },
+    {
+      "name": "toggle_allowlists",
+      "options": {
+        "context_allowlist": ["count", "user", "api_key"],
+        "include_payloads": true,
+        "payload_allowlist": ["n", "password", "note", "type"]
+      },
+      "config": {
+        "id": "toggle",
+        "initial": "inactive",
+        "context": {"count": 0, "api_key": "k-123", "user": {"name": "Ada", "email": "ada@example.com", "x-auth-token": "t"}},
+        "states": {
+          "inactive": {"on": {"TOGGLE": {"target": "active", "actions": "bump"}}},
+          "active": {"on": {"TOGGLE": "inactive"}}
+        }
+      },
+      "events": [
+        {"type": "TOGGLE", "payload": {"n": 1, "password": "hunter2", "note": "café ☃", "secretish": "no", "other": "dropped"}},
+        {"type": "TOGGLE", "payload": {"n": 2, "nested": {"Api-Key": "x"}, "note": {"token": "a", "ok": [1, {"cvv": "9"}]}}}
+      ]
+    },
+    {
+      "name": "nested_parallel",
+      "options": {"context_allowlist": ["n"]},
+      "config": {
+        "id": "doc",
+        "initial": "editing",
+        "context": {"n": 0},
+        "states": {
+          "editing": {
+            "type": "parallel",
+            "states": {
+              "text": {
+                "initial": "idle",
+                "states": {
+                  "idle": {"on": {"TYPE": "typing"}},
+                  "typing": {"tags": ["busy"], "on": {"STOP": "idle"}}
+                }
+              },
+              "save": {
+                "initial": "clean",
+                "states": {
+                  "clean": {"on": {"TYPE": "dirty"}},
+                  "dirty": {"tags": ["busy", "unsaved"], "on": {"SAVE": "clean"}}
+                }
+              }
+            },
+            "on": {"CLOSE": "closed"}
+          },
+          "closed": {"type": "final"}
+        }
+      },
+      "events": [
+        {"type": "TYPE"},
+        {"type": "SAVE"},
+        {"type": "STOP"},
+        {"type": "CLOSE"},
+        {"type": "TYPE"}
+      ]
+    }
+  ]
+}

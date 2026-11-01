@@ -1,0 +1,7 @@
+{
+  "id": "broken",
+  "initial": "a",
+  "states": {
+    "a": { "on": { "GO": "nowhere" } }
+  }
+}

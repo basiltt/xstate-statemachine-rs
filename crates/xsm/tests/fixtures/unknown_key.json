@@ -1,0 +1,8 @@
+{
+  "id": "typo",
+  "initial": "a",
+  "states": {
+    "a": { "on": { "GO": "b" }, "entyr": "oops" },
+    "b": {}
+  }
+}

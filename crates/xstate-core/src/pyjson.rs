@@ -1,22 +1,39 @@
-//! Python-compatible JSON and `repr` rendering, used only to reproduce the Python library's
-//! `structure_hash` byte-for-byte (ADR-0003).
+//! Python-compatible JSON and `repr` rendering, used to reproduce the Python library's
+//! `structure_hash` and inspector recordings byte-for-byte (ADR-0003).
 //!
-//! `dumps` mirrors `json.dumps(value, sort_keys=True)` with the default separators and
-//! `ensure_ascii=True`; `repr_str` mirrors `repr()` of a `str`. Only the value shapes that
-//! occur in the hash input (objects, arrays, strings, null, booleans, integers) are needed.
+//! [`dumps`] mirrors `json.dumps(value, sort_keys=True)` with the default separators and
+//! `ensure_ascii=True`; [`dumps_compact`] mirrors `json.dumps(value, separators=(",", ":"))`
+//! in insertion order; `repr_str` mirrors `repr()` of a `str`.
 
 use std::fmt::Write as _;
 
 use serde_json::Value;
 
-/// `json.dumps(value, sort_keys=True)`.
-pub(crate) fn dumps(value: &Value) -> String {
+/// Separators and key order: Python's defaults or the compact form.
+#[derive(Debug, Clone, Copy)]
+struct Style {
+    sort_keys: bool,
+    item_sep: &'static str,
+    key_sep: &'static str,
+}
+
+/// `json.dumps(value, sort_keys=True)` (default separators, `ensure_ascii=True`).
+#[must_use]
+pub fn dumps(value: &Value) -> String {
     let mut out = String::new();
-    write_value(value, &mut out);
+    write_value(value, &mut out, Style { sort_keys: true, item_sep: ", ", key_sep: ": " });
     out
 }
 
-fn write_value(value: &Value, out: &mut String) {
+/// `json.dumps(value, separators=(",", ":"), ensure_ascii=True)` in insertion order.
+#[must_use]
+pub fn dumps_compact(value: &Value) -> String {
+    let mut out = String::new();
+    write_value(value, &mut out, Style { sort_keys: false, item_sep: ",", key_sep: ":" });
+    out
+}
+
+fn write_value(value: &Value, out: &mut String, style: Style) {
     match value {
         Value::Null => out.push_str("null"),
         Value::Bool(true) => out.push_str("true"),
@@ -35,23 +52,25 @@ fn write_value(value: &Value, out: &mut String) {
             out.push('[');
             for (i, item) in items.iter().enumerate() {
                 if i > 0 {
-                    out.push_str(", ");
+                    out.push_str(style.item_sep);
                 }
-                write_value(item, out);
+                write_value(item, out, style);
             }
             out.push(']');
         }
         Value::Object(map) => {
             let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
+            if style.sort_keys {
+                keys.sort();
+            }
             out.push('{');
             for (i, key) in keys.into_iter().enumerate() {
                 if i > 0 {
-                    out.push_str(", ");
+                    out.push_str(style.item_sep);
                 }
                 write_json_str(key, out);
-                out.push_str(": ");
-                write_value(&map[key], out);
+                out.push_str(style.key_sep);
+                write_value(&map[key], out, style);
             }
             out.push('}');
         }
@@ -142,6 +161,12 @@ mod tests {
     fn dumps_matches_python_defaults() {
         let v = serde_json::json!({"b": [1, "x"], "a": null, "c": {"z": true, "y": "é\""}});
         assert_eq!(dumps(&v), r#"{"a": null, "b": [1, "x"], "c": {"y": "\u00e9\"", "z": true}}"#);
+    }
+
+    #[test]
+    fn dumps_compact_keeps_insertion_order() {
+        let v = serde_json::json!({"b": [1, "x"], "a": {"z": true, "y": "\u{7f}"}});
+        assert_eq!(dumps_compact(&v), r#"{"b":[1,"x"],"a":{"z":true,"y":"\u007f"}}"#);
     }
 
     #[test]
