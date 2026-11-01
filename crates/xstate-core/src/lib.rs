@@ -27,16 +27,19 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+pub mod builder;
 pub mod clock;
 pub mod config;
 pub mod context;
 pub mod engine;
 mod error;
 pub mod event;
+pub mod export;
 mod ids;
 mod interpreter;
 pub mod logic;
 pub mod machine;
+pub mod pure;
 mod pyjson;
 pub mod snapshot;
 
