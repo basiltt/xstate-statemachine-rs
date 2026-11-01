@@ -35,6 +35,7 @@ pub mod engine;
 mod error;
 pub mod event;
 pub mod export;
+pub mod graph;
 mod ids;
 mod interpreter;
 pub mod logic;
