@@ -10,9 +10,38 @@ This is the Rust port of the Python library
 snapshot format and store layouts (a Rust worker can resume an instance a Python worker saved),
 same CLI; built for speed with Rust's type system doing the checking.
 
-> **Status: Phase 0 — design and skeleton.** The engine lands in Phase 1. See
-> [`docs/feasibility-report.md`](docs/feasibility-report.md) for the study and
-> [`docs/adr/`](docs/adr/) for the decisions taken.
+> **Status: Phase 1 in progress — the core engine works.** `xstate-core` parses XState v5
+> JSON, compiles it, and runs it with a synchronous interpreter; `xstate-tokio` runs it as an
+> async actor with timers, async services and child actors. The engine matches XState v5 on
+> every conformance case and produces Python-identical snapshots and structure hashes.
+> Persistence stores, the CLI and the remaining integrations follow. See
+> [`docs/feasibility-report.md`](docs/feasibility-report.md) and [`docs/adr/`](docs/adr/).
+
+## Quick start
+
+```rust
+use xstate_core::{Machine, MachineLogic, SyncInterpreter};
+
+let machine = Machine::from_json(r#"{
+  "id": "door", "initial": "closed", "context": {"opens": 0},
+  "states": {
+    "closed": {"on": {"OPEN": {"target": "opened", "guard": "isUnlocked", "actions": "countOpen"}}},
+    "opened": {"on": {"CLOSE": "closed"}}
+  }
+}"#)?;
+let logic = MachineLogic::dynamic()
+    .guard("isUnlocked", |ctx, _event, _params| Ok(ctx["locked"] != true))
+    .action("countOpen", |scope| {
+        let n = scope.context["opens"].as_u64().unwrap_or(0) + 1;
+        scope.context["opens"] = n.into();
+        Ok(())
+    });
+let mut door = SyncInterpreter::new(machine, logic);
+door.start()?;
+door.send("OPEN")?;
+assert_eq!(door.state_ids(), ["door.opened"]);
+# Ok::<(), xstate_core::Error>(())
+```
 
 ## Workspace
 
