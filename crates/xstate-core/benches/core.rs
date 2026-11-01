@@ -1,7 +1,7 @@
 //! Engine benchmarks feeding the perf gate (see `benches/README.md` at the workspace root).
 //! Ids match `benches/budgets.json`.
 
-#![allow(missing_docs)] // criterion macros generate undocumented items
+#![allow(missing_docs, clippy::expect_used, clippy::default_trait_access)] // benchmark harness
 
 use std::sync::Arc;
 
