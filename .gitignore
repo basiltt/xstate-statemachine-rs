@@ -1,0 +1,13 @@
+/target
+**/*.rs.bk
+Cargo.lock.orig
+*.profraw
+*.profdata
+/lcov.info
+/coverage/
+/conformance/tools/xstate_oracle/node_modules/
+/conformance/tools/.venv/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db

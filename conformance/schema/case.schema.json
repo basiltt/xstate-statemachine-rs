@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/basiltt/xstate-statemachine-rs/conformance/schema/case.schema.json",
+  "title": "Conformance case",
+  "type": "object",
+  "required": ["name", "description", "machine", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "description": { "type": "string", "minLength": 1 },
+    "tags": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "machine": { "type": "object", "required": ["id", "states"] },
+    "logic": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "guards": { "type": "object", "additionalProperties": { "type": "boolean" } },
+        "services": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": { "result": {}, "error": { "type": "string" } },
+            "additionalProperties": false
+          }
+        },
+        "delays": { "type": "object", "additionalProperties": { "type": "number", "minimum": 0 } }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["send"],
+            "additionalProperties": false,
+            "properties": {
+              "send": {
+                "oneOf": [
+                  { "type": "string" },
+                  { "type": "object", "required": ["type"], "properties": { "type": { "type": "string" } } }
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["advance_ms"],
+            "additionalProperties": false,
+            "properties": { "advance_ms": { "type": "number", "exclusiveMinimum": 0 } }
+          }
+        ]
+      }
+    },
+    "divergence": {
+      "type": "object",
+      "required": ["python", "spec", "rust_follows"],
+      "additionalProperties": false,
+      "properties": {
+        "python": { "type": "string" },
+        "spec": { "type": "string" },
+        "rust_follows": { "type": "string", "enum": ["xstate", "python"] }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "required": ["xstate", "python"],
+      "additionalProperties": false,
+      "properties": {
+        "xstate": { "$ref": "#/$defs/expectation" },
+        "python": { "$ref": "#/$defs/expectation" }
+      }
+    }
+  },
+  "$defs": {
+    "observation": {
+      "type": "object",
+      "required": ["state_ids", "context", "actions", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "state_ids": { "type": "array", "items": { "type": "string" } },
+        "context": {},
+        "actions": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string", "enum": ["running", "done", "error", "stopped"] },
+        "output": {},
+        "error": { "type": "string" }
+      }
+    },
+    "expectation": {
+      "type": "object",
+      "required": ["oracle", "initial", "steps"],
+      "properties": {
+        "oracle": {
+          "type": "object",
+          "required": ["name", "version"],
+          "properties": { "name": { "type": "string" }, "version": { "type": "string" } }
+        },
+        "initial": { "$ref": "#/$defs/observation" },
+        "steps": { "type": "array", "items": { "$ref": "#/$defs/observation" } },
+        "machine_hash": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+        "snapshot": { "type": "object" }
+      }
+    }
+  }
+}

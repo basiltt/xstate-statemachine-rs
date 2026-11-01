@@ -1,0 +1,167 @@
+{
+  "name": "final_output_done",
+  "description": "Reaching a top-level final state completes the machine with the machine-level output; later events are ignored.",
+  "tags": [
+    "final",
+    "output",
+    "status"
+  ],
+  "machine": {
+    "id": "job",
+    "initial": "running",
+    "context": {
+      "attempts": 1
+    },
+    "output": {
+      "ok": true
+    },
+    "states": {
+      "running": {
+        "on": {
+          "FINISH": "done",
+          "FAIL": "failed"
+        }
+      },
+      "done": {
+        "type": "final"
+      },
+      "failed": {
+        "type": "final",
+        "output": {
+          "ok": false
+        }
+      }
+    }
+  },
+  "steps": [
+    {
+      "send": "FINISH"
+    },
+    {
+      "send": "FAIL"
+    }
+  ],
+  "expected": {
+    "xstate": {
+      "initial": {
+        "state_ids": [
+          "job.running"
+        ],
+        "context": {
+          "attempts": 1
+        },
+        "actions": [],
+        "status": "running"
+      },
+      "steps": [
+        {
+          "state_ids": [
+            "job.done"
+          ],
+          "context": {
+            "attempts": 1
+          },
+          "actions": [],
+          "status": "done",
+          "output": {
+            "ok": true
+          }
+        },
+        {
+          "state_ids": [
+            "job.done"
+          ],
+          "context": {
+            "attempts": 1
+          },
+          "actions": [],
+          "status": "done",
+          "output": {
+            "ok": true
+          }
+        }
+      ],
+      "oracle": {
+        "name": "xstate",
+        "version": "5.33.3"
+      }
+    },
+    "python": {
+      "oracle": {
+        "name": "xstate-statemachine",
+        "version": "0.12.0"
+      },
+      "initial": {
+        "state_ids": [
+          "job.running"
+        ],
+        "context": {
+          "attempts": 1
+        },
+        "actions": [],
+        "status": "running"
+      },
+      "steps": [
+        {
+          "state_ids": [
+            "job.done"
+          ],
+          "context": {
+            "attempts": 1
+          },
+          "actions": [],
+          "status": "done",
+          "output": {
+            "ok": true
+          }
+        },
+        {
+          "state_ids": [
+            "job.done"
+          ],
+          "context": {
+            "attempts": 1
+          },
+          "actions": [],
+          "status": "done",
+          "output": {
+            "ok": true
+          }
+        }
+      ],
+      "machine_hash": "7871007af1abc64d",
+      "snapshot": {
+        "version": 4,
+        "machine_id": "job",
+        "machine_hash": "7871007af1abc64d",
+        "machine_version": null,
+        "taken_at": 0.0,
+        "status": "done",
+        "context": {
+          "attempts": 1
+        },
+        "state_ids": [
+          "job.done"
+        ],
+        "value": "done",
+        "configuration": [
+          "job",
+          "job.done"
+        ],
+        "output": {
+          "ok": true
+        },
+        "error": null,
+        "chain_trips": 0,
+        "last_chain_error": null,
+        "deferred": [],
+        "pending_events": [],
+        "scheduled_sends": [],
+        "deadlines": [],
+        "history": {},
+        "actors": {},
+        "system": {}
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "xstate-oracle",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Runs conformance cases through the real XState v5 engine and prints the observed behaviour",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": { "oracle": "node oracle.mjs" },
+  "dependencies": { "xstate": "^5.33.2" }
+}

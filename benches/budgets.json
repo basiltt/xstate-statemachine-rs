@@ -1,0 +1,15 @@
+{
+  "$schema": "./budgets.schema.json",
+  "allowed_slowdown": 1.25,
+  "benchmarks": {
+    "parse_json_toggle": { "baseline_p50_ns": null, "note": "Phase 0 wiring benchmark; replaced in Phase 1" },
+    "send_flat": { "baseline_p50_ns": null, "target_p50_ns": 200 },
+    "send_guard_assign": { "baseline_p50_ns": null, "target_p50_ns": 600 },
+    "send_nested_3": { "baseline_p50_ns": null, "target_p50_ns": 500 },
+    "send_parallel_2": { "baseline_p50_ns": null, "target_p50_ns": 500 },
+    "build_50_states": { "baseline_p50_ns": null, "target_p50_ns": 40000 },
+    "snapshot_get": { "baseline_p50_ns": null, "target_p50_ns": 3000 },
+    "snapshot_restore": { "baseline_p50_ns": null, "target_p50_ns": 5000 },
+    "persisted_memory": { "baseline_p50_ns": null, "target_p50_ns": 8000 }
+  }
+}

@@ -1,0 +1,23 @@
+[package]
+name = "xsm"
+description = "Command-line tool for xstate-statemachine: validate, inspect, simulate, diagram and operate statecharts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "xsm"
+path = "src/main.rs"
+
+[dependencies]
+xstate-core = { workspace = true }
+clap = { workspace = true }
+# anyhow is added back with the first fallible subcommand
+
+[lints]
+workspace = true

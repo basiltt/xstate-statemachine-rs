@@ -1,0 +1,19 @@
+[package]
+name = "xstate-testing"
+description = "Test helpers for xstate-core machines: stub logic, simulated clock fixtures, path walking, statechart coverage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+xstate-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

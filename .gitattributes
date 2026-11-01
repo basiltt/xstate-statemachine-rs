@@ -1,0 +1,4 @@
+# Keep LF everywhere so generated fixtures compare byte-for-byte on every OS.
+* text=auto eol=lf
+*.png binary
+*.ico binary

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Benchmark budgets",
+  "type": "object",
+  "required": ["allowed_slowdown", "benchmarks"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "allowed_slowdown": { "type": "number", "exclusiveMinimum": 1 },
+    "benchmarks": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "baseline_p50_ns": { "type": ["number", "null"], "minimum": 0 },
+          "target_p50_ns": { "type": "number", "exclusiveMinimum": 0 },
+          "note": { "type": "string" }
+        },
+        "required": ["baseline_p50_ns"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

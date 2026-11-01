@@ -1,0 +1,34 @@
+[package]
+name = "xstate-core"
+description = "XState v5 / SCXML statechart engine: machine model, JSON parser, sans-I/O step engine, sync interpreter, snapshots"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+smallvec = { workspace = true }
+indexmap = { workspace = true }
+fixedbitset = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
+
+[[bench]]
+name = "core"
+harness = false
+
+[lints]
+workspace = true
