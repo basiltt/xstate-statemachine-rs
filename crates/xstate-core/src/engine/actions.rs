@@ -37,7 +37,7 @@ pub(super) fn run_actions<C: Context>(
 
 fn action_name(action: &ActionDef) -> String {
     match action {
-        ActionDef::User { name, .. } => name.clone(),
+        ActionDef::User { name, .. } => name.to_string(),
         ActionDef::Builtin { builtin, .. } => format!("xstate.{}", builtin_name(builtin)),
     }
 }
@@ -61,7 +61,8 @@ fn builtin_name(b: &Builtin) -> &'static str {
 fn run_action<C: Context>(cx: &mut Ctx<'_, C>, action: &ActionDef, event: &Event) -> Result<()> {
     match action {
         ActionDef::User { name, params } => {
-            let f = cx.logic.get_action(name)?.clone();
+            let logic = cx.logic;
+            let f = logic.get_action(name)?;
             let mut local: Vec<Effect> = Vec::new();
             {
                 let mut scope = ActionScope {
@@ -72,7 +73,7 @@ fn run_action<C: Context>(cx: &mut Ctx<'_, C>, action: &ActionDef, event: &Event
                 };
                 f(&mut scope)?;
             }
-            cx.report.actions.push(name.clone());
+            cx.report.actions.push(std::sync::Arc::clone(name));
             cx.report.changed = true;
             for effect in local {
                 match effect {
@@ -175,7 +176,8 @@ pub(super) fn evaluate_guard<C: Context>(
 ) -> Result<bool> {
     match guard {
         Guard::Named { name, params } => {
-            let f = cx.logic.get_guard(name)?.clone();
+            let logic = cx.logic;
+            let f = logic.get_guard(name)?;
             match f(&cx.state.context, event, params) {
                 Ok(v) => Ok(v),
                 Err(err) => match cx.machine.policies().guard_error_policy {

@@ -19,6 +19,8 @@ tracing = { workspace = true }
 smallvec = { workspace = true }
 indexmap = { workspace = true }
 fixedbitset = { workspace = true }
+smol_str = { workspace = true }
+foldhash = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 

@@ -1,11 +1,15 @@
 //! Lenient shape parser for XState v5 JSON.
+//!
+//! Diagnostic paths (`states.a.on.GO[1]`) are tracked as a borrowed linked list and only
+//! rendered when a warning or error is produced, so the happy path allocates nothing for them.
+
+use std::fmt;
 
 use serde_json::{Map, Value};
 
 use super::{
     ActionConfig, ActionErrorPolicy, ConfigWarning, GuardConfig, GuardErrorPolicy, InvokeConfig,
     MachineConfig, Policies, StateConfig, StateKind, TransitionConfig, UnhandledPolicy,
-    expect_object,
 };
 use crate::error::{Error, Result};
 
@@ -58,19 +62,79 @@ const TRANSITION_KEYS: &[&str] =
 const INVOKE_KEYS: &[&str] =
     &["id", "src", "input", "systemId", "onDone", "onError", "meta", "description"];
 
-struct Parser<'o> {
-    options: &'o ParseOptions,
+/// A location inside the configuration document, rendered lazily.
+#[derive(Clone, Copy)]
+pub(crate) struct Path<'a> {
+    parent: Option<&'a Path<'a>>,
+    seg: Seg<'a>,
+}
+
+#[derive(Clone, Copy)]
+enum Seg<'a> {
+    Root,
+    Key(&'a str),
+    Index(usize),
+}
+
+impl<'a> Path<'a> {
+    const ROOT: Path<'static> = Path { parent: None, seg: Seg::Root };
+
+    #[inline]
+    fn key(&'a self, key: &'a str) -> Path<'a> {
+        Path { parent: Some(self), seg: Seg::Key(key) }
+    }
+
+    #[inline]
+    fn index(&'a self, index: usize) -> Path<'a> {
+        Path { parent: Some(self), seg: Seg::Index(index) }
+    }
+
+    fn render(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl fmt::Display for Path<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(parent) = self.parent {
+            parent.fmt(f)?;
+        }
+        match self.seg {
+            Seg::Root => Ok(()),
+            Seg::Key(k) => {
+                if self.parent.is_some_and(|p| !matches!(p.seg, Seg::Root)) {
+                    f.write_str(".")?;
+                }
+                f.write_str(k)
+            }
+            Seg::Index(i) => write!(f, "[{i}]"),
+        }
+    }
+}
+
+fn expect_object<'v>(
+    value: &'v Value,
+    path: &Path<'_>,
+    what: &str,
+) -> Result<&'v Map<String, Value>> {
+    value
+        .as_object()
+        .ok_or_else(|| Error::config(path.render(), format!("{what} must be an object")))
+}
+
+struct Parser {
     strict_config: bool,
     warnings: Vec<ConfigWarning>,
 }
 
 pub(super) fn parse_machine(value: &Value, options: &ParseOptions) -> Result<MachineConfig> {
-    let obj = expect_object(value, "", "machine config")?;
+    let root_path = Path::ROOT;
+    let obj = expect_object(value, &root_path, "machine config")?;
     let strict_config = options
         .strict_config
         .or_else(|| obj.get("strictConfig").and_then(Value::as_bool))
         .unwrap_or(false);
-    let mut parser = Parser { options, strict_config, warnings: Vec::new() };
+    let mut parser = Parser { strict_config, warnings: Vec::new() };
 
     let id = match obj.get("id") {
         Some(Value::String(s)) if !s.is_empty() => s.clone(),
@@ -81,11 +145,14 @@ pub(super) fn parse_machine(value: &Value, options: &ParseOptions) -> Result<Mac
         return Err(Error::config("states", "machine config requires `states`"));
     }
 
-    parser.check_keys(obj, "", STATE_KEYS, ROOT_ONLY_KEYS)?;
-    let root = parser.parse_state(obj, id, "")?;
+    parser.check_keys(obj, &root_path, STATE_KEYS, ROOT_ONLY_KEYS)?;
+    let root = parser.parse_state(obj, id, &root_path)?;
     let context = obj.get("context").cloned().unwrap_or(Value::Null);
     if context.is_string() {
-        parser.warn("context", "string `context` (editor placeholder?) treated as `{}`");
+        parser.warn(
+            &root_path.key("context"),
+            "string `context` (editor placeholder?) treated as `{}`",
+        );
     }
     let context = if context.is_string() { Value::Object(Map::new()) } else { context };
     let version = match obj.get("version") {
@@ -95,23 +162,18 @@ pub(super) fn parse_machine(value: &Value, options: &ParseOptions) -> Result<Mac
         Some(_) => return Err(Error::config("version", "`version` must be a string or number")),
     };
     let policies = parser.parse_policies(obj)?;
-    let _ = &parser.options;
     Ok(MachineConfig { root, context, version, policies, warnings: parser.warnings })
 }
 
-fn join(path: &str, key: &str) -> String {
-    if path.is_empty() { key.to_owned() } else { format!("{path}.{key}") }
-}
-
-impl Parser<'_> {
-    fn warn(&mut self, path: &str, message: impl Into<String>) {
-        self.warnings.push(ConfigWarning { path: path.to_owned(), message: message.into() });
+impl Parser {
+    fn warn(&mut self, path: &Path<'_>, message: impl Into<String>) {
+        self.warnings.push(ConfigWarning { path: path.render(), message: message.into() });
     }
 
     fn check_keys(
         &mut self,
         obj: &Map<String, Value>,
-        path: &str,
+        path: &Path<'_>,
         allowed: &[&str],
         extra: &[&str],
     ) -> Result<()> {
@@ -128,9 +190,9 @@ impl Parser<'_> {
                 None => format!("unknown key `{key}`"),
             };
             if self.strict_config {
-                return Err(Error::config(join(path, key), message));
+                return Err(Error::config(path.key(key).render(), message));
             }
-            self.warn(&join(path, key), message);
+            self.warn(&path.key(key), message);
         }
         Ok(())
     }
@@ -202,24 +264,26 @@ impl Parser<'_> {
         &mut self,
         obj: &Map<String, Value>,
         key: String,
-        path: &str,
+        path: &Path<'_>,
     ) -> Result<StateConfig> {
         let mut state = StateConfig::new(key);
+        let is_root = matches!(path.seg, Seg::Root);
 
-        if let (Some(v), false) = (obj.get("id"), path.is_empty()) {
+        if let (Some(v), false) = (obj.get("id"), is_root) {
             let id = v.as_str().filter(|s| !s.is_empty()).ok_or_else(|| {
-                Error::config(join(path, "id"), "state `id` must be a non-empty string")
+                Error::config(path.key("id").render(), "state `id` must be a non-empty string")
             })?;
             state.custom_id = Some(id.to_owned());
         }
 
         // Children first: the kind depends on whether there are any.
         if let Some(children) = obj.get("states") {
-            let map = expect_object(children, &join(path, "states"), "`states`")?;
+            let states_path = path.key("states");
+            let map = expect_object(children, &states_path, "`states`")?;
             for (child_key, child_val) in map {
-                let child_path = join(&join(path, "states"), child_key);
+                let child_path = states_path.key(child_key);
                 if child_key.is_empty() {
-                    return Err(Error::config(child_path, "state keys must be non-empty"));
+                    return Err(Error::config(child_path.render(), "state keys must be non-empty"));
                 }
                 let child_obj = expect_object(child_val, &child_path, "state")?;
                 self.check_keys(child_obj, &child_path, STATE_KEYS, &[])?;
@@ -237,13 +301,15 @@ impl Parser<'_> {
     fn parse_kind(
         &mut self,
         obj: &Map<String, Value>,
-        path: &str,
+        path: &Path<'_>,
         leaf: bool,
     ) -> Result<StateKind> {
         let declared_type = match obj.get("type") {
             None => None,
             Some(Value::String(s)) => Some(s.as_str()),
-            Some(_) => return Err(Error::config(join(path, "type"), "`type` must be a string")),
+            Some(_) => {
+                return Err(Error::config(path.key("type").render(), "`type` must be a string"));
+            }
         };
         Ok(match (declared_type, leaf) {
             (Some("parallel"), _) => StateKind::Parallel,
@@ -255,7 +321,7 @@ impl Parser<'_> {
                     Some(Value::String(s)) if s == "shallow" => false,
                     Some(_) => {
                         return Err(Error::config(
-                            join(path, "history"),
+                            path.key("history").render(),
                             "`history` must be \"shallow\" or \"deep\"",
                         ));
                     }
@@ -265,7 +331,7 @@ impl Parser<'_> {
                     Some(Value::String(s)) => Some(s.clone()),
                     Some(_) => {
                         return Err(Error::config(
-                            join(path, "target"),
+                            path.key("target").render(),
                             "history `target` must be a string",
                         ));
                     }
@@ -275,19 +341,16 @@ impl Parser<'_> {
             (Some("compound") | None, false) => StateKind::Compound,
             (Some("atomic") | None, true) => StateKind::Atomic,
             (Some("compound"), true) => {
-                self.warn(
-                    &join(path, "type"),
-                    "`compound` state without children treated as atomic",
-                );
+                self.warn(&path.key("type"), "`compound` state without children treated as atomic");
                 StateKind::Atomic
             }
             (Some("atomic"), false) => {
-                self.warn(&join(path, "type"), "`atomic` state with children treated as compound");
+                self.warn(&path.key("type"), "`atomic` state with children treated as compound");
                 StateKind::Compound
             }
             (Some(other), _) => {
                 return Err(Error::config(
-                    join(path, "type"),
+                    path.key("type").render(),
                     format!("unknown state type `{other}`"),
                 ));
             }
@@ -296,14 +359,17 @@ impl Parser<'_> {
 
     fn parse_initial(
         obj: &Map<String, Value>,
-        path: &str,
+        path: &Path<'_>,
         state: &StateConfig,
     ) -> Result<Option<String>> {
         let initial = match obj.get("initial") {
             None => None,
             Some(Value::String(s)) => Some(s.clone()),
             Some(_) => {
-                return Err(Error::config(join(path, "initial"), "`initial` must be a string"));
+                return Err(Error::config(
+                    path.key("initial").render(),
+                    "`initial` must be a string",
+                ));
             }
         };
         if state.kind != StateKind::Compound || initial.is_some() {
@@ -313,23 +379,24 @@ impl Parser<'_> {
             state.states.iter().filter(|s| !matches!(s.kind, StateKind::History { .. }));
         match (non_history.next(), non_history.next()) {
             (Some(only), None) => Ok(Some(only.key.clone())),
-            _ => {
-                Err(Error::config(join(path, "initial"), "compound state needs an `initial` child"))
-            }
+            _ => Err(Error::config(
+                path.key("initial").render(),
+                "compound state needs an `initial` child",
+            )),
         }
     }
 
     fn parse_handlers(
         &mut self,
         obj: &Map<String, Value>,
-        path: &str,
+        path: &Path<'_>,
         state: &mut StateConfig,
     ) -> Result<()> {
         if let Some(on) = obj.get("on") {
-            let map = expect_object(on, &join(path, "on"), "`on`")?;
+            let on_path = path.key("on");
+            let map = expect_object(on, &on_path, "`on`")?;
             for (descriptor, v) in map {
-                let tpath = join(&join(path, "on"), descriptor);
-                let transitions = self.parse_transitions(v, &tpath)?;
+                let transitions = self.parse_transitions(v, &on_path.key(descriptor))?;
                 if descriptor.is_empty() {
                     state.always.extend(transitions);
                 } else {
@@ -338,57 +405,68 @@ impl Parser<'_> {
             }
         }
         if let Some(always) = obj.get("always") {
-            state.always.extend(self.parse_transitions(always, &join(path, "always"))?);
+            state.always.extend(self.parse_transitions(always, &path.key("always"))?);
         }
         if let Some(after) = obj.get("after") {
-            let map = expect_object(after, &join(path, "after"), "`after`")?;
+            let after_path = path.key("after");
+            let map = expect_object(after, &after_path, "`after`")?;
             for (delay_key, v) in map {
-                let tpath = join(&join(path, "after"), delay_key);
-                state.after.push((delay_key.clone(), self.parse_transitions(v, &tpath)?));
+                let transitions = self.parse_transitions(v, &after_path.key(delay_key))?;
+                state.after.push((delay_key.clone(), transitions));
             }
         }
         if let Some(v) = obj.get("onDone") {
-            state.on_done = self.parse_transitions(v, &join(path, "onDone"))?;
+            state.on_done = self.parse_transitions(v, &path.key("onDone"))?;
         }
-        state.entry = parse_actions(obj.get("entry"), &join(path, "entry"))?;
-        state.exit = parse_actions(obj.get("exit"), &join(path, "exit"))?;
+        state.entry = parse_actions(obj.get("entry"), &path.key("entry"))?;
+        state.exit = parse_actions(obj.get("exit"), &path.key("exit"))?;
 
         if let Some(inv) = obj.get("invoke") {
-            let ipath = join(path, "invoke");
-            let items: Vec<&Value> = match inv {
-                Value::Array(items) => items.iter().collect(),
-                single => vec![single],
-            };
-            for (i, item) in items.iter().enumerate() {
-                let p = if items.len() == 1 { ipath.clone() } else { format!("{ipath}[{i}]") };
-                state.invoke.push(self.parse_invoke(item, &p)?);
+            let invoke_path = path.key("invoke");
+            match inv {
+                Value::Array(items) => {
+                    for (i, item) in items.iter().enumerate() {
+                        state.invoke.push(self.parse_invoke(item, &invoke_path.index(i))?);
+                    }
+                }
+                single => state.invoke.push(self.parse_invoke(single, &invoke_path)?),
             }
         }
         Ok(())
     }
 
-    fn parse_metadata(obj: &Map<String, Value>, path: &str, state: &mut StateConfig) -> Result<()> {
+    fn parse_metadata(
+        obj: &Map<String, Value>,
+        path: &Path<'_>,
+        state: &mut StateConfig,
+    ) -> Result<()> {
         state.output = obj.get("output").cloned();
         state.meta = match obj.get("meta") {
             None => None,
             Some(v @ Value::Object(_)) => Some(v.clone()),
-            Some(_) => return Err(Error::config(join(path, "meta"), "`meta` must be an object")),
+            Some(_) => {
+                return Err(Error::config(path.key("meta").render(), "`meta` must be an object"));
+            }
         };
         state.description = match obj.get("description") {
             None => None,
             Some(Value::String(s)) => Some(s.clone()),
             Some(_) => {
                 return Err(Error::config(
-                    join(path, "description"),
+                    path.key("description").render(),
                     "`description` must be a string",
                 ));
             }
         };
-        state.tags = parse_tags(obj.get("tags"), &join(path, "tags"))?;
+        state.tags = parse_tags(obj.get("tags"), &path.key("tags"))?;
         Ok(())
     }
 
-    fn parse_transitions(&mut self, value: &Value, path: &str) -> Result<Vec<TransitionConfig>> {
+    fn parse_transitions(
+        &mut self,
+        value: &Value,
+        path: &Path<'_>,
+    ) -> Result<Vec<TransitionConfig>> {
         match value {
             Value::Null => {
                 Ok(vec![TransitionConfig { forbidden: true, ..TransitionConfig::default() }])
@@ -400,7 +478,7 @@ impl Parser<'_> {
             Value::Array(items) => {
                 let mut out = Vec::with_capacity(items.len());
                 for (i, item) in items.iter().enumerate() {
-                    let p = format!("{path}[{i}]");
+                    let p = path.index(i);
                     match item {
                         Value::String(target) => {
                             out.push(TransitionConfig {
@@ -411,7 +489,7 @@ impl Parser<'_> {
                         Value::Object(obj) => out.push(self.parse_transition(obj, &p)?),
                         _ => {
                             return Err(Error::config(
-                                p,
+                                p.render(),
                                 "transition must be a string or an object",
                             ));
                         }
@@ -419,14 +497,17 @@ impl Parser<'_> {
                 }
                 Ok(out)
             }
-            _ => Err(Error::config(path, "transition must be a string, object, array or null")),
+            _ => Err(Error::config(
+                path.render(),
+                "transition must be a string, object, array or null",
+            )),
         }
     }
 
     fn parse_transition(
         &mut self,
         obj: &Map<String, Value>,
-        path: &str,
+        path: &Path<'_>,
     ) -> Result<TransitionConfig> {
         self.check_keys(obj, path, TRANSITION_KEYS, &[])?;
         // An empty object is XState's own spelling of a forbidden transition.
@@ -440,28 +521,28 @@ impl Parser<'_> {
                 .iter()
                 .map(|t| {
                     t.as_str().map(str::to_owned).ok_or_else(|| {
-                        Error::config(join(path, "target"), "targets must be strings")
+                        Error::config(path.key("target").render(), "targets must be strings")
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
             Some(_) => {
                 return Err(Error::config(
-                    join(path, "target"),
+                    path.key("target").render(),
                     "`target` must be a string or array of strings",
                 ));
             }
         };
-        let actions = parse_actions(obj.get("actions"), &join(path, "actions"))?;
+        let actions = parse_actions(obj.get("actions"), &path.key("actions"))?;
         let guard = match (obj.get("guard"), obj.get("cond")) {
-            (Some(g), _) | (None, Some(g)) => Some(parse_guard(g, &join(path, "guard"))?),
+            (Some(g), _) | (None, Some(g)) => Some(parse_guard(g, &path.key("guard"))?),
             (None, None) => None,
         };
         let reenter = match (obj.get("reenter"), obj.get("internal")) {
             (Some(v), _) => v.as_bool().ok_or_else(|| {
-                Error::config(join(path, "reenter"), "`reenter` must be a boolean")
+                Error::config(path.key("reenter").render(), "`reenter` must be a boolean")
             })?,
             (None, Some(v)) => !v.as_bool().ok_or_else(|| {
-                Error::config(join(path, "internal"), "`internal` must be a boolean")
+                Error::config(path.key("internal").render(), "`internal` must be a boolean")
             })?,
             (None, None) => false,
         };
@@ -478,37 +559,47 @@ impl Parser<'_> {
         })
     }
 
-    fn parse_invoke(&mut self, value: &Value, path: &str) -> Result<InvokeConfig> {
+    fn parse_invoke(&mut self, value: &Value, path: &Path<'_>) -> Result<InvokeConfig> {
         let obj = expect_object(value, path, "`invoke`")?;
         self.check_keys(obj, path, INVOKE_KEYS, &[])?;
         let src = match obj.get("src") {
             Some(Value::String(s)) if !s.is_empty() => s.clone(),
             Some(Value::Object(_)) => {
                 return Err(Error::config(
-                    join(path, "src"),
+                    path.key("src").render(),
                     "inline machines are not supported; name the service",
                 ));
             }
-            _ => return Err(Error::config(join(path, "src"), "`src` must be a non-empty string")),
+            _ => {
+                return Err(Error::config(
+                    path.key("src").render(),
+                    "`src` must be a non-empty string",
+                ));
+            }
         };
         let id = match obj.get("id") {
             None => None,
             Some(Value::String(s)) => Some(s.clone()),
-            Some(_) => return Err(Error::config(join(path, "id"), "invoke `id` must be a string")),
+            Some(_) => {
+                return Err(Error::config(path.key("id").render(), "invoke `id` must be a string"));
+            }
         };
         let system_id = match obj.get("systemId") {
             None => None,
             Some(Value::String(s)) => Some(s.clone()),
             Some(_) => {
-                return Err(Error::config(join(path, "systemId"), "`systemId` must be a string"));
+                return Err(Error::config(
+                    path.key("systemId").render(),
+                    "`systemId` must be a string",
+                ));
             }
         };
         let on_done = match obj.get("onDone") {
-            Some(v) => self.parse_transitions(v, &join(path, "onDone"))?,
+            Some(v) => self.parse_transitions(v, &path.key("onDone"))?,
             None => Vec::new(),
         };
         let on_error = match obj.get("onError") {
-            Some(v) => self.parse_transitions(v, &join(path, "onError"))?,
+            Some(v) => self.parse_transitions(v, &path.key("onError"))?,
             None => Vec::new(),
         };
         Ok(InvokeConfig {
@@ -522,48 +613,58 @@ impl Parser<'_> {
     }
 }
 
-pub(super) fn parse_actions(value: Option<&Value>, path: &str) -> Result<Vec<ActionConfig>> {
+pub(super) fn parse_actions(value: Option<&Value>, path: &Path<'_>) -> Result<Vec<ActionConfig>> {
     let Some(value) = value else { return Ok(Vec::new()) };
-    let items: Vec<&Value> = match value {
-        Value::Null => return Ok(Vec::new()),
-        Value::Array(items) => items.iter().collect(),
-        single => vec![single],
-    };
-    items
-        .iter()
-        .enumerate()
-        .map(|(i, item)| {
-            let p = if items.len() == 1 { path.to_owned() } else { format!("{path}[{i}]") };
-            match item {
-                Value::String(name) if !name.is_empty() => Ok(ActionConfig { name: name.clone(), params: Value::Null }),
-                Value::Object(obj) => {
-                    let name = obj
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .filter(|s| !s.is_empty())
-                        .ok_or_else(|| Error::config(&p, "action object needs a string `type`"))?;
-                    for key in obj.keys() {
-                        if key != "type" && key != "params" {
-                            return Err(Error::config(
-                                &p,
-                                format!("unexpected key `{key}` on action `{name}`; built-in options go under `params`"),
-                            ));
-                        }
-                    }
-                    Ok(ActionConfig { name: name.to_owned(), params: obj.get("params").cloned().unwrap_or(Value::Null) })
-                }
-                _ => Err(Error::config(p, "action must be a non-empty string or `{type, params}`")),
-            }
-        })
-        .collect()
+    match value {
+        Value::Null => Ok(Vec::new()),
+        Value::Array(items) => {
+            items.iter().enumerate().map(|(i, item)| parse_action(item, &path.index(i))).collect()
+        }
+        single => Ok(vec![parse_action(single, path)?]),
+    }
 }
 
-pub(super) fn parse_guard(value: &Value, path: &str) -> Result<GuardConfig> {
+fn parse_action(item: &Value, path: &Path<'_>) -> Result<ActionConfig> {
+    match item {
+        Value::String(name) if !name.is_empty() => {
+            Ok(ActionConfig { name: name.clone(), params: Value::Null })
+        }
+        Value::Object(obj) => {
+            let name =
+                obj.get("type").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(
+                    || Error::config(path.render(), "action object needs a string `type`"),
+                )?;
+            for key in obj.keys() {
+                if key != "type" && key != "params" {
+                    return Err(Error::config(
+                        path.render(),
+                        format!(
+                            "unexpected key `{key}` on action `{name}`; built-in options go under `params`"
+                        ),
+                    ));
+                }
+            }
+            Ok(ActionConfig {
+                name: name.to_owned(),
+                params: obj.get("params").cloned().unwrap_or(Value::Null),
+            })
+        }
+        _ => Err(Error::config(
+            path.render(),
+            "action must be a non-empty string or `{type, params}`",
+        )),
+    }
+}
+
+pub(super) fn parse_guard(value: &Value, path: &Path<'_>) -> Result<GuardConfig> {
     match value {
         Value::String(s) => {
             if let Some(inner) = s.strip_prefix('!') {
                 if inner.is_empty() {
-                    return Err(Error::config(path, "`!` must be followed by a guard name"));
+                    return Err(Error::config(
+                        path.render(),
+                        "`!` must be followed by a guard name",
+                    ));
                 }
                 return Ok(GuardConfig::Not(Box::new(GuardConfig::Named {
                     name: inner.to_owned(),
@@ -571,16 +672,14 @@ pub(super) fn parse_guard(value: &Value, path: &str) -> Result<GuardConfig> {
                 })));
             }
             if s.is_empty() {
-                return Err(Error::config(path, "guard name must be non-empty"));
+                return Err(Error::config(path.render(), "guard name must be non-empty"));
             }
             Ok(GuardConfig::Named { name: s.clone(), params: Value::Null })
         }
         Value::Object(obj) => {
-            let ty = obj
-                .get("type")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| Error::config(path, "guard object needs a string `type`"))?;
+            let ty = obj.get("type").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(
+                || Error::config(path.render(), "guard object needs a string `type`"),
+            )?;
             let params = obj.get("params").cloned().unwrap_or(Value::Null);
             let operands = || -> Result<Vec<GuardConfig>> {
                 let list = obj
@@ -590,16 +689,13 @@ pub(super) fn parse_guard(value: &Value, path: &str) -> Result<GuardConfig> {
                     .and_then(Value::as_array)
                     .ok_or_else(|| {
                         Error::config(
-                            path,
+                            path.render(),
                             format!(
                                 "`{ty}` guard needs operands under `children` or `params.guards`"
                             ),
                         )
                     })?;
-                list.iter()
-                    .enumerate()
-                    .map(|(i, g)| parse_guard(g, &format!("{path}[{i}]")))
-                    .collect()
+                list.iter().enumerate().map(|(i, g)| parse_guard(g, &path.index(i))).collect()
             };
             match ty {
                 "and" => Ok(GuardConfig::And(operands()?)),
@@ -611,18 +707,33 @@ pub(super) fn parse_guard(value: &Value, path: &str) -> Result<GuardConfig> {
                             obj.get("children").and_then(|c| c.as_array()).and_then(|a| a.first())
                         })
                         .ok_or_else(|| {
-                            Error::config(path, "`not` guard needs `params.guard` or one child")
+                            Error::config(
+                                path.render(),
+                                "`not` guard needs `params.guard` or one child",
+                            )
                         })?;
-                    Ok(GuardConfig::Not(Box::new(parse_guard(inner, &join(path, "guard"))?)))
+                    Ok(GuardConfig::Not(Box::new(parse_guard(inner, &path.key("guard"))?)))
                 }
                 _ => Ok(GuardConfig::Named { name: ty.to_owned(), params }),
             }
         }
-        _ => Err(Error::config(path, "guard must be a string or an object")),
+        _ => Err(Error::config(path.render(), "guard must be a string or an object")),
     }
 }
 
-fn parse_tags(value: Option<&Value>, path: &str) -> Result<Vec<String>> {
+/// Parse a guard written as a detached JSON value (used by the `choose` compiler).
+pub(crate) fn parse_guard_at(value: &Value, path: &str) -> Result<GuardConfig> {
+    let root = Path::ROOT;
+    parse_guard(value, &root.key(path))
+}
+
+/// Parse an action list written as a detached JSON value (used by the `choose` compiler).
+pub(crate) fn parse_actions_at(value: Option<&Value>, path: &str) -> Result<Vec<ActionConfig>> {
+    let root = Path::ROOT;
+    parse_actions(value, &root.key(path))
+}
+
+fn parse_tags(value: Option<&Value>, path: &Path<'_>) -> Result<Vec<String>> {
     match value {
         None => Ok(Vec::new()),
         Some(Value::String(s)) => Ok(vec![s.clone()]),
@@ -631,10 +742,10 @@ fn parse_tags(value: Option<&Value>, path: &str) -> Result<Vec<String>> {
             .map(|t| {
                 t.as_str()
                     .map(str::to_owned)
-                    .ok_or_else(|| Error::config(path, "tags must be strings"))
+                    .ok_or_else(|| Error::config(path.render(), "tags must be strings"))
             })
             .collect(),
-        Some(_) => Err(Error::config(path, "`tags` must be a string or array of strings")),
+        Some(_) => Err(Error::config(path.render(), "`tags` must be a string or array of strings")),
     }
 }
 
@@ -701,15 +812,16 @@ mod tests {
     }
 
     #[test]
-    fn unknown_keys_warn_or_fail() {
+    fn unknown_keys_warn_or_fail_with_paths() {
         let cfg = parse(r#"{"id":"m","initial":"a","states":{"a":{"entri":"x"}}}"#);
         assert_eq!(cfg.warnings.len(), 1);
+        assert_eq!(cfg.warnings[0].path, "states.a.entri");
         assert!(cfg.warnings[0].message.contains("entry"));
         let err = MachineConfig::from_json(
-            r#"{"id":"m","strictConfig":true,"initial":"a","states":{"a":{"entri":"x"}}}"#,
+            r#"{"id":"m","strictConfig":true,"initial":"a","states":{"a":{"on":{"GO":[{"target":"b","gard":"x"}]}},"b":{}}}"#,
         )
         .unwrap_err();
-        assert!(matches!(err, Error::InvalidConfig { .. }));
+        assert!(err.to_string().contains("states.a.on.GO[0].gard"), "{err}");
     }
 
     #[test]

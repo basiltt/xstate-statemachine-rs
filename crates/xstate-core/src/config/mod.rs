@@ -5,9 +5,9 @@
 //! only validates *shape*; target resolution and structural rules happen when the
 //! [`Machine`](crate::machine::Machine) is built.
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 
 mod parse;
 
@@ -63,7 +63,7 @@ impl Default for Policies {
             strict_targets: true,
             strict_config: false,
             max_iterations: crate::DEFAULT_MAX_ITERATIONS,
-            action_error_policy: ActionErrorPolicy::Rollback,
+            action_error_policy: ActionErrorPolicy::Fail,
             guard_error_policy: GuardErrorPolicy::False,
             on_unhandled: UnhandledPolicy::Ignore,
         }
@@ -77,7 +77,8 @@ pub enum ActionErrorPolicy {
     Continue,
     /// Restore configuration and context as they were before the step.
     Rollback,
-    /// Fail the `send` with [`Error::TransitionFailed`].
+    /// Fail the `send` with [`Error::TransitionFailed`] and move the machine to `error`
+    /// (XState behaviour; the default).
     Fail,
 }
 
@@ -275,20 +276,12 @@ impl StateConfig {
     }
 }
 
-pub(crate) fn expect_object<'a>(
-    value: &'a Value,
-    path: &str,
-    what: &str,
-) -> Result<&'a Map<String, Value>> {
-    value.as_object().ok_or_else(|| Error::config(path, format!("{what} must be an object")))
-}
-
 /// Parse a guard value (string or object form). Used by the `choose` built-in compiler.
 pub(crate) fn parse_guard_value(value: &Value, path: &str) -> Result<GuardConfig> {
-    parse::parse_guard(value, path)
+    parse::parse_guard_at(value, path)
 }
 
 /// Parse an action list value. Used by the `choose` built-in compiler.
 pub(crate) fn parse_actions_value(value: Option<&Value>, path: &str) -> Result<Vec<ActionConfig>> {
-    parse::parse_actions(value, path)
+    parse::parse_actions_at(value, path)
 }

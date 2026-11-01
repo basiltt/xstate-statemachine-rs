@@ -67,7 +67,7 @@ fn referenced_names(machine: &Machine) -> Vec<String> {
     fn action_names(actions: &[ActionDef], out: &mut Vec<String>) {
         for a in actions {
             match a {
-                ActionDef::User { name, .. } => out.push(name.clone()),
+                ActionDef::User { name, .. } => out.push(name.to_string()),
                 ActionDef::Builtin {
                     builtin: xstate_core::machine::Builtin::Choose(branches),
                     ..
@@ -127,16 +127,16 @@ pub fn run_case_with_interpreter(
     let clock = SimulatedClock::new();
     let mut interp = SyncInterpreter::with_clock(machine, logic, Arc::new(clock.clone()));
     let started = interp.start()?;
-    let initial = observe(&interp, started.actions);
+    let initial = observe(&interp, started.action_names());
 
     let mut steps = Vec::with_capacity(case.steps.len());
     for step in &case.steps {
         let actions = match step {
             Step::Send(value) => {
                 let event = Event::from_json(value.clone())?;
-                interp.send(event)?.actions
+                interp.send(event)?.action_names()
             }
-            Step::AdvanceMs(ms) => interp.advance(&clock, *ms)?.actions,
+            Step::AdvanceMs(ms) => interp.advance(&clock, *ms)?.action_names(),
         };
         steps.push(observe(&interp, actions));
     }

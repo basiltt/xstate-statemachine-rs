@@ -1,6 +1,9 @@
 //! Compilation of a parsed [`MachineConfig`] into the arena-based [`Machine`].
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use foldhash::HashMap as FastMap;
 
 use serde_json::{Map, Value};
 use smallvec::SmallVec;
@@ -20,7 +23,7 @@ use crate::ids::{StateId, TransitionId};
 /// Flattened view of one config node during compilation.
 struct Raw<'c> {
     cfg: &'c StateConfig,
-    id: String,
+    id: Arc<str>,
     parent: Option<StateId>,
     depth: u32,
 }
@@ -29,27 +32,37 @@ pub(super) fn compile(config: MachineConfig) -> Result<MachineData> {
     let mut raws: Vec<Raw<'_>> = Vec::new();
     flatten(&config.root, &config.root.key, None, 0, &mut raws);
 
-    let mut ids: HashMap<String, StateId> = HashMap::with_capacity(raws.len());
+    let mut ids: FastMap<Arc<str>, StateId> = FastMap::default();
+    ids.reserve(raws.len());
     let mut custom_ids: HashMap<String, StateId> = HashMap::new();
     for (i, raw) in raws.iter().enumerate() {
         let sid = StateId::from_index(i);
-        ids.insert(raw.id.clone(), sid);
+        ids.insert(Arc::clone(&raw.id), sid);
         if let Some(custom) = &raw.cfg.custom_id
             && custom_ids.insert(custom.clone(), sid).is_some()
         {
-            return Err(Error::config(&raw.id, format!("duplicate custom id `#{custom}`")));
+            return Err(Error::config(&*raw.id, format!("duplicate custom id `#{custom}`")));
+        }
+    }
+
+    let mut children: FastMap<(StateId, &str), StateId> = FastMap::default();
+    for (i, raw) in raws.iter().enumerate() {
+        if let Some(parent) = raw.parent {
+            children.insert((parent, raw.cfg.key.as_str()), StateId::from_index(i));
         }
     }
 
     let mut cx = Compiler {
         raws: &raws,
         ids: &ids,
+        children: &children,
         custom_ids: &custom_ids,
         machine_id: &config.root.key,
         strict_targets: config.policies.strict_targets,
         transitions: Vec::new(),
         warnings: config.warnings.clone(),
         declared_events: HashSet::new(),
+        event_index: FastMap::default(),
         has_always: false,
     };
 
@@ -81,7 +94,7 @@ pub(super) fn compile(config: MachineConfig) -> Result<MachineData> {
 
     cx.validate(&states)?;
 
-    let Compiler { transitions, warnings, declared_events, has_always, .. } = cx;
+    let Compiler { transitions, warnings, declared_events, has_always, event_index, .. } = cx;
     let mut declared: Vec<String> = declared_events.into_iter().collect();
     declared.sort();
     Ok(MachineData {
@@ -96,6 +109,7 @@ pub(super) fn compile(config: MachineConfig) -> Result<MachineData> {
         warnings,
         has_always,
         declared_events: declared,
+        event_index,
         hash: std::sync::OnceLock::new(),
     })
 }
@@ -108,7 +122,7 @@ fn flatten<'c>(
     out: &mut Vec<Raw<'c>>,
 ) {
     let my_index = out.len();
-    out.push(Raw { cfg, id: id.to_owned(), parent, depth });
+    out.push(Raw { cfg, id: Arc::from(id), parent, depth });
     let me = StateId::from_index(my_index);
     for child in &cfg.states {
         let child_id = format!("{id}.{}", child.key);
@@ -119,7 +133,7 @@ fn flatten<'c>(
 /// Per-state transition tables under construction.
 #[derive(Default)]
 struct Handlers {
-    on_exact: HashMap<String, SmallVec<[TransitionId; 2]>>,
+    on_exact: SmallVec<[(u32, SmallVec<[TransitionId; 2]>); 4]>,
     on_partial: Vec<(String, SmallVec<[TransitionId; 2]>)>,
     on_wildcard: SmallVec<[TransitionId; 2]>,
     always: SmallVec<[TransitionId; 2]>,
@@ -129,13 +143,15 @@ struct Handlers {
 
 struct Compiler<'a, 'c> {
     raws: &'a [Raw<'c>],
-    ids: &'a HashMap<String, StateId>,
+    ids: &'a FastMap<Arc<str>, StateId>,
+    children: &'a FastMap<(StateId, &'c str), StateId>,
     custom_ids: &'a HashMap<String, StateId>,
     machine_id: &'a str,
     strict_targets: bool,
     transitions: Vec<Transition>,
     warnings: Vec<ConfigWarning>,
     declared_events: HashSet<String>,
+    event_index: FastMap<String, u32>,
     has_always: bool,
 }
 
@@ -145,7 +161,12 @@ impl Compiler<'_, '_> {
     }
 
     fn child_by_key(&self, parent: StateId, key: &str) -> Option<StateId> {
-        self.ids.get(&format!("{}.{key}", self.id_of(parent))).copied()
+        self.children.get(&(parent, key)).copied()
+    }
+
+    /// Walk a dotted relative path (`a.b.c`) down from `scope`.
+    fn descend(&self, scope: StateId, path: &str) -> Option<StateId> {
+        path.split('.').try_fold(scope, |cur, key| self.child_by_key(cur, key))
     }
 
     fn compile_state(&mut self, sid: StateId, raw: &Raw<'_>) -> Result<StateNode> {
@@ -158,12 +179,20 @@ impl Compiler<'_, '_> {
 
         let initial_key =
             if matches!(kind, NodeKind::Compound { .. }) { cfg.initial.clone() } else { None };
-        let entry = self.compile_actions(sid, &cfg.entry, &format!("{}.entry", raw.id))?;
-        let exit = self.compile_actions(sid, &cfg.exit, &format!("{}.exit", raw.id))?;
+        let entry = if cfg.entry.is_empty() {
+            Vec::new()
+        } else {
+            self.compile_actions(sid, &cfg.entry, &format!("{}.entry", raw.id))?
+        };
+        let exit = if cfg.exit.is_empty() {
+            Vec::new()
+        } else {
+            self.compile_actions(sid, &cfg.exit, &format!("{}.exit", raw.id))?
+        };
 
         Ok(StateNode {
-            id: raw.id.clone(),
-            key: cfg.key.clone(),
+            id: Arc::clone(&raw.id),
+            key: smol_str::SmolStr::new(&cfg.key),
             parent: raw.parent,
             children: Vec::new(),
             depth: raw.depth,
@@ -196,7 +225,7 @@ impl Compiler<'_, '_> {
                 let key = cfg
                     .initial
                     .as_deref()
-                    .ok_or_else(|| Error::config(&raw.id, "compound state needs `initial`"))?;
+                    .ok_or_else(|| Error::config(&*raw.id, "compound state needs `initial`"))?;
                 let initial = self.child_by_key(sid, key).ok_or_else(|| {
                     Error::config(
                         format!("{}.initial", raw.id),
@@ -207,7 +236,7 @@ impl Compiler<'_, '_> {
             }
             StateKind::History { deep, target } => {
                 raw.parent
-                    .ok_or_else(|| Error::config(&raw.id, "the root cannot be a history state"))?;
+                    .ok_or_else(|| Error::config(&*raw.id, "the root cannot be a history state"))?;
                 // A history `target` is a sibling path, resolved like a plain target written
                 // on the history node itself.
                 let target = match target {
@@ -250,10 +279,9 @@ impl Compiler<'_, '_> {
             self.add_event(sid, raw, &names::done_state(&raw.id), &cfg.on_done, out)?;
         }
         for (i, inv) in cfg.invoke.iter().enumerate() {
-            let id = inv
-                .id
-                .clone()
-                .unwrap_or_else(|| if i == 0 { raw.id.clone() } else { format!("{}:{i}", raw.id) });
+            let id = inv.id.clone().unwrap_or_else(|| {
+                if i == 0 { raw.id.to_string() } else { format!("{}:{i}", raw.id) }
+            });
             self.add_event(sid, raw, &names::done_actor(&id), &inv.on_done, out)?;
             self.add_event(sid, raw, &names::error_actor(&id), &inv.on_error, out)?;
             out.invokes.push(InvokeDef {
@@ -283,7 +311,7 @@ impl Compiler<'_, '_> {
         list: &[TransitionConfig],
         out: &mut Handlers,
     ) -> Result<()> {
-        let descriptor = names::normalize(descriptor).into_owned();
+        let descriptor = smol_str::SmolStr::new(names::normalize(descriptor));
         let compiled =
             self.compile_transitions(sid, &Trigger::Event(descriptor.clone()), list, &raw.id)?;
         if descriptor == names::WILDCARD {
@@ -291,13 +319,28 @@ impl Compiler<'_, '_> {
         } else if descriptor.ends_with(".*") {
             match out.on_partial.iter_mut().find(|(d, _)| *d == descriptor) {
                 Some((_, ts)) => ts.extend(compiled),
-                None => out.on_partial.push((descriptor, compiled.into_iter().collect())),
+                None => {
+                    out.on_partial.push((descriptor.to_string(), compiled.into_iter().collect()));
+                }
             }
         } else {
-            if !descriptor.starts_with("xstate.") {
-                self.declared_events.insert(descriptor.clone());
+            if !descriptor.starts_with("xstate.")
+                && !self.declared_events.contains(descriptor.as_str())
+            {
+                self.declared_events.insert(descriptor.to_string());
             }
-            out.on_exact.entry(descriptor).or_default().extend(compiled);
+            let key = if let Some(&k) = self.event_index.get(descriptor.as_str()) {
+                k
+            } else {
+                let next = u32::try_from(self.event_index.len())
+                    .map_err(|_| Error::LimitExceeded("too many distinct event types".into()))?;
+                self.event_index.insert(descriptor.to_string(), next);
+                next
+            };
+            match out.on_exact.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, ts)) => ts.extend(compiled),
+                None => out.on_exact.push((key, compiled.into_iter().collect())),
+            }
         }
         Ok(())
     }
@@ -308,8 +351,8 @@ impl Compiler<'_, '_> {
         trigger: &Trigger,
         list: &[TransitionConfig],
         path: &str,
-    ) -> Result<Vec<TransitionId>> {
-        let mut out = Vec::with_capacity(list.len());
+    ) -> Result<SmallVec<[TransitionId; 2]>> {
+        let mut out = SmallVec::new();
         for t in list {
             let mut targets = Vec::with_capacity(t.targets.len());
             for target in &t.targets {
@@ -329,7 +372,7 @@ impl Compiler<'_, '_> {
                 source,
                 trigger: trigger.clone(),
                 targets,
-                raw_targets: t.targets.clone(),
+                raw_targets: t.targets.iter().map(smol_str::SmolStr::new).collect(),
                 actions,
                 guard,
                 reenter: t.reenter,
@@ -359,7 +402,7 @@ impl Compiler<'_, '_> {
     ) -> Result<ActionDef> {
         let Some(canonical) = builtin::canonical(&action.name) else {
             return Ok(ActionDef::User {
-                name: action.name.clone(),
+                name: Arc::from(action.name.as_str()),
                 params: action.params.clone(),
             });
         };
@@ -390,12 +433,12 @@ impl Compiler<'_, '_> {
                 out.push(ChooseBranch { guard, actions });
             }
             return Ok(ActionDef::Builtin {
-                name: action.name.clone(),
+                name: Arc::from(action.name.as_str()),
                 builtin: builtin::Builtin::Choose(out),
             });
         }
         Ok(ActionDef::Builtin {
-            name: action.name.clone(),
+            name: Arc::from(action.name.as_str()),
             builtin: builtin::compile_builtin(canonical, &action.params, path)?,
         })
     }
@@ -449,30 +492,28 @@ impl Compiler<'_, '_> {
             if rest.is_empty() {
                 return Err(Error::config(path, "`.` alone is not a valid target"));
             }
-            let own = format!("{}.{rest}", self.id_of(source));
-            if let Some(&sid) = self.ids.get(&own) {
+            if let Some(sid) = self.descend(source, rest) {
                 return Ok(sid);
             }
-            if let Some(parent) = self.raws[source.index()].parent {
-                let sibling = format!("{}.{rest}", self.id_of(parent));
-                if let Some(&sid) = self.ids.get(&sibling) {
-                    if self.strict_targets {
-                        return Err(Error::config(
-                            path,
-                            format!(
-                                "`.{rest}` is not a child of `{}`; write `{rest}` for the sibling",
-                                self.id_of(source)
-                            ),
-                        ));
-                    }
-                    self.warnings.push(ConfigWarning {
-                        path: path.to_owned(),
-                        message: format!(
-                            "`.{rest}` resolved to a sibling; this fallback is deprecated"
+            if let Some(parent) = self.raws[source.index()].parent
+                && let Some(sid) = self.descend(parent, rest)
+            {
+                if self.strict_targets {
+                    return Err(Error::config(
+                        path,
+                        format!(
+                            "`.{rest}` is not a child of `{}`; write `{rest}` for the sibling",
+                            self.id_of(source)
                         ),
-                    });
-                    return Ok(sid);
+                    ));
                 }
+                self.warnings.push(ConfigWarning {
+                    path: path.to_owned(),
+                    message: format!(
+                        "`.{rest}` resolved to a sibling; this fallback is deprecated"
+                    ),
+                });
+                return Ok(sid);
             }
             return Err(not_found());
         }
@@ -481,7 +522,7 @@ impl Compiler<'_, '_> {
         // are the first scope.
         let mut scope = self.raws[source.index()].parent.or(Some(StateId::ROOT));
         while let Some(s) = scope {
-            if let Some(&sid) = self.ids.get(&format!("{}.{target}", self.id_of(s))) {
+            if let Some(sid) = self.descend(s, target) {
                 return Ok(sid);
             }
             scope = self.raws[s.index()].parent;
@@ -498,13 +539,13 @@ impl Compiler<'_, '_> {
                 let parent = node.parent.map(|p| &states[p.index()]);
                 if !parent.is_some_and(|p| p.is_compound() || p.is_parallel()) {
                     return Err(Error::config(
-                        &node.id,
+                        &*node.id,
                         "history states must be children of a compound or parallel state",
                     ));
                 }
             }
             if node.is_final() && !node.children.is_empty() {
-                return Err(Error::config(&node.id, "final states cannot have children"));
+                return Err(Error::config(&*node.id, "final states cannot have children"));
             }
         }
         // A dead `always` self-loop (no target change, no actions) would spin forever.
@@ -517,7 +558,7 @@ impl Compiler<'_, '_> {
                 && !t.targets.is_empty()
             {
                 return Err(Error::config(
-                    &states[t.source.index()].id,
+                    &*states[t.source.index()].id,
                     "unguarded `always` self-transition can never make progress",
                 ));
             }

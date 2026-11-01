@@ -46,6 +46,28 @@ fn send_flat(c: &mut Criterion) {
     c.bench_function("send_flat", |b| b.iter(|| i.send(black_box("TOGGLE")).expect("send")));
 }
 
+/// The bare engine step (no interpreter, no receipt): isolates algorithm cost.
+fn step_flat(c: &mut Criterion) {
+    let machine = Machine::from_json(TOGGLE).expect("machine");
+    let logic = MachineLogic::dynamic();
+    let (mut state, _, _) =
+        xstate_core::engine::start(&machine, &logic, &Value::Null).expect("start");
+    let mut effects = Vec::new();
+    c.bench_function("step_flat", |b| {
+        b.iter(|| {
+            effects.clear();
+            xstate_core::engine::step(
+                &machine,
+                &logic,
+                &mut state,
+                xstate_core::Event::new(black_box("TOGGLE")),
+                &mut effects,
+            )
+            .expect("step")
+        });
+    });
+}
+
 fn send_guard_assign(c: &mut Criterion) {
     let mut i = interp(GUARDED);
     let mut open = true;
@@ -78,6 +100,27 @@ fn build_50_states(c: &mut Criterion) {
     let json = serde_json::to_string(&chain_machine(50)).expect("json");
     c.bench_function("build_50_states", |b| {
         b.iter(|| Machine::from_json(black_box(&json)).expect("machine"));
+    });
+}
+
+fn build_phases(c: &mut Criterion) {
+    let json = serde_json::to_string(&chain_machine(50)).expect("json");
+    let value: Value = serde_json::from_str(&json).expect("value");
+    c.bench_function("build_phase_json_value", |b| {
+        b.iter(|| serde_json::from_str::<Value>(black_box(&json)).expect("value"));
+    });
+    c.bench_function("build_phase_config", |b| {
+        b.iter(|| {
+            xstate_core::config::MachineConfig::from_value(black_box(&value)).expect("config")
+        });
+    });
+    let config = xstate_core::config::MachineConfig::from_value(&value).expect("config");
+    c.bench_function("build_phase_compile", |b| {
+        b.iter_batched(
+            || config.clone(),
+            |cfg| Machine::from_config(cfg).expect("machine"),
+            BatchSize::SmallInput,
+        );
     });
 }
 
@@ -121,10 +164,12 @@ fn snapshot_restore(c: &mut Criterion) {
 criterion_group!(
     benches,
     send_flat,
+    step_flat,
     send_guard_assign,
     send_nested_3,
     send_parallel_2,
     build_50_states,
+    build_phases,
     snapshot_get,
     snapshot_restore
 );

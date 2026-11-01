@@ -18,19 +18,51 @@ use crate::logic::{MachineLogic, ServiceImpl};
 use crate::machine::Machine;
 use crate::snapshot::{self, Deadline, ScheduledSend, Snapshot};
 
-/// Outcome of one `send`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Outcome of one `send` (or `start` / `tick`).
+#[derive(Debug, Clone)]
 pub struct Receipt {
-    /// Active leaf state ids after the event (and everything it triggered) was processed.
-    pub state_ids: Vec<String>,
+    leaves: smallvec::SmallVec<[StateId; 4]>,
+    machine: Machine,
     /// Whether the delivered event changed configuration or context.
     pub changed: bool,
     /// Whether no transition matched the delivered event.
     pub unhandled: bool,
     /// User actions executed while processing the event and its consequences, in order.
-    pub actions: Vec<String>,
+    pub actions: Vec<Arc<str>>,
     /// Status after processing.
     pub status: Status,
+}
+
+impl Receipt {
+    /// Active leaf state ids after processing, sorted, as `machine.a.b` strings.
+    #[must_use]
+    pub fn state_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> =
+            self.leaves.iter().map(|&s| self.machine.node(s).id.to_string()).collect();
+        ids.sort();
+        ids
+    }
+
+    /// Active leaf states after processing, in document order.
+    #[must_use]
+    pub fn leaves(&self) -> &[StateId] {
+        &self.leaves
+    }
+
+    /// `true` when the state with this full id (or custom `#id`) is active or an ancestor of
+    /// an active leaf.
+    #[must_use]
+    pub fn matches(&self, state_id: &str) -> bool {
+        self.machine.state_by_id(state_id).is_some_and(|id| {
+            self.leaves.iter().any(|&leaf| self.machine.is_self_or_descendant(leaf, id))
+        })
+    }
+
+    /// Executed user action names as plain strings (convenience for tests).
+    #[must_use]
+    pub fn action_names(&self) -> Vec<String> {
+        self.actions.iter().map(std::string::ToString::to_string).collect()
+    }
 }
 
 #[derive(Debug)]
@@ -76,6 +108,7 @@ pub struct SyncInterpreter<C: Context = DynContext> {
     processing: bool,
     emitted: Vec<Value>,
     logs: Vec<(Option<String>, Value)>,
+    effects: Vec<Effect>,
 }
 
 impl<C: Context> std::fmt::Debug for SyncInterpreter<C> {
@@ -112,6 +145,7 @@ impl<C: Context> SyncInterpreter<C> {
             processing: false,
             emitted: Vec::new(),
             logs: Vec::new(),
+            effects: Vec::with_capacity(8),
         }
     }
 
@@ -135,13 +169,14 @@ impl<C: Context> SyncInterpreter<C> {
             });
         }
         self.logic.validate(&self.machine)?;
-        let (state, effects, mut report) = engine::start(&self.machine, &self.logic, &self.input)?;
+        let (state, mut effects, mut report) =
+            engine::start(&self.machine, &self.logic, &self.input)?;
         self.state = Some(state);
-        self.apply_effects(effects);
+        self.apply_effects(&mut effects);
         let rest = self.drain()?;
         report.actions.extend(rest.actions);
         report.changed = true;
-        Ok(self.receipt(&report))
+        Ok(self.receipt(report))
     }
 
     /// Deliver an event and process it, plus everything it triggers (timers already due,
@@ -158,10 +193,14 @@ impl<C: Context> SyncInterpreter<C> {
         })?;
         if self.machine.policies().strict
             && event.origin == EventOrigin::External
-            && self.machine.declared_events().binary_search(&event.ty).is_err()
+            && self
+                .machine
+                .declared_events()
+                .binary_search_by(|d| d.as_str().cmp(&event.ty))
+                .is_err()
         {
             return Err(Error::UnknownEvent {
-                event: event.ty,
+                event: event.ty.to_string(),
                 machine: self.machine.id().to_owned(),
             });
         }
@@ -169,10 +208,10 @@ impl<C: Context> SyncInterpreter<C> {
         self.queue.push_back(event);
         if self.processing {
             // Re-entrant send from inside an action: queued, processed by the outer loop.
-            return Ok(self.receipt(&StepReport::default()));
+            return Ok(self.receipt(StepReport::default()));
         }
         let report = self.drain()?;
-        Ok(self.receipt(&report))
+        Ok(self.receipt(report))
     }
 
     /// Fire every timer that is due according to the clock, in due order. The receipt covers
@@ -182,10 +221,10 @@ impl<C: Context> SyncInterpreter<C> {
     /// Logic errors raised while processing the timer events.
     pub fn tick(&mut self) -> Result<Receipt> {
         if self.state.is_none() || self.processing {
-            return Ok(self.receipt(&StepReport::default()));
+            return Ok(self.receipt(StepReport::default()));
         }
         let report = self.drain()?;
-        Ok(self.receipt(&report))
+        Ok(self.receipt(report))
     }
 
     /// Advance a [`SimulatedClock`] and fire what became due. Pass the same clock the
@@ -263,12 +302,13 @@ impl<C: Context> SyncInterpreter<C> {
         self.timers.iter().filter(|t| !self.cancelled.contains(&t.seq)).count()
     }
 
-    fn receipt(&self, report: &StepReport) -> Receipt {
+    fn receipt(&self, report: StepReport) -> Receipt {
         Receipt {
-            state_ids: self.state_ids(),
+            leaves: self.state.as_ref().map(|s| s.leaves(&self.machine)).unwrap_or_default(),
+            machine: self.machine.clone(),
             changed: report.changed,
             unhandled: report.unhandled,
-            actions: report.actions.clone(),
+            actions: report.actions,
             status: self.status(),
         }
     }
@@ -297,9 +337,16 @@ impl<C: Context> SyncInterpreter<C> {
             if state.status != Status::Running {
                 continue;
             }
-            let mut effects = Vec::new();
-            let report =
-                engine::step(&self.machine, &self.logic, state, event.clone(), &mut effects)?;
+            let mut effects = std::mem::take(&mut self.effects);
+            effects.clear();
+            let stepped = engine::step(&self.machine, &self.logic, state, event, &mut effects);
+            let report = match stepped {
+                Ok(report) => report,
+                Err(err) => {
+                    self.effects = effects;
+                    return Err(err);
+                }
+            };
             if first {
                 merged.changed = report.changed;
                 merged.unhandled = report.unhandled;
@@ -313,7 +360,8 @@ impl<C: Context> SyncInterpreter<C> {
             if report.failed.is_some() {
                 merged.failed = report.failed;
             }
-            self.apply_effects(effects);
+            self.apply_effects(&mut effects);
+            self.effects = effects;
         }
         Ok(merged)
     }
@@ -368,8 +416,8 @@ impl<C: Context> SyncInterpreter<C> {
         }
     }
 
-    fn apply_effects(&mut self, effects: Vec<Effect>) {
-        for effect in effects {
+    fn apply_effects(&mut self, effects: &mut Vec<Effect>) {
+        for effect in effects.drain(..) {
             match effect {
                 Effect::ArmTimer { state, delay_ms, event, entry_seq, .. } => {
                     self.arm_with(delay_ms, delay_ms, event, Some(state), None, Some(entry_seq));
@@ -459,7 +507,7 @@ impl<C: Context> SyncInterpreter<C> {
             let remaining = (t.due_ms - now_ms).max(0.0);
             match (t.owner, t.entry_seq) {
                 (Some(owner), Some(entry_seq)) => deadlines.push(Deadline {
-                    state_id: machine.node(owner).id.clone(),
+                    state_id: machine.node(owner).id.to_string(),
                     entry_seq,
                     due_at_wall: wall + remaining / 1000.0,
                     delay_ms: json_number(t.delay_ms),
@@ -467,7 +515,7 @@ impl<C: Context> SyncInterpreter<C> {
                 }),
                 _ => scheduled_sends.push(ScheduledSend {
                     kind: "event".into(),
-                    ty: t.event.ty.clone(),
+                    ty: t.event.ty.to_string(),
                     payload: if t.event.payload.is_null() {
                         Value::Object(Map::new())
                     } else {
@@ -480,15 +528,16 @@ impl<C: Context> SyncInterpreter<C> {
         }
         let active = |s: StateId| state.is_active(s);
         let mut configuration: Vec<String> =
-            state.configuration().map(|s| machine.node(s).id.clone()).collect();
+            state.configuration().map(|s| machine.node(s).id.to_string()).collect();
         configuration.sort();
         let mut history = indexmap::IndexMap::new();
         let mut recorded: Vec<(&StateId, &Vec<StateId>)> = state.history().iter().collect();
         recorded.sort_by_key(|(k, _)| **k);
         for (parent, states) in recorded {
-            let mut ids: Vec<String> = states.iter().map(|s| machine.node(*s).id.clone()).collect();
+            let mut ids: Vec<String> =
+                states.iter().map(|s| machine.node(*s).id.to_string()).collect();
             ids.sort();
-            history.insert(machine.node(*parent).id.clone(), ids);
+            history.insert(machine.node(*parent).id.to_string(), ids);
         }
         let pending_events = self.queue.iter().map(event_record).collect();
         Ok(Snapshot {
@@ -627,7 +676,7 @@ fn json_number(ms: f64) -> Value {
 fn event_record(event: &Event) -> Value {
     let mut map = Map::new();
     map.insert("kind".into(), Value::String("event".into()));
-    map.insert("type".into(), Value::String(event.ty.clone()));
+    map.insert("type".into(), Value::String(event.ty.to_string()));
     if !event.payload.is_null() {
         map.insert("payload".into(), event.payload.clone());
     }

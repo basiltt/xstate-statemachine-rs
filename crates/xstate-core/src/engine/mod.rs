@@ -117,7 +117,7 @@ impl<C> ActiveState<C> {
 
     /// Active leaf states in document order.
     #[must_use]
-    pub fn leaves(&self, machine: &Machine) -> Vec<StateId> {
+    pub fn leaves(&self, machine: &Machine) -> smallvec::SmallVec<[StateId; 4]> {
         self.configuration().filter(|s| machine.node(*s).is_leaf()).collect()
     }
 
@@ -125,7 +125,7 @@ impl<C> ActiveState<C> {
     #[must_use]
     pub fn leaf_ids(&self, machine: &Machine) -> Vec<String> {
         let mut ids: Vec<String> =
-            self.leaves(machine).into_iter().map(|s| machine.node(s).id.clone()).collect();
+            self.leaves(machine).into_iter().map(|s| machine.node(s).id.to_string()).collect();
         ids.sort();
         ids
     }
@@ -243,9 +243,9 @@ pub struct StepReport {
     /// Whether the configuration or context changed.
     pub changed: bool,
     /// Transitions taken, in execution order (across all microsteps).
-    pub transitions: Vec<TransitionId>,
+    pub transitions: smallvec::SmallVec<[TransitionId; 4]>,
     /// User action names executed, in order.
-    pub actions: Vec<String>,
+    pub actions: Vec<std::sync::Arc<str>>,
     /// Number of microsteps executed.
     pub microsteps: u32,
     /// `true` when no transition matched the delivered event.
@@ -335,7 +335,14 @@ pub fn step<C: Context>(
             report = StepReport { failed: Some(err.to_string()), ..StepReport::default() };
             return Ok(report);
         }
-        Err(err) => return Err(err),
+        Err(err) => {
+            // XState: a failing action is unrecoverable for the actor.
+            state.status = Status::Error;
+            state.error = Some(err.to_string());
+            state.internal_queue.clear();
+            effects.truncate(first);
+            return Err(err);
+        }
     }
     finalize_effects(effects, first);
     Ok(report)

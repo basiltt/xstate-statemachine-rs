@@ -1,8 +1,6 @@
 //! Selection, conflict resolution, exit/entry computation and the macrostep loop — a direct
 //! transcription of XState v5's `stateUtils` (itself the SCXML Appendix D algorithm).
 
-use std::collections::BTreeSet;
-
 use serde_json::Value;
 
 use super::actions::{evaluate_guard, run_actions};
@@ -13,15 +11,66 @@ use crate::event::{Event, EventOrigin};
 use crate::ids::{StateId, TransitionId};
 use crate::machine::{Machine, NodeKind, Transition};
 
-/// Ordered set of states; `BTreeSet<StateId>` iterates in document order.
-type StateSet = BTreeSet<StateId>;
+/// Set of states kept sorted in document order in an inline vector: configurations touched
+/// by one microstep are small, so this never allocates in the common case.
+#[derive(Default)]
+struct StateSet {
+    items: smallvec::SmallVec<[StateId; 16]>,
+}
+
+impl StateSet {
+    #[inline]
+    fn new(_machine: &Machine) -> Self {
+        Self::default()
+    }
+
+    #[inline]
+    fn insert(&mut self, s: StateId) {
+        if let Err(pos) = self.items.binary_search(&s) {
+            self.items.insert(pos, s);
+        }
+    }
+
+    #[inline]
+    fn contains(&self, s: StateId) -> bool {
+        self.items.binary_search(&s).is_ok()
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    #[inline]
+    fn is_disjoint(&self, other: &Self) -> bool {
+        // Both sorted: merge-walk.
+        let (mut i, mut j) = (0, 0);
+        while i < self.items.len() && j < other.items.len() {
+            match self.items[i].cmp(&other.items[j]) {
+                std::cmp::Ordering::Less => i += 1,
+                std::cmp::Ordering::Greater => j += 1,
+                std::cmp::Ordering::Equal => return false,
+            }
+        }
+        true
+    }
+
+    /// Members in document order.
+    #[inline]
+    fn iter(&self) -> impl DoubleEndedIterator<Item = StateId> + '_ {
+        self.items.iter().copied()
+    }
+}
+
+/// Transitions enabled for one microstep; rarely more than a few.
+type Enabled = smallvec::SmallVec<[TransitionId; 4]>;
 
 // ----------------------------------------------------------------------------- entry points
 
 pub(super) fn start<C: Context>(cx: &mut Ctx<'_, C>) -> Result<()> {
     let machine = cx.machine;
     let init = Event::init();
-    let mut to_enter = StateSet::new();
+    let mut to_enter = StateSet::new(machine);
     to_enter.insert(StateId::ROOT);
     add_descendants_to_enter(machine, StateId::ROOT, &cx.state.history, &mut to_enter);
     enter_states(cx, &to_enter, &init)?;
@@ -64,7 +113,7 @@ fn settle<C: Context>(cx: &mut Ctx<'_, C>, mut current: Event) -> Result<()> {
             let err = Error::RunawayChain {
                 machine: cx.machine.id().to_owned(),
                 limit,
-                event: current.ty.clone(),
+                event: current.ty.to_string(),
             };
             cx.state.status = Status::Error;
             cx.state.error = Some(err.to_string());
@@ -74,7 +123,7 @@ fn settle<C: Context>(cx: &mut Ctx<'_, C>, mut current: Event) -> Result<()> {
         let mut enabled = if select_eventless && cx.machine.has_always() {
             select_eventless_transitions(cx, &current)?
         } else {
-            Vec::new()
+            Enabled::new()
         };
         let was_eventless = !enabled.is_empty();
         if !was_eventless {
@@ -96,20 +145,21 @@ fn settle<C: Context>(cx: &mut Ctx<'_, C>, mut current: Event) -> Result<()> {
 /// XState's `transitionNode`: descend the active tree; a parallel node asks every region and
 /// consults its own handlers only when no region had a match; a compound node consults its
 /// own handlers only when its active child had none.
-fn select_transitions<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Result<Vec<TransitionId>> {
+fn select_transitions<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Result<Enabled> {
     fn select<C: Context>(
         cx: &mut Ctx<'_, C>,
         node: StateId,
         event: &Event,
-    ) -> Result<Vec<TransitionId>> {
+        key: Option<u32>,
+    ) -> Result<Enabled> {
         let machine = cx.machine;
         let n = machine.node(node);
-        let mut inner = Vec::new();
+        let mut inner = Enabled::new();
         match n.kind {
             NodeKind::Parallel | NodeKind::Compound { .. } => {
                 for &child in &n.children {
                     if cx.state.is_active(child) {
-                        inner.extend(select(cx, child, event)?);
+                        inner.extend(select(cx, child, event, key)?);
                     }
                 }
             }
@@ -118,9 +168,10 @@ fn select_transitions<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Result<
         if !inner.is_empty() {
             return Ok(inner);
         }
-        Ok(own_transition(cx, node, event)?.into_iter().collect())
+        Ok(own_transition(cx, node, event, key)?.into_iter().collect())
     }
-    select(cx, StateId::ROOT, event)
+    let key = cx.machine.event_key(&event.ty);
+    select(cx, StateId::ROOT, event, key)
 }
 
 /// First candidate on `node` whose guard holds.
@@ -128,9 +179,10 @@ fn own_transition<C: Context>(
     cx: &mut Ctx<'_, C>,
     node: StateId,
     event: &Event,
+    key: Option<u32>,
 ) -> Result<Option<TransitionId>> {
     let machine = cx.machine;
-    for tid in machine.node(node).candidates(&event.ty) {
+    for tid in machine.node(node).candidates(key, &event.ty) {
         if guard_holds(cx, machine.transition(tid), event)? {
             return Ok(Some(tid));
         }
@@ -147,13 +199,10 @@ fn guard_holds<C: Context>(cx: &mut Ctx<'_, C>, t: &Transition, event: &Event) -
 
 /// XState's `selectEventlessTransitions`: per atomic state, the first `always` transition up
 /// the ancestor chain whose guard holds; then conflict resolution.
-fn select_eventless_transitions<C: Context>(
-    cx: &mut Ctx<'_, C>,
-    event: &Event,
-) -> Result<Vec<TransitionId>> {
+fn select_eventless_transitions<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Result<Enabled> {
     let machine = cx.machine;
     let leaves = cx.state.leaves(machine);
-    let mut enabled: Vec<TransitionId> = Vec::new();
+    let mut enabled = Enabled::new();
     for leaf in leaves {
         let chain = std::iter::once(leaf).chain(machine.ancestors(leaf, None));
         'walk: for node in chain {
@@ -192,7 +241,7 @@ fn microstep<C: Context>(
         run_actions(cx, &machine.transition(tid).actions, event)?;
     }
 
-    let (to_enter, _) = compute_entry_set(machine, &filtered, &cx.state.history);
+    let to_enter = compute_entry_set(machine, &filtered, &cx.state.history);
     enter_states(cx, &to_enter, event)?;
 
     if cx.state.status == Status::Done {
@@ -210,15 +259,15 @@ fn remove_conflicting<C>(
     machine: &Machine,
     enabled: &[TransitionId],
     state: &super::ActiveState<C>,
-) -> Vec<TransitionId> {
-    let mut filtered: Vec<TransitionId> = Vec::with_capacity(enabled.len());
+) -> Enabled {
+    let mut filtered = Enabled::new();
     for &t1 in enabled {
         let mut preempted = false;
-        let mut to_remove: Vec<TransitionId> = Vec::new();
+        let mut to_remove = Enabled::new();
         let exit1 = compute_exit_set(machine, &[t1], state);
         for &t2 in &filtered {
             let exit2 = compute_exit_set(machine, &[t2], state);
-            if exit1.intersection(&exit2).next().is_some() {
+            if !exit1.is_disjoint(&exit2) {
                 let s1 = machine.transition(t1).source;
                 let s2 = machine.transition(t2).source;
                 if machine.is_descendant(s1, s2) {
@@ -252,7 +301,7 @@ fn exit_states<C: Context>(
     // Record history before anything leaves the configuration. The record is keyed by the
     // exited state and holds every active descendant (the Python snapshot layout); the
     // shallow/deep view a history node needs is derived from it on restore.
-    for &s in &to_exit {
+    for s in to_exit.iter() {
         if machine.node(s).history_children.is_empty() {
             continue;
         }
@@ -262,7 +311,7 @@ fn exit_states<C: Context>(
         cx.state.mutations += 1;
     }
     // Reverse document order.
-    for &s in to_exit.iter().rev() {
+    for s in to_exit.iter().rev() {
         let node = machine.node(s);
         cx.effects.push(Effect::CancelTimers(s));
         run_actions(cx, &node.exit, event)?;
@@ -282,7 +331,7 @@ fn compute_exit_set<C>(
     transitions: &[TransitionId],
     state: &super::ActiveState<C>,
 ) -> StateSet {
-    let mut out = StateSet::new();
+    let mut out = StateSet::new(machine);
     for &tid in transitions {
         let t = machine.transition(tid);
         if t.targets.is_empty() {
@@ -314,24 +363,22 @@ fn transition_domain(
     if !t.reenter && targets.iter().all(|&x| machine.is_self_or_descendant(x, t.source)) {
         return Some(t.source);
     }
-    // Least common *proper* ancestor of source and targets.
-    let mut all = targets;
-    all.insert(0, t.source);
-    find_lcca(machine, &all)
+    // Least common *proper* ancestor of source and targets (symmetric, so the source can be
+    // the walk's head).
+    machine
+        .ancestors(t.source, None)
+        .find(|&anc| targets.iter().all(|&n| machine.is_descendant(n, anc)))
 }
 
-fn find_lcca(machine: &Machine, nodes: &[StateId]) -> Option<StateId> {
-    let (&head, tail) = nodes.split_first()?;
-    machine.ancestors(head, None).find(|&anc| tail.iter().all(|&n| machine.is_descendant(n, anc)))
-}
+/// Ancestor chain of one state.
+type Ancestors = smallvec::SmallVec<[StateId; 8]>;
+
+/// Small list of target states.
+type Targets = smallvec::SmallVec<[StateId; 2]>;
 
 /// Targets with history pseudo-states replaced by the recorded (or default) states.
-fn effective_targets(
-    machine: &Machine,
-    t: &Transition,
-    history: &super::HistoryMap,
-) -> Vec<StateId> {
-    let mut out = Vec::with_capacity(t.targets.len());
+fn effective_targets(machine: &Machine, t: &Transition, history: &super::HistoryMap) -> Targets {
+    let mut out = Targets::new();
     for &target in &t.targets {
         match machine.node(target).kind {
             NodeKind::History { .. } => out.extend(history_targets(machine, target, history)),
@@ -381,15 +428,13 @@ fn history_default(machine: &Machine, h: StateId) -> Option<StateId> {
 
 // ----------------------------------------------------------------------------- entry
 
-/// XState's `computeEntrySet`. Returns the states to enter and the ones entered "by default"
-/// (through `initial`, relevant for initial-transition actions).
+/// XState's `computeEntrySet`.
 fn compute_entry_set(
     machine: &Machine,
     transitions: &[TransitionId],
     history: &super::HistoryMap,
-) -> (StateSet, StateSet) {
-    let mut to_enter = StateSet::new();
-    let mut default_entry = StateSet::new();
+) -> StateSet {
+    let mut to_enter = StateSet::new(machine);
     for &tid in transitions {
         let t = machine.transition(tid);
         let domain = transition_domain(machine, t, history);
@@ -397,12 +442,11 @@ fn compute_entry_set(
             let node = machine.node(target);
             if !node.is_history() && (t.source != target || Some(t.source) != domain || t.reenter) {
                 to_enter.insert(target);
-                default_entry.insert(target);
             }
             add_descendants_to_enter(machine, target, history, &mut to_enter);
         }
         for s in effective_targets(machine, t, history) {
-            let mut ancestors: Vec<StateId> = machine.ancestors(s, domain).collect();
+            let mut ancestors: Ancestors = machine.ancestors(s, domain).collect();
             if let Some(d) = domain.filter(|&d| machine.node(d).is_parallel()) {
                 ancestors.push(d);
             }
@@ -413,7 +457,7 @@ fn compute_entry_set(
             add_ancestors_to_enter(machine, &ancestors, reentrancy_domain, history, &mut to_enter);
         }
     }
-    (to_enter, default_entry)
+    to_enter
 }
 
 /// XState's `addDescendantStatesToEnter`.
@@ -432,14 +476,14 @@ fn add_descendants_to_enter(
                 add_descendants_to_enter(machine, s, history, to_enter);
             }
             for &s in &targets {
-                let ancestors: Vec<StateId> = machine.ancestors(s, n.parent).collect();
+                let ancestors: Ancestors = machine.ancestors(s, n.parent).collect();
                 add_ancestors_to_enter(machine, &ancestors, None, history, to_enter);
             }
         }
         NodeKind::Compound { initial } => {
             to_enter.insert(initial);
             add_descendants_to_enter(machine, initial, history, to_enter);
-            let ancestors: Vec<StateId> = machine.ancestors(initial, Some(node)).collect();
+            let ancestors: Ancestors = machine.ancestors(initial, Some(node)).collect();
             add_ancestors_to_enter(machine, &ancestors, None, history, to_enter);
         }
         NodeKind::Parallel => {
@@ -447,7 +491,7 @@ fn add_descendants_to_enter(
                 if machine.node(child).is_history() {
                     continue;
                 }
-                if !to_enter.iter().any(|&s| machine.is_descendant(s, child)) {
+                if !to_enter.iter().any(|s| machine.is_descendant(s, child)) {
                     to_enter.insert(child);
                     add_descendants_to_enter(machine, child, history, to_enter);
                 }
@@ -474,7 +518,7 @@ fn add_ancestors_to_enter(
                 if machine.node(child).is_history() {
                     continue;
                 }
-                if !to_enter.iter().any(|&s| machine.is_descendant(s, child)) {
+                if !to_enter.iter().any(|s| machine.is_descendant(s, child)) {
                     to_enter.insert(child);
                     add_descendants_to_enter(machine, child, history, to_enter);
                 }
@@ -485,8 +529,8 @@ fn add_ancestors_to_enter(
 
 fn enter_states<C: Context>(cx: &mut Ctx<'_, C>, to_enter: &StateSet, event: &Event) -> Result<()> {
     let machine = cx.machine;
-    let mut completed: StateSet = StateSet::new();
-    for &s in to_enter {
+    let mut completed = StateSet::new(machine);
+    for s in to_enter.iter() {
         if cx.state.status != Status::Running {
             break;
         }
@@ -533,7 +577,7 @@ fn enter_states<C: Context>(cx: &mut Ctx<'_, C>, to_enter: &StateSet, event: &Ev
             }
             while let Some(anc) = marker {
                 if !machine.node(anc).is_parallel()
-                    || completed.contains(&anc)
+                    || completed.contains(anc)
                     || !in_final_state(machine, cx.state, anc)
                 {
                     break;

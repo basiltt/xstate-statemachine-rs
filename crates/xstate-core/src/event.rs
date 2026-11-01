@@ -7,6 +7,10 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use smol_str::SmolStr;
+
+/// Event type string; short names are stored inline without heap allocation.
+pub type EventType = SmolStr;
 
 /// Where an event came from. Only the engine can mint non-[`External`](EventOrigin::External)
 /// events.
@@ -34,7 +38,7 @@ pub enum EventOrigin {
 pub struct Event {
     /// The XState event type, e.g. `"TOGGLE"` or `"xstate.done.actor.fetchUser"`.
     #[serde(rename = "type")]
-    pub ty: String,
+    pub ty: EventType,
     /// Payload fields. For user events this is the event object minus `type`; for
     /// completion events it is `{"output": ...}` or `{"error": ...}`.
     #[serde(default, skip_serializing_if = "Value::is_null")]
@@ -58,12 +62,12 @@ impl EventOrigin {
 
 impl Event {
     /// A user event with no payload.
-    pub fn new(ty: impl Into<String>) -> Self {
+    pub fn new(ty: impl Into<EventType>) -> Self {
         Self { ty: ty.into(), payload: Value::Null, origin: EventOrigin::External }
     }
 
     /// A user event with a payload. Pass an object for XState-style flat payload fields.
-    pub fn with_payload(ty: impl Into<String>, payload: Value) -> Self {
+    pub fn with_payload(ty: impl Into<EventType>, payload: Value) -> Self {
         Self { ty: ty.into(), payload, origin: EventOrigin::External }
     }
 
@@ -106,14 +110,14 @@ impl Event {
         self
     }
 
-    pub(crate) fn engine(ty: String, payload: Value, origin: EventOrigin) -> Self {
-        Self { ty, payload, origin }
+    pub(crate) fn engine(ty: impl Into<EventType>, payload: Value, origin: EventOrigin) -> Self {
+        Self { ty: ty.into(), payload, origin }
     }
 
     /// The implicit start event.
     #[must_use]
     pub fn init() -> Self {
-        Self::engine(names::INIT.to_owned(), Value::Null, EventOrigin::Init)
+        Self::engine(names::INIT, Value::Null, EventOrigin::Init)
     }
 
     /// `xstate.done.state.<state id>` carrying the final state's output.

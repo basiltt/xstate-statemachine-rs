@@ -222,7 +222,7 @@ fn node_shape(machine: &Machine, index: usize) -> String {
         NodeKind::History { .. } => "history",
     };
     let shape = serde_json::json!({
-        "id": node.id,
+        "id": &*node.id,
         "type": kind,
         "initial": node.initial_key,
         "entry": entry,
@@ -240,7 +240,7 @@ fn sort_strings(values: &mut [Value]) {
 
 fn action_name(action: &ActionDef) -> String {
     match action {
-        ActionDef::User { name, .. } | ActionDef::Builtin { name, .. } => name.clone(),
+        ActionDef::User { name, .. } | ActionDef::Builtin { name, .. } => name.to_string(),
     }
 }
 
@@ -299,15 +299,15 @@ pub(crate) fn state_value(
         NodeKind::Parallel => {
             let mut map = Map::new();
             for c in active_children {
-                map.insert(machine.node(c).key.clone(), state_value(machine, active, c));
+                map.insert(machine.node(c).key.to_string(), state_value(machine, active, c));
             }
             Value::Object(map)
         }
         NodeKind::Compound { .. } => match active_children.first() {
-            Some(&c) if machine.node(c).is_leaf() => Value::String(machine.node(c).key.clone()),
+            Some(&c) if machine.node(c).is_leaf() => Value::String(machine.node(c).key.to_string()),
             Some(&c) => {
                 let mut map = Map::new();
-                map.insert(machine.node(c).key.clone(), state_value(machine, active, c));
+                map.insert(machine.node(c).key.to_string(), state_value(machine, active, c));
                 Value::Object(map)
             }
             None => Value::Object(Map::new()),

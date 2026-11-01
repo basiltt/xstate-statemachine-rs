@@ -5,6 +5,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use foldhash::HashMap as FastMap;
+
 use serde_json::Value;
 use smallvec::SmallVec;
 
@@ -28,7 +30,7 @@ pub(crate) struct MachineData {
     pub(crate) id: String,
     pub(crate) states: Vec<StateNode>,
     pub(crate) transitions: Vec<Transition>,
-    pub(crate) ids: HashMap<String, StateId>,
+    pub(crate) ids: FastMap<Arc<str>, StateId>,
     pub(crate) custom_ids: HashMap<String, StateId>,
     pub(crate) context: Value,
     pub(crate) version: Option<String>,
@@ -36,6 +38,8 @@ pub(crate) struct MachineData {
     pub(crate) warnings: Vec<ConfigWarning>,
     pub(crate) has_always: bool,
     pub(crate) declared_events: Vec<String>,
+    /// Exact event descriptor → interned key used by every node's `on_exact` table.
+    pub(crate) event_index: FastMap<String, u32>,
     pub(crate) hash: std::sync::OnceLock<String>,
 }
 
@@ -66,9 +70,9 @@ pub enum NodeKind {
 #[derive(Debug)]
 pub struct StateNode {
     /// Full dotted id, e.g. `machine.a.b`.
-    pub id: String,
+    pub id: Arc<str>,
     /// Key under the parent's `states`.
-    pub key: String,
+    pub key: smol_str::SmolStr,
     /// Parent, `None` for the root.
     pub parent: Option<StateId>,
     /// Children in document order.
@@ -80,7 +84,9 @@ pub struct StateNode {
     /// Exclusive end of this node's subtree in the pre-order arena.
     pub(crate) subtree_end: u32,
     /// Exact-descriptor transition lookup, descriptors already normalised to v5 names.
-    pub(crate) on_exact: HashMap<String, SmallVec<[TransitionId; 2]>>,
+    /// Exact-descriptor table: (interned event key, transitions). Linear scan — nodes rarely
+    /// declare more than a handful of events, and this beats hashing for them.
+    pub(crate) on_exact: SmallVec<[(u32, SmallVec<[TransitionId; 2]>); 4]>,
     /// Partial wildcard descriptors (`foo.*`) longest first, with their transitions.
     pub(crate) on_partial: Vec<(String, SmallVec<[TransitionId; 2]>)>,
     /// `*` transitions.
@@ -113,7 +119,7 @@ pub struct StateNode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Trigger {
     /// A named event descriptor (exact, partial wildcard or `*`), v5-normalised.
-    Event(String),
+    Event(smol_str::SmolStr),
     /// Eventless (`always`).
     Always,
 }
@@ -128,7 +134,7 @@ pub struct Transition {
     /// Resolved targets; empty for targetless transitions.
     pub targets: Vec<StateId>,
     /// Targets as written in the configuration (kept for the structure hash).
-    pub raw_targets: Vec<String>,
+    pub raw_targets: SmallVec<[smol_str::SmolStr; 1]>,
     /// Actions in order.
     pub actions: Vec<ActionDef>,
     /// Guard expression.
@@ -149,14 +155,14 @@ pub enum ActionDef {
     /// Implemented by the logic registry.
     User {
         /// Registry name.
-        name: String,
+        name: Arc<str>,
         /// `params` (or `null`).
         params: Value,
     },
     /// An XState built-in.
     Builtin {
         /// The spelling used in the configuration (kept for the structure hash).
-        name: String,
+        name: Arc<str>,
         /// Compiled built-in.
         builtin: Builtin,
     },
@@ -318,6 +324,13 @@ impl Machine {
         self.inner.hash.get_or_init(|| crate::snapshot::machine_hash(self))
     }
 
+    /// Interned key of an exact event descriptor, if any node declares it.
+    #[inline]
+    #[must_use]
+    pub fn event_key(&self, event_type: &str) -> Option<u32> {
+        self.inner.event_index.get(event_type).copied()
+    }
+
     /// Event types declared on any state (exact descriptors only), for strict mode.
     #[must_use]
     pub fn declared_events(&self) -> &[String] {
@@ -423,15 +436,20 @@ impl StateNode {
         matches!(self.kind, NodeKind::Compound { .. })
     }
 
-    /// Candidate transitions for an event type in XState v5 order: the exact descriptor's
+    /// Candidate transitions for an event in XState v5 order: the exact descriptor's
     /// transitions first, then matching partial wildcards (longest first), then `*`. Wildcard
     /// candidates are appended even when an exact descriptor exists, so a failed exact guard
-    /// falls through to them.
+    /// falls through to them. `key` is the interned event key (see [`Machine::event_key`]).
+    #[inline]
     pub(crate) fn candidates<'a>(
         &'a self,
+        key: Option<u32>,
         event_type: &'a str,
     ) -> impl Iterator<Item = TransitionId> + 'a {
-        let exact = self.on_exact.get(event_type).into_iter().flat_map(|ts| ts.iter().copied());
+        let exact = key
+            .and_then(|k| self.on_exact.iter().find(|(ek, _)| *ek == k))
+            .into_iter()
+            .flat_map(|(_, ts)| ts.iter().copied());
         let partial = self
             .on_partial
             .iter()
