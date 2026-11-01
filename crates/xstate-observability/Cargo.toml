@@ -1,0 +1,23 @@
+[package]
+name = "xstate-observability"
+description = "Metrics and tracing observers for xstate-core machines (metrics facade, label hygiene)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+xstate-core = { workspace = true }
+metrics = { workspace = true }
+tracing = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+metrics-util = "0.19"
+
+[lints]
+workspace = true

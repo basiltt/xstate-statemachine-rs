@@ -16,8 +16,19 @@ path = "src/main.rs"
 
 [dependencies]
 xstate-core = { workspace = true }
+xstate-persistence = { workspace = true }
+xstate-inspect = { workspace = true }
 clap = { workspace = true }
-# anyhow is added back with the first fallible subcommand
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+owo-colors = { workspace = true }
+is-terminal = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+assert_cmd = "2.0"
+predicates = "3.1"
 
 [lints]
 workspace = true
