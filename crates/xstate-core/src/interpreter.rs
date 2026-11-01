@@ -587,6 +587,9 @@ pub enum RestartTimers {
     /// Re-arm with the remaining time (`due_at_wall - now`), clamped to the declared delay.
     #[default]
     Resume,
+    /// Like `Resume`, and fire everything already due before `from_snapshot` returns, so a
+    /// scanner that woke the instance sees the timer's effects immediately.
+    FireDue,
 }
 
 /// Options for [`SyncInterpreter::from_snapshot`].
@@ -730,7 +733,9 @@ impl<C: Context> SyncInterpreter<C> {
             let remaining = match options.restart_timers {
                 RestartTimers::Parked => continue,
                 RestartTimers::Restart => delay_ms,
-                RestartTimers::Resume => ((d.due_at_wall - now_wall) * 1000.0).clamp(0.0, delay_ms),
+                RestartTimers::Resume | RestartTimers::FireDue => {
+                    ((d.due_at_wall - now_wall) * 1000.0).clamp(0.0, delay_ms)
+                }
             };
             let event = Event::engine(
                 snapshot::engine_event_name(&d.event_type),
@@ -747,6 +752,9 @@ impl<C: Context> SyncInterpreter<C> {
             };
             let event = Event::engine(s.ty.clone(), payload, EventOrigin::Internal);
             interp.arm_with(s.remaining_ms, s.remaining_ms, event, None, s.send_id.clone(), None);
+        }
+        if options.restart_timers == RestartTimers::FireDue {
+            interp.tick()?;
         }
         Ok(interp)
     }
