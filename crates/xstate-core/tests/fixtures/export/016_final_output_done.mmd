@@ -1,0 +1,12 @@
+stateDiagram-v2
+[*] --> job
+state "job" as job {
+    [*] --> running
+    state "running" as running
+    state "done" as done
+    done --> [*]
+    state "failed" as failed
+    failed --> [*]
+}
+running --> done : FINISH
+running --> failed : FAIL

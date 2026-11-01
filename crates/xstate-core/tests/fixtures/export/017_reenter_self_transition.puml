@@ -1,0 +1,10 @@
+@startuml
+hide empty description
+state "s" as s {
+  [*] --> s_a
+  state "a" as s_a
+}
+[*] --> s_a
+s_a --> s_a : SOFT
+s_a --> s_a : HARD
+@enduml

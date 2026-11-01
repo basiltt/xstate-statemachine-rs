@@ -162,7 +162,14 @@ pub(super) fn parse_machine(value: &Value, options: &ParseOptions) -> Result<Mac
         Some(_) => return Err(Error::config("version", "`version` must be a string or number")),
     };
     let policies = parser.parse_policies(obj)?;
-    Ok(MachineConfig { root, context, version, policies, warnings: parser.warnings })
+    Ok(MachineConfig {
+        root,
+        context,
+        version,
+        policies,
+        warnings: parser.warnings,
+        source: value.clone(),
+    })
 }
 
 impl Parser {

@@ -1,0 +1,15 @@
+@startuml
+hide empty description
+state "wizard" as wizard {
+  [*] --> wizard_intro
+  state "intro" as wizard_intro
+  state "form" as wizard_form {
+    [*] --> wizard_form_name
+    state "name" as wizard_form_name
+    state "address" as wizard_form_address
+    state "resume" as wizard_form_resume
+  }
+}
+[*] --> wizard_intro
+wizard_intro --> wizard_form_resume : GO
+@enduml

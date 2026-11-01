@@ -1,0 +1,22 @@
+stateDiagram-v2
+[*] --> m
+state "m" as m {
+    [*] --> a
+    state "a" as a {
+        [*] --> a1
+        state "a1" as a1 {
+            [*] --> a1x
+            state "a1x" as a1x
+            state "a1y" as a1y
+        }
+    }
+    state "b" as b {
+        [*] --> b1
+        state "b1" as b1
+        state "b2" as b2
+    }
+}
+a --> b : RESET
+a1x --> a1y : NEXT
+a1y --> b2 : JUMP
+b2 --> a : BACK

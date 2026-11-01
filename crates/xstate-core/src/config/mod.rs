@@ -26,6 +26,9 @@ pub struct MachineConfig {
     pub policies: Policies,
     /// Non-fatal findings collected while parsing (unknown keys and the like).
     pub warnings: Vec<ConfigWarning>,
+    /// The XState JSON document this configuration stands for: the parsed input verbatim, or the
+    /// equivalent document for programmatically built configurations (`Machine::to_json`).
+    pub source: Value,
 }
 
 /// A non-fatal parse finding.
@@ -77,7 +80,7 @@ pub enum ActionErrorPolicy {
     Continue,
     /// Restore configuration and context as they were before the step.
     Rollback,
-    /// Fail the `send` with [`Error::TransitionFailed`] and move the machine to `error`
+    /// Fail the `send` with [`Error::TransitionFailed`](crate::Error::TransitionFailed) and move the machine to `error`
     /// (XState behaviour; the default).
     Fail,
 }
@@ -228,7 +231,7 @@ impl MachineConfig {
     /// Parse an XState JSON document with default options.
     ///
     /// # Errors
-    /// Returns [`Error::InvalidConfig`] for shape problems.
+    /// Returns [`Error::InvalidConfig`](crate::Error::InvalidConfig) for shape problems.
     pub fn from_value(value: &Value) -> Result<Self> {
         Self::from_value_with(value, &ParseOptions::default())
     }
@@ -236,7 +239,7 @@ impl MachineConfig {
     /// Parse with explicit options.
     ///
     /// # Errors
-    /// Returns [`Error::InvalidConfig`] for shape problems, including unknown keys when
+    /// Returns [`Error::InvalidConfig`](crate::Error::InvalidConfig) for shape problems, including unknown keys when
     /// `strictConfig` is in force.
     pub fn from_value_with(value: &Value, options: &ParseOptions) -> Result<Self> {
         parse::parse_machine(value, options)
@@ -245,7 +248,7 @@ impl MachineConfig {
     /// Parse from JSON text.
     ///
     /// # Errors
-    /// Returns [`Error::Json`] for malformed JSON and [`Error::InvalidConfig`] for shape
+    /// Returns [`Error::Json`](crate::Error::Json) for malformed JSON and [`Error::InvalidConfig`](crate::Error::InvalidConfig) for shape
     /// problems.
     pub fn from_json(text: &str) -> Result<Self> {
         let value: Value = serde_json::from_str(text)?;

@@ -1,0 +1,13 @@
+stateDiagram-v2
+[*] --> wizard
+state "wizard" as wizard {
+    [*] --> intro
+    state "intro" as intro
+    state "form" as form {
+        [*] --> name
+        state "name" as name
+        state "address" as address
+        state "resume" as resume
+    }
+}
+intro --> resume : GO

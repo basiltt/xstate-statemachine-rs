@@ -1030,6 +1030,8 @@ dependencies = [
 name = "xstate-tokio"
 version = "0.0.1"
 dependencies = [
+ "serde_json",
+ "smallvec",
  "thiserror",
  "tokio",
  "tracing",

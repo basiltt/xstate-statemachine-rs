@@ -1,0 +1,14 @@
+@startuml
+hide empty description
+state "login" as login {
+  [*] --> login_active
+  state "active" as login_active
+  state "expired" as login_expired
+  login_expired --> [*]
+  state "loggedOut" as login_loggedOut
+}
+[*] --> login_active
+login_active --> login_loggedOut : LOGOUT
+login_active --> login_expired : after 500ms
+login_loggedOut --> login_active : LOGIN
+@enduml

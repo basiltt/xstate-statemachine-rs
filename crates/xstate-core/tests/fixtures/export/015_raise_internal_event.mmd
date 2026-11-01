@@ -1,0 +1,10 @@
+stateDiagram-v2
+[*] --> r
+state "r" as r {
+    [*] --> a
+    state "a" as a
+    state "b" as b
+    state "c" as c
+}
+a --> b : GO
+b --> c : INTERNAL

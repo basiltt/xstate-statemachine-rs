@@ -1,0 +1,14 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_p
+  state "p" as m_p {
+    [*] --> m_p_a
+    state "a" as m_p_a
+    state "b" as m_p_b
+  }
+}
+[*] --> m_p
+m_p --> m_p_b : SOFT
+m_p --> m_p_a : HARD
+@enduml

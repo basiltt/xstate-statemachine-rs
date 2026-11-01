@@ -61,6 +61,14 @@ fn builtin_name(b: &Builtin) -> &'static str {
 fn run_action<C: Context>(cx: &mut Ctx<'_, C>, action: &ActionDef, event: &Event) -> Result<()> {
     match action {
         ActionDef::User { name, params } => {
+            if cx.pure {
+                cx.report.planned.push(crate::pure::PlannedAction {
+                    name: std::sync::Arc::clone(name),
+                    params: params.clone(),
+                });
+                cx.report.actions.push(std::sync::Arc::clone(name));
+                return Ok(());
+            }
             let logic = cx.logic;
             let f = logic.get_action(name)?;
             let mut local: Vec<Effect> = Vec::new();

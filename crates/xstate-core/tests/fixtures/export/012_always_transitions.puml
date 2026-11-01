@@ -1,0 +1,19 @@
+@startuml
+hide empty description
+state "triage" as triage {
+  [*] --> triage_idle
+  state "idle" as triage_idle
+  state "checking" as triage_checking
+  state "approved" as triage_approved
+  triage_approved --> [*]
+  state "rejected" as triage_rejected
+  triage_rejected --> [*]
+  state "review" as triage_review
+}
+[*] --> triage_idle
+triage_idle --> triage_checking : SUBMIT
+triage_checking --> triage_rejected : always [isBlocked]
+triage_checking --> triage_approved : always [isTrusted]
+triage_checking --> triage_review : always
+triage_review --> triage_approved : APPROVE
+@enduml

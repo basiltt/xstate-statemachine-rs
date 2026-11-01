@@ -1,0 +1,21 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_p
+  state "p" as m_p {
+    state "zeta" as m_p_zeta {
+      [*] --> m_p_zeta_z1
+      state "z1" as m_p_zeta_z1
+    }
+    --
+    state "alpha" as m_p_alpha {
+      [*] --> m_p_alpha_a1
+      state "a1" as m_p_alpha_a1
+    }
+  }
+  state "done" as m_done
+  m_done --> [*]
+}
+[*] --> m_p
+m_p --> m_done : STOP
+@enduml

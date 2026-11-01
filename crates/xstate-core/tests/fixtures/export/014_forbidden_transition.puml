@@ -1,0 +1,15 @@
+@startuml
+hide empty description
+state "f" as f {
+  [*] --> f_p
+  state "p" as f_p {
+    [*] --> f_p_c1
+    state "c1" as f_p_c1
+    state "c2" as f_p_c2
+  }
+  state "q" as f_q
+}
+[*] --> f_p
+f_p --> f_q : E
+f_p_c1 --> f_p_c2 : NEXT
+@enduml

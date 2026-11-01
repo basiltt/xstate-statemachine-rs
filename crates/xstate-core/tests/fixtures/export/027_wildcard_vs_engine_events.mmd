@@ -1,0 +1,8 @@
+stateDiagram-v2
+[*] --> w
+state "w" as w {
+    [*] --> a
+    state "a" as a
+    state "b" as b
+}
+a --> b : NEXT

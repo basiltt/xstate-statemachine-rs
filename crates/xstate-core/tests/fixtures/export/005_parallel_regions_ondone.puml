@@ -1,0 +1,27 @@
+@startuml
+hide empty description
+state "release" as release {
+  [*] --> release_checks
+  state "checks" as release_checks {
+    state "build" as release_checks_build {
+      [*] --> release_checks_build_compiling
+      state "compiling" as release_checks_build_compiling
+      state "built" as release_checks_build_built
+      release_checks_build_built --> [*]
+    }
+    --
+    state "lint" as release_checks_lint {
+      [*] --> release_checks_lint_linting
+      state "linting" as release_checks_lint_linting
+      state "clean" as release_checks_lint_clean
+      release_checks_lint_clean --> [*]
+    }
+  }
+  state "deployed" as release_deployed
+  release_deployed --> [*]
+}
+[*] --> release_checks
+release_checks --> release_deployed : onDone
+release_checks_build_compiling --> release_checks_build_built : BUILD_OK
+release_checks_lint_linting --> release_checks_lint_clean : LINT_OK
+@enduml

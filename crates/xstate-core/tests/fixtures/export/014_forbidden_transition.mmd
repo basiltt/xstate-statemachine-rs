@@ -1,0 +1,13 @@
+stateDiagram-v2
+[*] --> f
+state "f" as f {
+    [*] --> p
+    state "p" as p {
+        [*] --> c1
+        state "c1" as c1
+        state "c2" as c2
+    }
+    state "q" as q
+}
+p --> q : E
+c1 --> c2 : NEXT

@@ -1,0 +1,25 @@
+stateDiagram-v2
+[*] --> m
+state "m" as m {
+    [*] --> p
+    state "p" as p {
+        state "fetch" as fetch {
+            [*] --> loading
+            state "loading" as loading
+            state "ok" as ok
+            ok --> [*]
+        }
+        --
+        state "confirm" as confirm {
+            [*] --> waiting
+            state "waiting" as waiting
+            state "yes" as yes
+            yes --> [*]
+        }
+    }
+    state "done" as done
+    done --> [*]
+}
+p --> done : onDone
+loading --> ok : invoke onDone
+waiting --> yes : OK

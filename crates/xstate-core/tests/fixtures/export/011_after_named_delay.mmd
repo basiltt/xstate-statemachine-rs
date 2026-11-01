@@ -1,0 +1,9 @@
+stateDiagram-v2
+[*] --> retry
+state "retry" as retry {
+    [*] --> waiting
+    state "waiting" as waiting
+    state "retrying" as retrying
+    retrying --> [*]
+}
+waiting --> retrying : after BACKOFF

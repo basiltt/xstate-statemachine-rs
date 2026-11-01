@@ -95,6 +95,56 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// Build a snapshot of `state` with no timers, pending or deferred events; interpreters
+    /// fill those in. `taken_at` is the system clock.
+    ///
+    /// # Errors
+    /// Context serialisation failures.
+    pub fn from_state<C: crate::Context>(
+        machine: &Machine,
+        state: &crate::ActiveState<C>,
+    ) -> Result<Self> {
+        let active = |s: crate::StateId| state.is_active(s);
+        let mut configuration: Vec<String> =
+            state.configuration().map(|s| machine.node(s).id.to_string()).collect();
+        configuration.sort();
+        let mut history = IndexMap::new();
+        let mut recorded: Vec<(&crate::StateId, &Vec<crate::StateId>)> =
+            state.history().iter().collect();
+        recorded.sort_by_key(|(k, _)| **k);
+        for (parent, states) in recorded {
+            let mut ids: Vec<String> =
+                states.iter().map(|s| machine.node(*s).id.to_string()).collect();
+            ids.sort();
+            history.insert(machine.node(*parent).id.to_string(), ids);
+        }
+        Ok(Self {
+            version: SNAPSHOT_VERSION,
+            machine_id: machine.id().to_owned(),
+            machine_hash: machine.structure_hash().to_owned(),
+            machine_version: machine.version().map(str::to_owned),
+            taken_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_secs_f64()),
+            status: state.status(),
+            context: serde_json::to_value(state.context())?,
+            state_ids: state.leaf_ids(machine),
+            value: state_value(machine, &active, crate::StateId::ROOT),
+            configuration,
+            output: state.output().clone(),
+            error: state.error().map(str::to_owned),
+            chain_trips: 0,
+            last_chain_error: None,
+            deferred: Vec::new(),
+            pending_events: Vec::new(),
+            scheduled_sends: Vec::new(),
+            deadlines: Vec::new(),
+            history,
+            actors: Map::new(),
+            system: Map::new(),
+        })
+    }
+
     /// Serialise to JSON text (the on-the-wire form stores expect).
     ///
     /// # Errors

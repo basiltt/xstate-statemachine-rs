@@ -1,0 +1,21 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_idle
+  state "idle" as m_idle
+  state "p" as m_p {
+    state "first" as m_p_first {
+      [*] --> m_p_first_f1
+      state "f1" as m_p_first_f1
+      state "f2" as m_p_first_f2
+    }
+    --
+    state "second" as m_p_second {
+      [*] --> m_p_second_s1
+      state "s1" as m_p_second_s1
+    }
+  }
+}
+[*] --> m_idle
+m_idle --> m_p_first_f2 : GO
+@enduml

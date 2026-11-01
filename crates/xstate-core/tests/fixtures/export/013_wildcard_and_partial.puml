@@ -1,0 +1,8 @@
+@startuml
+hide empty description
+state "ev" as ev {
+  [*] --> ev_a
+  state "a" as ev_a
+}
+[*] --> ev_a
+@enduml

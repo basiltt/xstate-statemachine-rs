@@ -1,0 +1,11 @@
+stateDiagram-v2
+[*] --> t
+state "t" as t {
+    [*] --> waiting
+    state "waiting" as waiting
+    state "expired" as expired
+    expired --> [*]
+    state "retrying" as retrying
+}
+waiting --> expired : after 1000ms
+waiting --> retrying : after BACKOFF

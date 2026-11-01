@@ -1,0 +1,8 @@
+stateDiagram-v2
+[*] --> s
+state "s" as s {
+    [*] --> a
+    state "a" as a
+}
+a --> a : SOFT
+a --> a : HARD

@@ -1,0 +1,9 @@
+stateDiagram-v2
+[*] --> toggle
+state "toggle" as toggle {
+    [*] --> inactive
+    state "inactive" as inactive
+    state "active" as active
+}
+inactive --> active : TOGGLE
+active --> inactive : TOGGLE

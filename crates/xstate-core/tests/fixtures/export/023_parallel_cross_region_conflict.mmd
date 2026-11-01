@@ -1,0 +1,20 @@
+stateDiagram-v2
+[*] --> m
+state "m" as m {
+    [*] --> p
+    state "p" as p {
+        state "r1" as r1 {
+            [*] --> a
+            state "a" as a
+        }
+        --
+        state "r2" as r2 {
+            [*] --> c
+            state "c" as c
+            state "d" as d
+        }
+    }
+    state "outside" as outside
+}
+a --> outside : E
+c --> d : E

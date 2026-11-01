@@ -1,0 +1,25 @@
+stateDiagram-v2
+[*] --> release
+state "release" as release {
+    [*] --> checks
+    state "checks" as checks {
+        state "build" as build {
+            [*] --> compiling
+            state "compiling" as compiling
+            state "built" as built
+            built --> [*]
+        }
+        --
+        state "lint" as lint {
+            [*] --> linting
+            state "linting" as linting
+            state "clean" as clean
+            clean --> [*]
+        }
+    }
+    state "deployed" as deployed
+    deployed --> [*]
+}
+checks --> deployed : onDone
+compiling --> built : BUILD_OK
+linting --> clean : LINT_OK

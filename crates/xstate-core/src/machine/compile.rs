@@ -111,6 +111,7 @@ pub(super) fn compile(config: MachineConfig) -> Result<MachineData> {
         declared_events: declared,
         event_index,
         hash: std::sync::OnceLock::new(),
+        source: config.source,
     })
 }
 

@@ -1,0 +1,11 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_a
+  state "a" as m_a
+  state "done" as m_done
+  m_done --> [*]
+}
+[*] --> m_a
+m_a --> m_done : END
+@enduml

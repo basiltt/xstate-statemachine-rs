@@ -1,0 +1,22 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_p
+  state "p" as m_p {
+    state "mode" as m_p_mode {
+      [*] --> m_p_mode_day
+      state "day" as m_p_mode_day
+      state "night" as m_p_mode_night
+    }
+    --
+    state "work" as m_p_work {
+      [*] --> m_p_work_idle
+      state "idle" as m_p_work_idle
+      state "locked" as m_p_work_locked
+    }
+  }
+}
+[*] --> m_p
+m_p_mode_day --> m_p_mode_night : NIGHT
+m_p_work_idle --> m_p_work_locked : LOCK
+@enduml

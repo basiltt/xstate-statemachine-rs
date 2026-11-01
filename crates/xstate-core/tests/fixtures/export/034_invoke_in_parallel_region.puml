@@ -1,0 +1,27 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_p
+  state "p" as m_p {
+    state "fetch" as m_p_fetch {
+      [*] --> m_p_fetch_loading
+      state "loading" as m_p_fetch_loading
+      state "ok" as m_p_fetch_ok
+      m_p_fetch_ok --> [*]
+    }
+    --
+    state "confirm" as m_p_confirm {
+      [*] --> m_p_confirm_waiting
+      state "waiting" as m_p_confirm_waiting
+      state "yes" as m_p_confirm_yes
+      m_p_confirm_yes --> [*]
+    }
+  }
+  state "done" as m_done
+  m_done --> [*]
+}
+[*] --> m_p
+m_p --> m_done : onDone
+m_p_fetch_loading --> m_p_fetch_ok : invoke onDone
+m_p_confirm_waiting --> m_p_confirm_yes : OK
+@enduml

@@ -1,0 +1,14 @@
+@startuml
+hide empty description
+state "job" as job {
+  [*] --> job_running
+  state "running" as job_running
+  state "done" as job_done
+  job_done --> [*]
+  state "failed" as job_failed
+  job_failed --> [*]
+}
+[*] --> job_running
+job_running --> job_done : FINISH
+job_running --> job_failed : FAIL
+@enduml

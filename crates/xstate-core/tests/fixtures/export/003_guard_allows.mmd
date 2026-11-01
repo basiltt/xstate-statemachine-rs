@@ -1,0 +1,9 @@
+stateDiagram-v2
+[*] --> door
+state "door" as door {
+    [*] --> closed
+    state "closed" as closed
+    state "opened" as opened
+}
+closed --> opened : OPEN
+opened --> closed : CLOSE

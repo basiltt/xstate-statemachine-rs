@@ -1,0 +1,9 @@
+stateDiagram-v2
+[*] --> m
+state "m" as m {
+    [*] --> counting
+    state "counting" as counting
+    state "full" as full
+    full --> [*]
+}
+counting --> full : always [isFull]

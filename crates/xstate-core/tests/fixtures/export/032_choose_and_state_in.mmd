@@ -1,0 +1,20 @@
+stateDiagram-v2
+[*] --> m
+state "m" as m {
+    [*] --> p
+    state "p" as p {
+        state "mode" as mode {
+            [*] --> day
+            state "day" as day
+            state "night" as night
+        }
+        --
+        state "work" as work {
+            [*] --> idle
+            state "idle" as idle
+            state "locked" as locked
+        }
+    }
+}
+day --> night : NIGHT
+idle --> locked : LOCK

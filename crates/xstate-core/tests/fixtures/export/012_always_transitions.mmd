@@ -1,0 +1,17 @@
+stateDiagram-v2
+[*] --> triage
+state "triage" as triage {
+    [*] --> idle
+    state "idle" as idle
+    state "checking" as checking
+    state "approved" as approved
+    approved --> [*]
+    state "rejected" as rejected
+    rejected --> [*]
+    state "review" as review
+}
+idle --> checking : SUBMIT
+checking --> rejected : always [isBlocked]
+checking --> approved : always [isTrusted]
+checking --> review : always
+review --> approved : APPROVE

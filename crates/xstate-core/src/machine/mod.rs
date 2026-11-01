@@ -41,6 +41,8 @@ pub(crate) struct MachineData {
     /// Exact event descriptor → interned key used by every node's `on_exact` table.
     pub(crate) event_index: FastMap<String, u32>,
     pub(crate) hash: std::sync::OnceLock<String>,
+    /// The configuration document as parsed, returned by [`Machine::to_json`].
+    pub(crate) source: Value,
 }
 
 /// Kind of a compiled state node.
@@ -249,6 +251,34 @@ impl Machine {
     /// Unresolved targets, root targets, duplicate ids and other structural rules.
     pub fn from_config(config: MachineConfig) -> Result<Self> {
         Ok(Self { inner: Arc::new(compile::compile(config)?) })
+    }
+
+    /// The configuration document this machine was compiled from: the input verbatim for
+    /// [`Machine::from_value`] / [`Machine::from_json`], the equivalent document for machines
+    /// built programmatically. Feeding it back to [`Machine::from_value`] yields an equivalent
+    /// machine.
+    #[must_use]
+    pub fn to_json(&self) -> Value {
+        self.inner.source.clone()
+    }
+
+    /// [`Machine::to_json`] pretty-printed (two-space indent).
+    #[must_use]
+    pub fn to_json_string(&self) -> String {
+        // Serialising a `Value` cannot fail: every key is a string.
+        serde_json::to_string_pretty(&self.inner.source).unwrap_or_default()
+    }
+
+    /// Mermaid `stateDiagram-v2` rendering. See [`crate::export`].
+    #[must_use]
+    pub fn to_mermaid(&self) -> String {
+        crate::export::to_mermaid(self)
+    }
+
+    /// `PlantUML` rendering. See [`crate::export`].
+    #[must_use]
+    pub fn to_plantuml(&self) -> String {
+        crate::export::to_plantuml(self)
     }
 
     /// Machine id (the root key).

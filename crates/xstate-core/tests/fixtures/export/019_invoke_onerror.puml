@@ -1,0 +1,16 @@
+@startuml
+hide empty description
+state "profile" as profile {
+  [*] --> profile_idle
+  state "idle" as profile_idle
+  state "loading" as profile_loading
+  state "ready" as profile_ready
+  profile_ready --> [*]
+  state "failed" as profile_failed
+}
+[*] --> profile_idle
+profile_idle --> profile_loading : LOAD
+profile_loading --> profile_ready : invoke onDone
+profile_loading --> profile_failed : invoke onError
+profile_failed --> profile_loading : RETRY
+@enduml

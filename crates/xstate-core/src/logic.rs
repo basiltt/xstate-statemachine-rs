@@ -69,7 +69,18 @@ pub enum ServiceImpl<C> {
     /// Runs to completion inline when the invoking state is entered; its result becomes the
     /// `xstate.done.actor.<id>` output, an error becomes `xstate.error.actor.<id>`.
     Sync(SyncServiceFn<C>),
+    /// Runs as a future (async interpreters only). The future receives a clone of the context
+    /// and the resolved input; its output / error complete the invocation like `Sync`.
+    Async(AsyncServiceFn<C>),
+    /// Runs a child machine as an actor (async interpreters only). Its output on completion
+    /// becomes the `xstate.done.actor.<id>` output; `sendTo`/`sendParent` address it by id.
+    Machine(Machine),
 }
+
+/// A boxed future returned by an async service.
+pub type ServiceFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send>>;
+/// Boxed asynchronous service factory: `(context, input) -> future`.
+pub type AsyncServiceFn<C> = Arc<dyn Fn(C, Value) -> ServiceFuture + Send + Sync>;
 
 impl<C> Clone for DelayImpl<C> {
     fn clone(&self) -> Self {
@@ -84,6 +95,8 @@ impl<C> Clone for ServiceImpl<C> {
     fn clone(&self) -> Self {
         match self {
             Self::Sync(f) => Self::Sync(Arc::clone(f)),
+            Self::Async(f) => Self::Async(Arc::clone(f)),
+            Self::Machine(m) => Self::Machine(m.clone()),
         }
     }
 }
@@ -101,6 +114,8 @@ impl<C> fmt::Debug for ServiceImpl<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Sync(_) => f.write_str("Sync(..)"),
+            Self::Async(_) => f.write_str("Async(..)"),
+            Self::Machine(m) => write!(f, "Machine({})", m.id()),
         }
     }
 }
@@ -188,6 +203,37 @@ impl<C: Context> MachineLogic<C> {
     ) -> Self {
         self.guards.insert(name.into(), Arc::new(f));
         self
+    }
+
+    /// Register an asynchronous service (usable with the tokio interpreter). The closure
+    /// receives a clone of the context and the invoke `input` and returns a future.
+    ///
+    /// ```ignore
+    /// logic.async_service("fetchUser", |_ctx, input| Box::pin(async move { Ok(input) }))
+    /// ```
+    #[must_use]
+    pub fn async_service(
+        mut self,
+        name: impl Into<String>,
+        f: impl Fn(C, Value) -> ServiceFuture + Send + Sync + 'static,
+    ) -> Self {
+        self.services.insert(name.into(), ServiceImpl::Async(Arc::new(f)));
+        self
+    }
+
+    /// Register a child machine as an invokable actor (usable with the tokio interpreter).
+    #[must_use]
+    pub fn machine_service(mut self, name: impl Into<String>, machine: Machine) -> Self {
+        self.services.insert(name.into(), ServiceImpl::Machine(machine));
+        self
+    }
+
+    /// Look up a service implementation by name.
+    ///
+    /// # Errors
+    /// [`Error::ImplementationMissing`] when the name is unknown.
+    pub fn service_impl(&self, name: &str) -> Result<&ServiceImpl<C>> {
+        self.get_service(name)
     }
 
     /// Register a synchronous service.

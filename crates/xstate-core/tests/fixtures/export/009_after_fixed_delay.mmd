@@ -1,0 +1,12 @@
+stateDiagram-v2
+[*] --> login
+state "login" as login {
+    [*] --> active
+    state "active" as active
+    state "expired" as expired
+    expired --> [*]
+    state "loggedOut" as loggedOut
+}
+active --> loggedOut : LOGOUT
+active --> expired : after 500ms
+loggedOut --> active : LOGIN

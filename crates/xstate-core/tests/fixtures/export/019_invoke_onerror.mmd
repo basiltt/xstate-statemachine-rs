@@ -1,0 +1,14 @@
+stateDiagram-v2
+[*] --> profile
+state "profile" as profile {
+    [*] --> idle
+    state "idle" as idle
+    state "loading" as loading
+    state "ready" as ready
+    ready --> [*]
+    state "failed" as failed
+}
+idle --> loading : LOAD
+loading --> ready : invoke onDone
+loading --> failed : invoke onError
+failed --> loading : RETRY

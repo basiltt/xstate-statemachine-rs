@@ -1,0 +1,17 @@
+@startuml
+hide empty description
+state "session" as session {
+  [*] --> session_loggedOut
+  state "loggedOut" as session_loggedOut
+  state "authenticated" as session_authenticated {
+    [*] --> session_authenticated_browsing
+    state "browsing" as session_authenticated_browsing
+    state "paying" as session_authenticated_paying
+  }
+}
+[*] --> session_loggedOut
+session_loggedOut --> session_authenticated : LOGIN
+session_authenticated --> session_loggedOut : LOGOUT
+session_authenticated_browsing --> session_authenticated_paying : CHECKOUT
+session_authenticated_paying --> session_loggedOut : LOGOUT
+@enduml

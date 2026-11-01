@@ -1,0 +1,20 @@
+stateDiagram-v2
+[*] --> wizard
+state "wizard" as wizard {
+    [*] --> form
+    state "form" as form {
+        [*] --> name
+        state "name" as name
+        state "address" as address {
+            [*] --> street
+            state "street" as street
+            state "city" as city
+        }
+        state "resume" as resume
+    }
+    state "help" as help
+}
+form --> help : ASK
+name --> address : NEXT
+street --> city : NEXT
+help --> resume : BACK

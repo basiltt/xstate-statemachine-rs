@@ -1,0 +1,10 @@
+@startuml
+hide empty description
+state "w" as w {
+  [*] --> w_a
+  state "a" as w_a
+  state "b" as w_b
+}
+[*] --> w_a
+w_a --> w_b : NEXT
+@enduml

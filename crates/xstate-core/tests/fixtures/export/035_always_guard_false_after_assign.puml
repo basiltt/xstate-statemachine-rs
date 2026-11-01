@@ -1,0 +1,11 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_counting
+  state "counting" as m_counting
+  state "full" as m_full
+  m_full --> [*]
+}
+[*] --> m_counting
+m_counting --> m_full : always [isFull]
+@enduml

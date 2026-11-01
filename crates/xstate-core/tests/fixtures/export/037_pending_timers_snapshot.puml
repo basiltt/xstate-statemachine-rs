@@ -1,0 +1,13 @@
+@startuml
+hide empty description
+state "t" as t {
+  [*] --> t_waiting
+  state "waiting" as t_waiting
+  state "expired" as t_expired
+  t_expired --> [*]
+  state "retrying" as t_retrying
+}
+[*] --> t_waiting
+t_waiting --> t_expired : after 1000ms
+t_waiting --> t_retrying : after BACKOFF
+@enduml

@@ -1,0 +1,25 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_outer
+  state "outer" as m_outer {
+    [*] --> m_outer_inner
+    state "inner" as m_outer_inner {
+      [*] --> m_outer_inner_s
+      state "s" as m_outer_inner_s
+      state "f" as m_outer_inner_f
+      m_outer_inner_f --> [*]
+    }
+    state "next" as m_outer_next
+    state "fin" as m_outer_fin
+    m_outer_fin --> [*]
+  }
+  state "complete" as m_complete
+  m_complete --> [*]
+}
+[*] --> m_outer
+m_outer --> m_complete : onDone
+m_outer_inner --> m_outer_next : onDone
+m_outer_inner_s --> m_outer_inner_f : X
+m_outer_next --> m_outer_fin : Y
+@enduml

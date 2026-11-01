@@ -1,0 +1,15 @@
+stateDiagram-v2
+[*] --> session
+state "session" as session {
+    [*] --> loggedOut
+    state "loggedOut" as loggedOut
+    state "authenticated" as authenticated {
+        [*] --> browsing
+        state "browsing" as browsing
+        state "paying" as paying
+    }
+}
+loggedOut --> authenticated : LOGIN
+authenticated --> loggedOut : LOGOUT
+browsing --> paying : CHECKOUT
+paying --> loggedOut : LOGOUT

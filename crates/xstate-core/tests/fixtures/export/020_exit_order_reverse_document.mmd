@@ -1,0 +1,19 @@
+stateDiagram-v2
+[*] --> m
+state "m" as m {
+    [*] --> p
+    state "p" as p {
+        state "zeta" as zeta {
+            [*] --> z1
+            state "z1" as z1
+        }
+        --
+        state "alpha" as alpha {
+            [*] --> a1
+            state "a1" as a1
+        }
+    }
+    state "done" as done
+    done --> [*]
+}
+p --> done : STOP

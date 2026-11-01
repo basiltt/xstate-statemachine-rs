@@ -1,0 +1,11 @@
+@startuml
+hide empty description
+state "toggle" as toggle {
+  [*] --> toggle_inactive
+  state "inactive" as toggle_inactive
+  state "active" as toggle_active
+}
+[*] --> toggle_inactive
+toggle_inactive --> toggle_active : TOGGLE
+toggle_active --> toggle_inactive : TOGGLE
+@enduml

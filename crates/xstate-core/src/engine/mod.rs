@@ -132,6 +132,14 @@ impl<C> ActiveState<C> {
 }
 
 impl<C: Context> ActiveState<C> {
+    /// Mark the machine as stopped by the application (no-op unless running).
+    pub fn stop(&mut self) {
+        if self.status == Status::Running {
+            self.status = Status::Stopped;
+            self.internal_queue.clear();
+        }
+    }
+
     /// Rebuild runtime state from snapshot parts. The configuration must already be validated.
     pub(crate) fn restore(
         machine: &Machine,
@@ -252,6 +260,8 @@ pub struct StepReport {
     pub unhandled: bool,
     /// Set when an action failed and the step was rolled back (`actionErrorPolicy: rollback`).
     pub failed: Option<String>,
+    /// Pure mode only: the user actions that would have run, with their params.
+    pub planned: Vec<crate::pure::PlannedAction>,
 }
 
 /// Everything the algorithm needs for one macrostep.
@@ -261,6 +271,8 @@ pub(crate) struct Ctx<'a, C> {
     pub state: &'a mut ActiveState<C>,
     pub effects: &'a mut Vec<Effect>,
     pub report: &'a mut StepReport,
+    /// Pure mode: user actions are planned, not executed (see [`crate::pure`]).
+    pub pure: bool,
 }
 
 /// Enter the initial configuration, running entry actions and settling eventless
@@ -273,6 +285,15 @@ pub fn start<C: Context>(
     machine: &Machine,
     logic: &MachineLogic<C>,
     input: &Value,
+) -> Result<(ActiveState<C>, Vec<Effect>, StepReport)> {
+    start_with(machine, logic, input, false)
+}
+
+pub(crate) fn start_with<C: Context>(
+    machine: &Machine,
+    logic: &MachineLogic<C>,
+    input: &Value,
+    pure: bool,
 ) -> Result<(ActiveState<C>, Vec<Effect>, StepReport)> {
     let context = C::from_initial(machine.initial_context(), input)?;
     let mut state = ActiveState {
@@ -289,8 +310,14 @@ pub fn start<C: Context>(
     let mut effects = Vec::new();
     let mut report = StepReport::default();
     {
-        let mut cx =
-            Ctx { machine, logic, state: &mut state, effects: &mut effects, report: &mut report };
+        let mut cx = Ctx {
+            machine,
+            logic,
+            state: &mut state,
+            effects: &mut effects,
+            report: &mut report,
+            pure,
+        };
         algorithm::start(&mut cx)?;
     }
     finalize_effects(&mut effects, 0);
@@ -311,6 +338,17 @@ pub fn step<C: Context>(
     event: Event,
     effects: &mut Vec<Effect>,
 ) -> Result<StepReport> {
+    step_with(machine, logic, state, event, effects, false)
+}
+
+pub(crate) fn step_with<C: Context>(
+    machine: &Machine,
+    logic: &MachineLogic<C>,
+    state: &mut ActiveState<C>,
+    event: Event,
+    effects: &mut Vec<Effect>,
+    pure: bool,
+) -> Result<StepReport> {
     let mut report = StepReport::default();
     if state.status != Status::Running {
         report.unhandled = true;
@@ -321,7 +359,7 @@ pub fn step<C: Context>(
         machine.policies().action_error_policy == crate::config::ActionErrorPolicy::Rollback;
     let checkpoint = rollback.then(|| state.clone());
     let outcome = {
-        let mut cx = Ctx { machine, logic, state, effects, report: &mut report };
+        let mut cx = Ctx { machine, logic, state, effects, report: &mut report, pure };
         algorithm::macrostep(&mut cx, event)
     };
     match outcome {

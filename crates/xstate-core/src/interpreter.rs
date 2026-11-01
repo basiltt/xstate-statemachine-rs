@@ -9,6 +9,7 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use crate::clock::{Clock, RealClock, SimulatedClock};
+use crate::config::UnhandledPolicy;
 use crate::context::{Context, DynContext};
 use crate::engine::{self, ActiveState, Effect, Status, StepReport};
 use crate::error::{Error, Result};
@@ -16,7 +17,11 @@ use crate::event::{Event, EventOrigin};
 use crate::ids::StateId;
 use crate::logic::{MachineLogic, ServiceImpl};
 use crate::machine::Machine;
+use crate::observer::Observer;
 use crate::snapshot::{self, Deadline, ScheduledSend, Snapshot};
+
+/// Upper bound on events parked by `onUnhandled: "defer"` (oldest are evicted).
+pub const MAX_DEFERRED: usize = 1000;
 
 /// Outcome of one `send` (or `start` / `tick`).
 #[derive(Debug, Clone)]
@@ -56,6 +61,25 @@ impl Receipt {
         self.machine.state_by_id(state_id).is_some_and(|id| {
             self.leaves.iter().any(|&leaf| self.machine.is_self_or_descendant(leaf, id))
         })
+    }
+
+    /// Assemble a receipt from its parts. Used by other interpreter implementations.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn from_parts(
+        machine: Machine,
+        leaves: smallvec::SmallVec<[StateId; 4]>,
+        report: &StepReport,
+        status: Status,
+    ) -> Self {
+        Self {
+            leaves,
+            machine,
+            changed: report.changed,
+            unhandled: report.unhandled,
+            actions: report.actions.clone(),
+            status,
+        }
     }
 
     /// Executed user action names as plain strings (convenience for tests).
@@ -109,6 +133,8 @@ pub struct SyncInterpreter<C: Context = DynContext> {
     emitted: Vec<Value>,
     logs: Vec<(Option<String>, Value)>,
     effects: Vec<Effect>,
+    observers: Vec<Arc<dyn Observer<C>>>,
+    deferred: VecDeque<Event>,
 }
 
 impl<C: Context> std::fmt::Debug for SyncInterpreter<C> {
@@ -146,6 +172,8 @@ impl<C: Context> SyncInterpreter<C> {
             emitted: Vec::new(),
             logs: Vec::new(),
             effects: Vec::with_capacity(8),
+            observers: Vec::new(),
+            deferred: VecDeque::new(),
         }
     }
 
@@ -154,6 +182,17 @@ impl<C: Context> SyncInterpreter<C> {
     pub fn with_input(mut self, input: Value) -> Self {
         self.input = input;
         self
+    }
+
+    /// Attach an observer (plugin). Observers are notified in attachment order.
+    pub fn observe(&mut self, observer: Arc<dyn Observer<C>>) -> &mut Self {
+        self.observers.push(observer);
+        self
+    }
+
+    /// Events parked by `onUnhandled: "defer"`, oldest first.
+    pub fn deferred_events(&self) -> impl Iterator<Item = &Event> + '_ {
+        self.deferred.iter()
     }
 
     /// Validate the logic against the machine and enter the initial configuration. The
@@ -176,6 +215,11 @@ impl<C: Context> SyncInterpreter<C> {
         let rest = self.drain()?;
         report.actions.extend(rest.actions);
         report.changed = true;
+        if let Some(state) = self.state.as_ref() {
+            for obs in &self.observers {
+                obs.on_start(&self.machine, state, &report);
+            }
+        }
         Ok(self.receipt(report))
     }
 
@@ -243,8 +287,14 @@ impl<C: Context> SyncInterpreter<C> {
             state.status = Status::Stopped;
         }
         self.queue.clear();
+        self.deferred.clear();
         self.timers.clear();
         self.cancelled.clear();
+        if let Some(state) = self.state.as_ref() {
+            for obs in &self.observers {
+                obs.on_stop(&self.machine, state);
+            }
+        }
     }
 
     /// Current status (`Running` before `start` is reported as uninitialised `Stopped`).
@@ -335,8 +385,19 @@ impl<C: Context> SyncInterpreter<C> {
             };
             let Some(state) = self.state.as_mut() else { break };
             if state.status != Status::Running {
+                if first {
+                    merged.unhandled = true;
+                    first = false;
+                }
+                for obs in &self.observers {
+                    obs.on_event_dropped(&self.machine, &event, "not_running");
+                }
                 continue;
             }
+            let policy = self.machine.policies().on_unhandled;
+            let keep_event = !self.observers.is_empty()
+                || (policy != UnhandledPolicy::Ignore && event.origin == EventOrigin::External);
+            let kept = keep_event.then(|| event.clone());
             let mut effects = std::mem::take(&mut self.effects);
             effects.clear();
             let stepped = engine::step(&self.machine, &self.logic, state, event, &mut effects);
@@ -344,9 +405,15 @@ impl<C: Context> SyncInterpreter<C> {
                 Ok(report) => report,
                 Err(err) => {
                     self.effects = effects;
+                    for obs in &self.observers {
+                        obs.on_error(&self.machine, &err);
+                    }
                     return Err(err);
                 }
             };
+            if let Some(ev) = kept.as_ref() {
+                self.after_step(ev, &report);
+            }
             if first {
                 merged.changed = report.changed;
                 merged.unhandled = report.unhandled;
@@ -364,6 +431,46 @@ impl<C: Context> SyncInterpreter<C> {
             self.effects = effects;
         }
         Ok(merged)
+    }
+
+    /// Observer notification and the `onUnhandled` policy for one processed event.
+    fn after_step(&mut self, event: &Event, report: &StepReport) {
+        let Some(state) = self.state.as_ref() else { return };
+        for obs in &self.observers {
+            obs.on_event(&self.machine, event, report, state);
+        }
+        if report.unhandled && event.origin == EventOrigin::External {
+            match self.machine.policies().on_unhandled {
+                UnhandledPolicy::Ignore => {}
+                UnhandledPolicy::Defer => {
+                    if self.deferred.len() >= MAX_DEFERRED
+                        && let Some(dropped) = self.deferred.pop_front()
+                    {
+                        for obs in &self.observers {
+                            obs.on_event_dropped(&self.machine, &dropped, "deferred_overflow");
+                        }
+                    }
+                    for obs in &self.observers {
+                        obs.on_event_dropped(&self.machine, event, "deferred");
+                    }
+                    self.deferred.push_back(event.clone());
+                }
+                UnhandledPolicy::Error => {
+                    if let Some(state) = self.state.as_mut() {
+                        state.status = Status::Error;
+                        state.error = Some(format!("unhandled event '{}'", event.ty));
+                    }
+                    self.queue.clear();
+                }
+            }
+        } else if !report.transitions.is_empty() && !self.deferred.is_empty() {
+            // The configuration changed: give parked events another chance, in order, before
+            // anything newer.
+            let mut replay: Vec<Event> = self.deferred.drain(..).collect();
+            while let Some(ev) = replay.pop() {
+                self.queue.push_front(ev);
+            }
+        }
     }
 
     fn pop_due_timer(&mut self) -> Option<Event> {
@@ -454,6 +561,12 @@ impl<C: Context> SyncInterpreter<C> {
         let Some(state) = self.state.as_ref() else { return };
         let outcome = match self.logic.get_service(src) {
             Ok(ServiceImpl::Sync(f)) => f(&state.context, input),
+            Ok(ServiceImpl::Async(_) | ServiceImpl::Machine(_)) => Err(Error::InvalidLifecycle {
+                status: self.status().as_str(),
+                message: format!(
+                    "service '{src}' is asynchronous or a child machine; use the tokio interpreter"
+                ),
+            }),
             Err(err) => Err(err),
         };
         let event = match outcome {
@@ -526,43 +639,13 @@ impl<C: Context> SyncInterpreter<C> {
                 }),
             }
         }
-        let active = |s: StateId| state.is_active(s);
-        let mut configuration: Vec<String> =
-            state.configuration().map(|s| machine.node(s).id.to_string()).collect();
-        configuration.sort();
-        let mut history = indexmap::IndexMap::new();
-        let mut recorded: Vec<(&StateId, &Vec<StateId>)> = state.history().iter().collect();
-        recorded.sort_by_key(|(k, _)| **k);
-        for (parent, states) in recorded {
-            let mut ids: Vec<String> =
-                states.iter().map(|s| machine.node(*s).id.to_string()).collect();
-            ids.sort();
-            history.insert(machine.node(*parent).id.to_string(), ids);
-        }
-        let pending_events = self.queue.iter().map(event_record).collect();
-        Ok(Snapshot {
-            version: crate::SNAPSHOT_VERSION,
-            machine_id: machine.id().to_owned(),
-            machine_hash: machine.structure_hash().to_owned(),
-            machine_version: machine.version().map(str::to_owned),
-            taken_at: wall,
-            status: state.status(),
-            context: serde_json::to_value(state.context())?,
-            state_ids: state.leaf_ids(machine),
-            value: snapshot::state_value(machine, &active, StateId::ROOT),
-            configuration,
-            output: state.output().clone(),
-            error: state.error().map(str::to_owned),
-            chain_trips: 0,
-            last_chain_error: None,
-            deferred: Vec::new(),
-            pending_events,
-            scheduled_sends,
-            deadlines,
-            history,
-            actors: Map::new(),
-            system: Map::new(),
-        })
+        let mut snap = Snapshot::from_state(machine, state)?;
+        snap.taken_at = wall;
+        snap.deferred = self.deferred.iter().map(event_record).collect();
+        snap.pending_events = self.queue.iter().map(event_record).collect();
+        snap.scheduled_sends = scheduled_sends;
+        snap.deadlines = deadlines;
+        Ok(snap)
     }
 
     /// [`snapshot`](Self::snapshot) serialised to JSON text.
@@ -628,6 +711,11 @@ impl<C: Context> SyncInterpreter<C> {
         for ev in &snapshot.pending_events {
             if let Some(event) = event_from_record(ev) {
                 interp.queue.push_back(event);
+            }
+        }
+        for ev in &snapshot.deferred {
+            if let Some(event) = event_from_record(ev) {
+                interp.deferred.push_back(event);
             }
         }
         let now_wall = interp.clock.wall_now();
