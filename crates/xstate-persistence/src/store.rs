@@ -210,7 +210,9 @@ pub fn validate_key(key: &str) -> Result<()> {
     }
     let len = key.chars().count();
     if len > MAX_KEY_LEN {
-        return Err(StoreError::InvalidKey(format!("key has {len} characters; limit is {MAX_KEY_LEN}")));
+        return Err(StoreError::InvalidKey(format!(
+            "key has {len} characters; limit is {MAX_KEY_LEN}"
+        )));
     }
     if key.contains('\0') {
         return Err(StoreError::InvalidKey("key must not contain NUL".into()));
@@ -238,7 +240,11 @@ pub fn validate_machine_version(version: &str) -> Result<()> {
 /// [`StoreError::SnapshotTooLarge`].
 pub fn check_size(key: &str, snapshot_json: &str, limit: usize) -> Result<()> {
     if snapshot_json.len() > limit {
-        return Err(StoreError::SnapshotTooLarge { key: key.to_owned(), size: snapshot_json.len(), limit });
+        return Err(StoreError::SnapshotTooLarge {
+            key: key.to_owned(),
+            size: snapshot_json.len(),
+            limit,
+        });
     }
     Ok(())
 }
@@ -246,7 +252,9 @@ pub fn check_size(key: &str, snapshot_json: &str, limit: usize) -> Result<()> {
 /// Epoch seconds from the system clock.
 #[must_use]
 pub fn wall_now() -> f64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64())
 }
 
 #[cfg(test)]
