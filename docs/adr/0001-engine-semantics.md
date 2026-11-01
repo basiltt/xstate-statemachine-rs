@@ -34,9 +34,11 @@ behave exactly as the editor's simulator (the real XState v5 engine) does".
    for snapshot/hash/wire-format vectors (ADR-0003), not for transition semantics.
 3. Fixtures where the two oracles disagree are recorded with a `divergence` note. They document
    the Python bugs to fix upstream; the Rust engine follows XState.
-4. Event names: the engine emits the **v5 spellings** and accepts the v4 spellings on input
-   (`on: {"done.invoke.x": ...}`) as aliases, so existing Python-authored charts keep working.
-   Snapshots store v5 names; the snapshot shape stays layout-compatible (ADR-0003).
+4. Event names: the engine emits the **v5 spellings** in memory and accepts the v4 spellings on
+   input (`on: {"done.invoke.x": ...}`) as aliases, so existing Python-authored charts keep
+   working. **Snapshots and the structure hash use the v4 / Python spellings** (`after.*`,
+   `done.state.*`, `done.invoke.*`, `error.platform.*`) because those are the bytes the Python
+   library reads and hashes (ADR-0003); the engine normalises them on restore.
 5. No `engine_compat = "python"` switch is built unless a concrete need appears.
 
 ## Consequences

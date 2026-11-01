@@ -48,7 +48,7 @@ impl Status {
     }
 }
 
-/// Recorded history, keyed by history pseudo-state.
+/// Recorded history: exited state → every descendant that was active, in document order.
 pub(crate) type HistoryMap = HashMap<StateId, Vec<StateId>>;
 
 /// Mutable runtime state of one machine instance.
@@ -63,6 +63,8 @@ pub struct ActiveState<C> {
     pub(crate) internal_queue: VecDeque<Event>,
     /// Bumped on every configuration, history or context mutation (eventless re-selection).
     pub(crate) mutations: u64,
+    /// Count of state entries so far; stamps `after` timers for durable deadlines.
+    pub(crate) entry_seq: u64,
 }
 
 impl<C> ActiveState<C> {
@@ -107,7 +109,7 @@ impl<C> ActiveState<C> {
         self.configuration.contains(state.index())
     }
 
-    /// Recorded history, keyed by history pseudo-state.
+    /// Recorded history: exited state → every descendant that was active at exit time.
     #[must_use]
     pub fn history(&self) -> &HistoryMap {
         &self.history
@@ -129,6 +131,34 @@ impl<C> ActiveState<C> {
     }
 }
 
+impl<C: Context> ActiveState<C> {
+    /// Rebuild runtime state from snapshot parts. The configuration must already be validated.
+    pub(crate) fn restore(
+        machine: &Machine,
+        configuration: &[StateId],
+        context: C,
+        history: HistoryMap,
+        snapshot: &crate::snapshot::Snapshot,
+    ) -> Self {
+        let mut bits = FixedBitSet::with_capacity(machine.states().len());
+        for &s in configuration {
+            bits.set(s.index(), true);
+        }
+        let entry_seq = snapshot.deadlines.iter().map(|d| d.entry_seq).max().unwrap_or(0);
+        Self {
+            configuration: bits,
+            context,
+            history,
+            status: snapshot.status,
+            output: snapshot.output.clone(),
+            error: snapshot.error.clone(),
+            internal_queue: VecDeque::new(),
+            mutations: 0,
+            entry_seq,
+        }
+    }
+}
+
 /// A side effect requested by the engine, to be executed by the driver after the step.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -139,6 +169,8 @@ pub enum Effect {
         state: StateId,
         /// Index into the state's `after` list.
         index: usize,
+        /// Sequence number of the state entry that armed the timer (durable deadlines).
+        entry_seq: u64,
         /// Delay in milliseconds (already resolved).
         delay_ms: f64,
         /// The `xstate.after.*` event to deliver.
@@ -252,6 +284,7 @@ pub fn start<C: Context>(
         error: None,
         internal_queue: VecDeque::new(),
         mutations: 0,
+        entry_seq: 0,
     };
     let mut effects = Vec::new();
     let mut report = StepReport::default();

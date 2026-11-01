@@ -38,7 +38,7 @@ pub(super) fn run_actions<C: Context>(
 fn action_name(action: &ActionDef) -> String {
     match action {
         ActionDef::User { name, .. } => name.clone(),
-        ActionDef::Builtin(b) => format!("xstate.{}", builtin_name(b)),
+        ActionDef::Builtin { builtin, .. } => format!("xstate.{}", builtin_name(builtin)),
     }
 }
 
@@ -82,7 +82,7 @@ fn run_action<C: Context>(cx: &mut Ctx<'_, C>, action: &ActionDef, event: &Event
             }
             Ok(())
         }
-        ActionDef::Builtin(b) => run_builtin(cx, b, event),
+        ActionDef::Builtin { builtin, .. } => run_builtin(cx, builtin, event),
     }
 }
 
@@ -192,7 +192,7 @@ pub(super) fn evaluate_guard<C: Context>(
                 },
             }
         }
-        Guard::StateIn(state) => Ok(cx.state.is_active(*state)),
+        Guard::StateIn { state, .. } => Ok(cx.state.is_active(*state)),
         Guard::Not(inner) => Ok(!evaluate_guard(cx, inner, event)?),
         Guard::And(list) => {
             for g in list {

@@ -37,6 +37,8 @@ mod ids;
 mod interpreter;
 pub mod logic;
 pub mod machine;
+mod pyjson;
+pub mod snapshot;
 
 pub use clock::{Clock, RealClock, SimulatedClock};
 pub use context::{Context, DynContext};
@@ -44,9 +46,10 @@ pub use engine::{ActiveState, Effect, Status, StepReport};
 pub use error::{Error, ErrorKind, Result};
 pub use event::{Event, EventOrigin};
 pub use ids::{StateId, TransitionId};
-pub use interpreter::{Receipt, SyncInterpreter};
+pub use interpreter::{Receipt, RestartTimers, RestoreOptions, SyncInterpreter};
 pub use logic::{ActionScope, MachineLogic};
 pub use machine::Machine;
+pub use snapshot::Snapshot;
 
 /// Snapshot layout version written and accepted by this engine.
 ///

@@ -251,24 +251,17 @@ fn exit_states<C: Context>(
     if to_exit.is_empty() {
         return Ok(());
     }
-    // Record history before anything leaves the configuration.
+    // Record history before anything leaves the configuration. The record is keyed by the
+    // exited state and holds every active descendant (the Python snapshot layout); the
+    // shallow/deep view a history node needs is derived from it on restore.
     for &s in &to_exit {
-        for &h in &machine.node(s).history_children {
-            let deep = matches!(machine.node(h).kind, NodeKind::History { deep: true, .. });
-            let recorded: Vec<StateId> = cx
-                .state
-                .configuration()
-                .filter(|&c| {
-                    if deep {
-                        machine.node(c).is_leaf() && machine.is_descendant(c, s)
-                    } else {
-                        machine.node(c).parent == Some(s)
-                    }
-                })
-                .collect();
-            cx.state.history.insert(h, recorded);
-            cx.state.mutations += 1;
+        if machine.node(s).history_children.is_empty() {
+            continue;
         }
+        let recorded: Vec<StateId> =
+            cx.state.configuration().filter(|&c| machine.is_descendant(c, s)).collect();
+        cx.state.history.insert(s, recorded);
+        cx.state.mutations += 1;
     }
     // Reverse document order.
     for &s in to_exit.iter().rev() {
@@ -351,10 +344,28 @@ fn effective_targets(
     out
 }
 
-/// Recorded history for `h`, else its default target, else the parent's `initial`.
+/// Recorded history for `h` (deep: the leaves, shallow: the direct children of its parent),
+/// else its default target, else the parent's `initial`.
 fn history_targets(machine: &Machine, h: StateId, history: &super::HistoryMap) -> Vec<StateId> {
-    if let Some(recorded) = history.get(&h).filter(|r| !r.is_empty()) {
-        return recorded.clone();
+    let node = machine.node(h);
+    let deep = matches!(node.kind, NodeKind::History { deep: true, .. });
+    if let Some(parent) = node.parent
+        && let Some(recorded) = history.get(&parent)
+    {
+        let view: Vec<StateId> = recorded
+            .iter()
+            .copied()
+            .filter(|&c| {
+                if deep {
+                    machine.node(c).is_leaf()
+                } else {
+                    machine.node(c).parent == Some(parent)
+                }
+            })
+            .collect();
+        if !view.is_empty() {
+            return view;
+        }
     }
     history_default(machine, h).into_iter().collect()
 }
@@ -485,6 +496,9 @@ fn enter_states<C: Context>(cx: &mut Ctx<'_, C>, to_enter: &StateSet, event: &Ev
         let node = machine.node(s);
         cx.state.configuration.set(s.index(), true);
         cx.state.mutations += 1;
+        if s != StateId::ROOT {
+            cx.state.entry_seq += 1;
+        }
         cx.report.changed = true;
 
         let entry = node.entry.clone();
@@ -498,6 +512,7 @@ fn enter_states<C: Context>(cx: &mut Ctx<'_, C>, to_enter: &StateSet, event: &Ev
             cx.effects.push(Effect::ArmTimer {
                 state: s,
                 index,
+                entry_seq: cx.state.entry_seq,
                 delay_ms: delay_ms.max(0.0),
                 event: ev,
             });

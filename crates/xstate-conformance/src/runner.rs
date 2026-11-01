@@ -59,7 +59,7 @@ fn referenced_names(machine: &Machine) -> Vec<String> {
     fn guard_names(g: &Guard, out: &mut Vec<String>) {
         match g {
             Guard::Named { name, .. } => out.push(name.clone()),
-            Guard::StateIn(_) => {}
+            Guard::StateIn { .. } => {}
             Guard::Not(inner) => guard_names(inner, out),
             Guard::And(list) | Guard::Or(list) => list.iter().for_each(|g| guard_names(g, out)),
         }
@@ -68,7 +68,10 @@ fn referenced_names(machine: &Machine) -> Vec<String> {
         for a in actions {
             match a {
                 ActionDef::User { name, .. } => out.push(name.clone()),
-                ActionDef::Builtin(xstate_core::machine::Builtin::Choose(branches)) => {
+                ActionDef::Builtin {
+                    builtin: xstate_core::machine::Builtin::Choose(branches),
+                    ..
+                } => {
                     for b in branches {
                         if let Some(g) = &b.guard {
                             guard_names(g, out);
@@ -76,7 +79,7 @@ fn referenced_names(machine: &Machine) -> Vec<String> {
                         action_names(&b.actions, out);
                     }
                 }
-                ActionDef::Builtin(_) => {}
+                ActionDef::Builtin { .. } => {}
             }
         }
     }
@@ -109,6 +112,16 @@ fn referenced_services(machine: &Machine) -> Vec<String> {
 /// # Errors
 /// Returns the engine error if the machine fails to compile or a step fails unexpectedly.
 pub fn run_case(case: &Case) -> Result<RunOutcome, Error> {
+    run_case_with_interpreter(case).map(|(outcome, _)| outcome)
+}
+
+/// Run one case and also hand back the interpreter in its final state (for snapshot checks).
+///
+/// # Errors
+/// Returns the engine error if the machine fails to compile or a step fails unexpectedly.
+pub fn run_case_with_interpreter(
+    case: &Case,
+) -> Result<(RunOutcome, SyncInterpreter<DynContext>), Error> {
     let machine = Machine::from_value(&case.machine)?;
     let logic = stub_logic(case, &machine);
     let clock = SimulatedClock::new();
@@ -127,7 +140,7 @@ pub fn run_case(case: &Case) -> Result<RunOutcome, Error> {
         };
         steps.push(observe(&interp, actions));
     }
-    Ok(RunOutcome { initial, steps })
+    Ok((RunOutcome { initial, steps }, interp))
 }
 
 fn observe(interp: &SyncInterpreter<DynContext>, actions: Vec<String>) -> Observation {

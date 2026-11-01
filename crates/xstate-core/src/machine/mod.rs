@@ -36,6 +36,7 @@ pub(crate) struct MachineData {
     pub(crate) warnings: Vec<ConfigWarning>,
     pub(crate) has_always: bool,
     pub(crate) declared_events: Vec<String>,
+    pub(crate) hash: std::sync::OnceLock<String>,
 }
 
 /// Kind of a compiled state node.
@@ -94,6 +95,8 @@ pub struct StateNode {
     pub invokes: Vec<InvokeDef>,
     /// Delayed transitions armed on entry.
     pub after: Vec<AfterDef>,
+    /// Python-dialect `initial` key for the structure hash (compound states only).
+    pub(crate) initial_key: Option<String>,
     /// `output` of a final state.
     pub output: Option<Value>,
     /// Free-form metadata.
@@ -124,6 +127,8 @@ pub struct Transition {
     pub trigger: Trigger,
     /// Resolved targets; empty for targetless transitions.
     pub targets: Vec<StateId>,
+    /// Targets as written in the configuration (kept for the structure hash).
+    pub raw_targets: Vec<String>,
     /// Actions in order.
     pub actions: Vec<ActionDef>,
     /// Guard expression.
@@ -149,7 +154,12 @@ pub enum ActionDef {
         params: Value,
     },
     /// An XState built-in.
-    Builtin(Builtin),
+    Builtin {
+        /// The spelling used in the configuration (kept for the structure hash).
+        name: String,
+        /// Compiled built-in.
+        builtin: Builtin,
+    },
 }
 
 /// A compiled guard expression.
@@ -163,7 +173,12 @@ pub enum Guard {
         params: Value,
     },
     /// Built-in `stateIn`: true when the given state is in the configuration.
-    StateIn(StateId),
+    StateIn {
+        /// Resolved state.
+        state: StateId,
+        /// The state reference as written (kept for the structure hash).
+        raw: String,
+    },
     /// Negation.
     Not(Box<Guard>),
     /// Conjunction.
@@ -294,6 +309,13 @@ impl Machine {
     #[must_use]
     pub fn state_by_id(&self, id: &str) -> Option<StateId> {
         self.inner.ids.get(id).or_else(|| self.inner.custom_ids.get(id)).copied()
+    }
+
+    /// Python-compatible structure hash (16 hex chars), computed once per machine. See
+    /// [`crate::snapshot::machine_hash`].
+    #[must_use]
+    pub fn structure_hash(&self) -> &str {
+        self.inner.hash.get_or_init(|| crate::snapshot::machine_hash(self))
     }
 
     /// Event types declared on any state (exact descriptors only), for strict mode.

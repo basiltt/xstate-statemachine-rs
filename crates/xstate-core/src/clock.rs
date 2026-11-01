@@ -9,6 +9,14 @@ use std::time::Instant;
 pub trait Clock: fmt::Debug + Send + Sync {
     /// Milliseconds since an arbitrary fixed origin.
     fn now_ms(&self) -> f64;
+
+    /// Wall-clock time in epoch seconds, used to stamp durable deadlines. Defaults to the
+    /// system clock; simulated clocks report their own time.
+    fn wall_now(&self) -> f64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64())
+    }
 }
 
 /// Monotonic wall clock.
@@ -72,5 +80,9 @@ impl SimulatedClock {
 impl Clock for SimulatedClock {
     fn now_ms(&self) -> f64 {
         *self.now.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn wall_now(&self) -> f64 {
+        self.now_ms() / 1000.0
     }
 }

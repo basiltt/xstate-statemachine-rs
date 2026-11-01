@@ -96,6 +96,7 @@ pub(super) fn compile(config: MachineConfig) -> Result<MachineData> {
         warnings,
         has_always,
         declared_events: declared,
+        hash: std::sync::OnceLock::new(),
     })
 }
 
@@ -113,6 +114,17 @@ fn flatten<'c>(
         let child_id = format!("{id}.{}", child.key);
         flatten(child, &child_id, Some(me), depth + 1, out);
     }
+}
+
+/// Per-state transition tables under construction.
+#[derive(Default)]
+struct Handlers {
+    on_exact: HashMap<String, SmallVec<[TransitionId; 2]>>,
+    on_partial: Vec<(String, SmallVec<[TransitionId; 2]>)>,
+    on_wildcard: SmallVec<[TransitionId; 2]>,
+    always: SmallVec<[TransitionId; 2]>,
+    after: Vec<AfterDef>,
+    invokes: Vec<InvokeDef>,
 }
 
 struct Compiler<'a, 'c> {
@@ -138,7 +150,45 @@ impl Compiler<'_, '_> {
 
     fn compile_state(&mut self, sid: StateId, raw: &Raw<'_>) -> Result<StateNode> {
         let cfg = raw.cfg;
-        let kind = match &cfg.kind {
+        let kind = self.compile_kind(sid, raw)?;
+        let mut handlers = Handlers::default();
+        self.compile_handlers(sid, raw, &kind, &mut handlers)?;
+        let Handlers { on_exact, mut on_partial, on_wildcard, always, after, invokes } = handlers;
+        on_partial.sort_by_key(|(d, _)| std::cmp::Reverse(d.len()));
+
+        let initial_key =
+            if matches!(kind, NodeKind::Compound { .. }) { cfg.initial.clone() } else { None };
+        let entry = self.compile_actions(sid, &cfg.entry, &format!("{}.entry", raw.id))?;
+        let exit = self.compile_actions(sid, &cfg.exit, &format!("{}.exit", raw.id))?;
+
+        Ok(StateNode {
+            id: raw.id.clone(),
+            key: cfg.key.clone(),
+            parent: raw.parent,
+            children: Vec::new(),
+            depth: raw.depth,
+            kind,
+            subtree_end: 0,
+            on_exact,
+            on_partial,
+            on_wildcard,
+            always,
+            entry,
+            exit,
+            invokes,
+            after,
+            initial_key,
+            output: cfg.output.clone(),
+            meta: cfg.meta.clone(),
+            description: cfg.description.clone(),
+            tags: cfg.tags.clone(),
+            history_children: SmallVec::new(),
+        })
+    }
+
+    fn compile_kind(&mut self, sid: StateId, raw: &Raw<'_>) -> Result<NodeKind> {
+        let cfg = raw.cfg;
+        Ok(match &cfg.kind {
             StateKind::Atomic => NodeKind::Atomic,
             StateKind::Final => NodeKind::Final,
             StateKind::Parallel => NodeKind::Parallel,
@@ -166,51 +216,30 @@ impl Compiler<'_, '_> {
                 };
                 NodeKind::History { deep: *deep, target }
             }
-        };
+        })
+    }
 
-        let mut on_exact: HashMap<String, SmallVec<[TransitionId; 2]>> = HashMap::new();
-        let mut on_partial: Vec<(String, SmallVec<[TransitionId; 2]>)> = Vec::new();
-        let mut on_wildcard: SmallVec<[TransitionId; 2]> = SmallVec::new();
-        let mut always: SmallVec<[TransitionId; 2]> = SmallVec::new();
-
-        let mut add_event = |this: &mut Self,
-                             descriptor: String,
-                             list: &[TransitionConfig]|
-         -> Result<()> {
-            let descriptor = names::normalize(&descriptor).into_owned();
-            let compiled =
-                this.compile_transitions(sid, &Trigger::Event(descriptor.clone()), list, &raw.id)?;
-            if descriptor == names::WILDCARD {
-                on_wildcard.extend(compiled);
-            } else if descriptor.ends_with(".*") {
-                match on_partial.iter_mut().find(|(d, _)| *d == descriptor) {
-                    Some((_, ts)) => ts.extend(compiled),
-                    None => on_partial.push((descriptor, compiled.into_iter().collect())),
-                }
-            } else {
-                if !descriptor.starts_with("xstate.") {
-                    this.declared_events.insert(descriptor.clone());
-                }
-                on_exact.entry(descriptor).or_default().extend(compiled);
-            }
-            Ok(())
-        };
-
+    /// Compile `on`, `after`, `onDone`, invoke completions and `always` into transitions.
+    fn compile_handlers(
+        &mut self,
+        sid: StateId,
+        raw: &Raw<'_>,
+        kind: &NodeKind,
+        out: &mut Handlers,
+    ) -> Result<()> {
+        let cfg = raw.cfg;
         for (descriptor, list) in &cfg.on {
-            add_event(self, descriptor.clone(), list)?;
+            self.add_event(sid, raw, descriptor, list, out)?;
         }
-
         // Delayed transitions become ordinary transitions on their timer event.
-        let mut after = Vec::with_capacity(cfg.after.len());
         for (key, list) in &cfg.after {
             let delay = Delay::parse(&Value::String(key.clone())).ok_or_else(|| {
                 Error::config(format!("{}.after.{key}", raw.id), "invalid delay key")
             })?;
             let event = names::after(key, &raw.id);
-            add_event(self, event.clone(), list)?;
-            after.push(AfterDef { key: key.clone(), delay, event });
+            self.add_event(sid, raw, &event, list, out)?;
+            out.after.push(AfterDef { key: key.clone(), delay, event });
         }
-
         if !cfg.on_done.is_empty() {
             if matches!(kind, NodeKind::Atomic | NodeKind::Final | NodeKind::History { .. }) {
                 return Err(Error::config(
@@ -218,57 +247,59 @@ impl Compiler<'_, '_> {
                     "`onDone` is only valid on compound or parallel states",
                 ));
             }
-            add_event(self, names::done_state(&raw.id), &cfg.on_done)?;
+            self.add_event(sid, raw, &names::done_state(&raw.id), &cfg.on_done, out)?;
         }
-
-        let mut invokes = Vec::with_capacity(cfg.invoke.len());
         for (i, inv) in cfg.invoke.iter().enumerate() {
             let id = inv
                 .id
                 .clone()
                 .unwrap_or_else(|| if i == 0 { raw.id.clone() } else { format!("{}:{i}", raw.id) });
-            add_event(self, names::done_actor(&id), &inv.on_done)?;
-            add_event(self, names::error_actor(&id), &inv.on_error)?;
-            invokes.push(InvokeDef {
+            self.add_event(sid, raw, &names::done_actor(&id), &inv.on_done, out)?;
+            self.add_event(sid, raw, &names::error_actor(&id), &inv.on_error, out)?;
+            out.invokes.push(InvokeDef {
                 id,
                 src: inv.src.clone(),
                 input: inv.input.clone(),
                 system_id: inv.system_id.clone(),
             });
         }
-
         if !cfg.always.is_empty() {
             self.has_always = true;
-            always.extend(self.compile_transitions(sid, &Trigger::Always, &cfg.always, &raw.id)?);
+            out.always.extend(self.compile_transitions(
+                sid,
+                &Trigger::Always,
+                &cfg.always,
+                &raw.id,
+            )?);
         }
+        Ok(())
+    }
 
-        on_partial.sort_by_key(|(d, _)| std::cmp::Reverse(d.len()));
-
-        let entry = self.compile_actions(sid, &cfg.entry, &format!("{}.entry", raw.id))?;
-        let exit = self.compile_actions(sid, &cfg.exit, &format!("{}.exit", raw.id))?;
-
-        Ok(StateNode {
-            id: raw.id.clone(),
-            key: cfg.key.clone(),
-            parent: raw.parent,
-            children: Vec::new(),
-            depth: raw.depth,
-            kind,
-            subtree_end: 0,
-            on_exact,
-            on_partial,
-            on_wildcard,
-            always,
-            entry,
-            exit,
-            invokes,
-            after,
-            output: cfg.output.clone(),
-            meta: cfg.meta.clone(),
-            description: cfg.description.clone(),
-            tags: cfg.tags.clone(),
-            history_children: SmallVec::new(),
-        })
+    fn add_event(
+        &mut self,
+        sid: StateId,
+        raw: &Raw<'_>,
+        descriptor: &str,
+        list: &[TransitionConfig],
+        out: &mut Handlers,
+    ) -> Result<()> {
+        let descriptor = names::normalize(descriptor).into_owned();
+        let compiled =
+            self.compile_transitions(sid, &Trigger::Event(descriptor.clone()), list, &raw.id)?;
+        if descriptor == names::WILDCARD {
+            out.on_wildcard.extend(compiled);
+        } else if descriptor.ends_with(".*") {
+            match out.on_partial.iter_mut().find(|(d, _)| *d == descriptor) {
+                Some((_, ts)) => ts.extend(compiled),
+                None => out.on_partial.push((descriptor, compiled.into_iter().collect())),
+            }
+        } else {
+            if !descriptor.starts_with("xstate.") {
+                self.declared_events.insert(descriptor.clone());
+            }
+            out.on_exact.entry(descriptor).or_default().extend(compiled);
+        }
+        Ok(())
     }
 
     fn compile_transitions(
@@ -298,6 +329,7 @@ impl Compiler<'_, '_> {
                 source,
                 trigger: trigger.clone(),
                 targets,
+                raw_targets: t.targets.clone(),
                 actions,
                 guard,
                 reenter: t.reenter,
@@ -357,9 +389,15 @@ impl Compiler<'_, '_> {
                 )?;
                 out.push(ChooseBranch { guard, actions });
             }
-            return Ok(ActionDef::Builtin(builtin::Builtin::Choose(out)));
+            return Ok(ActionDef::Builtin {
+                name: action.name.clone(),
+                builtin: builtin::Builtin::Choose(out),
+            });
         }
-        Ok(ActionDef::Builtin(builtin::compile_builtin(canonical, &action.params, path)?))
+        Ok(ActionDef::Builtin {
+            name: action.name.clone(),
+            builtin: builtin::compile_builtin(canonical, &action.params, path)?,
+        })
     }
 
     fn compile_guard(&mut self, source: StateId, guard: &GuardConfig, path: &str) -> Result<Guard> {
@@ -374,7 +412,10 @@ impl Compiler<'_, '_> {
                         .ok_or_else(|| Error::config(path, "`stateIn` needs a state id string"))?,
                     _ => return Err(Error::config(path, "`stateIn` needs a state id string")),
                 };
-                Guard::StateIn(self.resolve_target(source, target, path)?)
+                Guard::StateIn {
+                    state: self.resolve_target(source, target, path)?,
+                    raw: target.to_owned(),
+                }
             }
             GuardConfig::Named { name, params } => {
                 Guard::Named { name: name.clone(), params: params.clone() }

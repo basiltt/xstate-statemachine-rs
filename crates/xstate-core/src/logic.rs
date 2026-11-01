@@ -254,7 +254,10 @@ impl<C: Context> MachineLogic<C> {
                     ActionDef::User { name, .. } => {
                         logic.get_action(name)?;
                     }
-                    ActionDef::Builtin(crate::machine::Builtin::Choose(branches)) => {
+                    ActionDef::Builtin {
+                        builtin: crate::machine::Builtin::Choose(branches),
+                        ..
+                    } => {
                         for b in branches {
                             if let Some(g) = &b.guard {
                                 walk_guard(logic, g)?;
@@ -262,7 +265,7 @@ impl<C: Context> MachineLogic<C> {
                             walk_actions(logic, &b.actions)?;
                         }
                     }
-                    ActionDef::Builtin(_) => {}
+                    ActionDef::Builtin { .. } => {}
                 }
             }
             Ok(())
@@ -270,7 +273,7 @@ impl<C: Context> MachineLogic<C> {
         fn walk_guard<C: Context>(logic: &MachineLogic<C>, guard: &Guard) -> Result<()> {
             match guard {
                 Guard::Named { name, .. } => logic.get_guard(name).map(|_| ()),
-                Guard::StateIn(_) => Ok(()),
+                Guard::StateIn { .. } => Ok(()),
                 Guard::Not(inner) => walk_guard(logic, inner),
                 Guard::And(list) | Guard::Or(list) => {
                     list.iter().try_for_each(|g| walk_guard(logic, g))

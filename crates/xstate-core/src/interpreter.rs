@@ -3,10 +3,10 @@
 //! `send`, and timers fire from `tick` / `advance`.
 
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashSet, VecDeque};
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::clock::{Clock, RealClock, SimulatedClock};
 use crate::context::{Context, DynContext};
@@ -16,6 +16,7 @@ use crate::event::{Event, EventOrigin};
 use crate::ids::StateId;
 use crate::logic::{MachineLogic, ServiceImpl};
 use crate::machine::Machine;
+use crate::snapshot::{self, Deadline, ScheduledSend, Snapshot};
 
 /// Outcome of one `send`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +40,8 @@ struct Timer {
     event: Event,
     owner: Option<StateId>,
     id: Option<String>,
+    delay_ms: f64,
+    entry_seq: Option<u64>,
 }
 
 impl PartialEq for Timer {
@@ -331,9 +334,30 @@ impl<C: Context> SyncInterpreter<C> {
     }
 
     fn arm(&mut self, delay_ms: f64, event: Event, owner: Option<StateId>, id: Option<String>) {
+        self.arm_with(delay_ms, delay_ms, event, owner, id, None);
+    }
+
+    /// Arm a timer whose remaining time differs from its declared delay (snapshot restore).
+    fn arm_with(
+        &mut self,
+        remaining_ms: f64,
+        delay_ms: f64,
+        event: Event,
+        owner: Option<StateId>,
+        id: Option<String>,
+        entry_seq: Option<u64>,
+    ) {
         let seq = self.next_seq;
         self.next_seq += 1;
-        self.timers.push(Timer { due_ms: self.clock.now_ms() + delay_ms, seq, event, owner, id });
+        self.timers.push(Timer {
+            due_ms: self.clock.now_ms() + remaining_ms.max(0.0),
+            seq,
+            event,
+            owner,
+            id,
+            delay_ms,
+            entry_seq,
+        });
     }
 
     fn cancel_where(&mut self, pred: impl Fn(&Timer) -> bool) {
@@ -347,8 +371,8 @@ impl<C: Context> SyncInterpreter<C> {
     fn apply_effects(&mut self, effects: Vec<Effect>) {
         for effect in effects {
             match effect {
-                Effect::ArmTimer { state, delay_ms, event, .. } => {
-                    self.arm(delay_ms, event, Some(state), None);
+                Effect::ArmTimer { state, delay_ms, event, entry_seq, .. } => {
+                    self.arm_with(delay_ms, delay_ms, event, Some(state), None, Some(entry_seq));
                 }
                 Effect::CancelTimers(state) => self.cancel_where(|t| t.owner == Some(state)),
                 Effect::DelayedRaise { event, delay_ms, id } => self.arm(delay_ms, event, None, id),
@@ -390,6 +414,230 @@ impl<C: Context> SyncInterpreter<C> {
         };
         self.queue.push_back(event);
     }
+}
+
+/// How `after` timers found in a snapshot are re-armed on restore.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RestartTimers {
+    /// Leave them parked (nothing fires).
+    Parked,
+    /// Re-arm with the declared delay from now.
+    Restart,
+    /// Re-arm with the remaining time (`due_at_wall - now`), clamped to the declared delay.
+    #[default]
+    Resume,
+}
+
+/// Options for [`SyncInterpreter::from_snapshot`].
+#[derive(Debug, Clone, Default)]
+pub struct RestoreOptions {
+    /// Refuse a snapshot whose `machine_hash` differs from this machine's (default `true`).
+    pub verify_hash: Option<bool>,
+    /// Timer policy.
+    pub restart_timers: RestartTimers,
+}
+
+impl<C: Context> SyncInterpreter<C> {
+    /// Capture the runtime state in the Python-compatible layout v4.
+    ///
+    /// # Errors
+    /// [`Error::InvalidLifecycle`] before `start`.
+    pub fn snapshot(&self) -> Result<Snapshot> {
+        let state = self.state.as_ref().ok_or_else(|| Error::InvalidLifecycle {
+            status: "uninitialized",
+            message: "snapshot before start".into(),
+        })?;
+        let machine = &self.machine;
+        let now_ms = self.clock.now_ms();
+        let wall = self.clock.wall_now();
+        let mut deadlines = Vec::new();
+        let mut scheduled_sends = Vec::new();
+        let mut live: Vec<&Timer> =
+            self.timers.iter().filter(|t| !self.cancelled.contains(&t.seq)).collect();
+        live.sort_by(|a, b| a.due_ms.total_cmp(&b.due_ms).then(a.seq.cmp(&b.seq)));
+        for t in live {
+            let remaining = (t.due_ms - now_ms).max(0.0);
+            match (t.owner, t.entry_seq) {
+                (Some(owner), Some(entry_seq)) => deadlines.push(Deadline {
+                    state_id: machine.node(owner).id.clone(),
+                    entry_seq,
+                    due_at_wall: wall + remaining / 1000.0,
+                    delay_ms: json_number(t.delay_ms),
+                    event_type: snapshot::python_event_name(&t.event.ty),
+                }),
+                _ => scheduled_sends.push(ScheduledSend {
+                    kind: "event".into(),
+                    ty: t.event.ty.clone(),
+                    payload: if t.event.payload.is_null() {
+                        Value::Object(Map::new())
+                    } else {
+                        t.event.payload.clone()
+                    },
+                    remaining_ms: remaining,
+                    send_id: t.id.clone(),
+                }),
+            }
+        }
+        let active = |s: StateId| state.is_active(s);
+        let mut configuration: Vec<String> =
+            state.configuration().map(|s| machine.node(s).id.clone()).collect();
+        configuration.sort();
+        let mut history = indexmap::IndexMap::new();
+        let mut recorded: Vec<(&StateId, &Vec<StateId>)> = state.history().iter().collect();
+        recorded.sort_by_key(|(k, _)| **k);
+        for (parent, states) in recorded {
+            let mut ids: Vec<String> = states.iter().map(|s| machine.node(*s).id.clone()).collect();
+            ids.sort();
+            history.insert(machine.node(*parent).id.clone(), ids);
+        }
+        let pending_events = self.queue.iter().map(event_record).collect();
+        Ok(Snapshot {
+            version: crate::SNAPSHOT_VERSION,
+            machine_id: machine.id().to_owned(),
+            machine_hash: machine.structure_hash().to_owned(),
+            machine_version: machine.version().map(str::to_owned),
+            taken_at: wall,
+            status: state.status(),
+            context: serde_json::to_value(state.context())?,
+            state_ids: state.leaf_ids(machine),
+            value: snapshot::state_value(machine, &active, StateId::ROOT),
+            configuration,
+            output: state.output().clone(),
+            error: state.error().map(str::to_owned),
+            chain_trips: 0,
+            last_chain_error: None,
+            deferred: Vec::new(),
+            pending_events,
+            scheduled_sends,
+            deadlines,
+            history,
+            actors: Map::new(),
+            system: Map::new(),
+        })
+    }
+
+    /// [`snapshot`](Self::snapshot) serialised to JSON text.
+    ///
+    /// # Errors
+    /// See [`snapshot`](Self::snapshot).
+    pub fn snapshot_json(&self) -> Result<String> {
+        self.snapshot()?.to_json()
+    }
+
+    /// Rebuild an interpreter from a snapshot. Entry actions, invokes and timers do **not**
+    /// re-run; timers follow `options.restart_timers`.
+    ///
+    /// # Errors
+    /// [`Error::Snapshot`] when the snapshot belongs to another machine, its hash differs
+    /// (unless `verify_hash` is `false`), or its configuration is illegal for this machine.
+    pub fn from_snapshot(
+        machine: Machine,
+        logic: MachineLogic<C>,
+        snapshot: &Snapshot,
+        clock: Arc<dyn Clock>,
+        options: &RestoreOptions,
+    ) -> Result<Self> {
+        if snapshot.machine_id != machine.id() {
+            return Err(Error::Snapshot(format!(
+                "snapshot belongs to machine '{}', not '{}'",
+                snapshot.machine_id,
+                machine.id()
+            )));
+        }
+        if options.verify_hash.unwrap_or(true) && snapshot.machine_hash != machine.structure_hash()
+        {
+            return Err(Error::Snapshot(format!(
+                "machine structure changed since the snapshot was taken (hash {} vs {})",
+                snapshot.machine_hash,
+                machine.structure_hash()
+            )));
+        }
+        let configuration = snapshot::resolve_configuration(&machine, &snapshot.configuration)?;
+        let mut history = HashMap::new();
+        for (parent, ids) in &snapshot.history {
+            let p = machine.state_by_id(parent).ok_or_else(|| Error::StateNotFound {
+                target: parent.clone(),
+                from: "snapshot.history".into(),
+            })?;
+            let mut states = Vec::with_capacity(ids.len());
+            for id in ids {
+                states.push(machine.state_by_id(id).ok_or_else(|| Error::StateNotFound {
+                    target: id.clone(),
+                    from: "snapshot.history".into(),
+                })?);
+            }
+            states.sort();
+            history.insert(p, states);
+        }
+        let context: C = serde_json::from_value(snapshot.context.clone())
+            .map_err(|e| Error::Snapshot(format!("context does not fit the context type: {e}")))?;
+        let state = ActiveState::restore(&machine, &configuration, context, history, snapshot);
+
+        let mut interp = Self::with_clock(machine, logic, clock);
+        interp.logic.validate(&interp.machine)?;
+        interp.state = Some(state);
+        for ev in &snapshot.pending_events {
+            if let Some(event) = event_from_record(ev) {
+                interp.queue.push_back(event);
+            }
+        }
+        let now_wall = interp.clock.wall_now();
+        for d in &snapshot.deadlines {
+            let Some(owner) = interp.machine.state_by_id(&d.state_id) else {
+                return Err(Error::StateNotFound {
+                    target: d.state_id.clone(),
+                    from: "snapshot.deadlines".into(),
+                });
+            };
+            let delay_ms = d.delay_ms.as_f64().unwrap_or(0.0);
+            let remaining = match options.restart_timers {
+                RestartTimers::Parked => continue,
+                RestartTimers::Restart => delay_ms,
+                RestartTimers::Resume => ((d.due_at_wall - now_wall) * 1000.0).clamp(0.0, delay_ms),
+            };
+            let event = Event::engine(
+                snapshot::engine_event_name(&d.event_type),
+                Value::Null,
+                EventOrigin::After,
+            );
+            interp.arm_with(remaining, delay_ms, event, Some(owner), None, Some(d.entry_seq));
+        }
+        for s in &snapshot.scheduled_sends {
+            let payload = if s.payload.as_object().is_some_and(Map::is_empty) {
+                Value::Null
+            } else {
+                s.payload.clone()
+            };
+            let event = Event::engine(s.ty.clone(), payload, EventOrigin::Internal);
+            interp.arm_with(s.remaining_ms, s.remaining_ms, event, None, s.send_id.clone(), None);
+        }
+        Ok(interp)
+    }
+}
+
+fn json_number(ms: f64) -> Value {
+    if ms.fract() == 0.0 && ms.abs() < 9.0e15 {
+        #[allow(clippy::cast_possible_truncation)]
+        Value::from(ms as i64)
+    } else {
+        Value::from(ms)
+    }
+}
+
+fn event_record(event: &Event) -> Value {
+    let mut map = Map::new();
+    map.insert("kind".into(), Value::String("event".into()));
+    map.insert("type".into(), Value::String(event.ty.clone()));
+    if !event.payload.is_null() {
+        map.insert("payload".into(), event.payload.clone());
+    }
+    Value::Object(map)
+}
+
+fn event_from_record(record: &Value) -> Option<Event> {
+    let ty = record.get("type")?.as_str()?;
+    let payload = record.get("payload").cloned().unwrap_or(Value::Null);
+    Some(Event::engine(snapshot::engine_event_name(ty), payload, EventOrigin::External))
 }
 
 impl From<&str> for Event {
