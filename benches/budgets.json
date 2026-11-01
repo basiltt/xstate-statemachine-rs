@@ -2,14 +2,13 @@
   "$schema": "./budgets.schema.json",
   "allowed_slowdown": 1.25,
   "benchmarks": {
-    "parse_json_toggle": { "baseline_p50_ns": null, "note": "Phase 0 wiring benchmark; replaced in Phase 1" },
-    "send_flat": { "baseline_p50_ns": null, "target_p50_ns": 200 },
-    "send_guard_assign": { "baseline_p50_ns": null, "target_p50_ns": 600 },
-    "send_nested_3": { "baseline_p50_ns": null, "target_p50_ns": 500 },
-    "send_parallel_2": { "baseline_p50_ns": null, "target_p50_ns": 500 },
-    "build_50_states": { "baseline_p50_ns": null, "target_p50_ns": 40000 },
-    "snapshot_get": { "baseline_p50_ns": null, "target_p50_ns": 3000 },
-    "snapshot_restore": { "baseline_p50_ns": null, "target_p50_ns": 5000 },
+    "send_flat": { "baseline_p50_ns": 1500, "target_p50_ns": 200, "note": "first unoptimised engine, 2026-11-02 (Python: 14000)" },
+    "send_guard_assign": { "baseline_p50_ns": 1800, "target_p50_ns": 600, "note": "Python: 16000" },
+    "send_nested_3": { "baseline_p50_ns": 1780, "target_p50_ns": 500, "note": "Python: 35000" },
+    "send_parallel_2": { "baseline_p50_ns": 1720, "target_p50_ns": 500, "note": "Python: 39000" },
+    "build_50_states": { "baseline_p50_ns": 270000, "target_p50_ns": 40000, "note": "slower than Python (115000); parser/compiler allocation pass pending" },
+    "snapshot_get": { "baseline_p50_ns": 1240, "target_p50_ns": 3000, "note": "Python: 12000" },
+    "snapshot_restore": { "baseline_p50_ns": 8670, "target_p50_ns": 5000, "note": "Python: 23000; includes logic validation" },
     "persisted_memory": { "baseline_p50_ns": null, "target_p50_ns": 8000 }
   }
 }

@@ -152,8 +152,7 @@ fn run_builtin<C: Context>(cx: &mut Ctx<'_, C>, b: &Builtin, event: &Event) -> R
                     Some(g) => evaluate_guard(cx, g, event)?,
                 };
                 if taken {
-                    let actions = branch.actions.clone();
-                    return run_actions(cx, &actions, event);
+                    return run_actions(cx, &branch.actions, event);
                 }
             }
         }

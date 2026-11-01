@@ -189,8 +189,7 @@ fn microstep<C: Context>(
     exit_states(cx, &filtered, event)?;
 
     for &tid in &filtered {
-        let actions = machine.transition(tid).actions.clone();
-        run_actions(cx, &actions, event)?;
+        run_actions(cx, &machine.transition(tid).actions, event)?;
     }
 
     let (to_enter, _) = compute_entry_set(machine, &filtered, &cx.state.history);
@@ -200,8 +199,7 @@ fn microstep<C: Context>(
         // XState runs the exit actions of every remaining active state once the machine is done.
         let remaining: Vec<StateId> = cx.state.configuration().collect();
         for &s in remaining.iter().rev() {
-            let exit = machine.node(s).exit.clone();
-            run_actions(cx, &exit, event)?;
+            run_actions(cx, &machine.node(s).exit, event)?;
         }
     }
     Ok(())
@@ -266,9 +264,8 @@ fn exit_states<C: Context>(
     // Reverse document order.
     for &s in to_exit.iter().rev() {
         let node = machine.node(s);
-        let exit = node.exit.clone();
         cx.effects.push(Effect::CancelTimers(s));
-        run_actions(cx, &exit, event)?;
+        run_actions(cx, &node.exit, event)?;
         for inv in &node.invokes {
             cx.effects.push(Effect::StopActor(inv.id.clone()));
         }
@@ -501,8 +498,7 @@ fn enter_states<C: Context>(cx: &mut Ctx<'_, C>, to_enter: &StateSet, event: &Ev
         }
         cx.report.changed = true;
 
-        let entry = node.entry.clone();
-        run_actions(cx, &entry, event)?;
+        run_actions(cx, &node.entry, event)?;
         for (index, after) in node.after.iter().enumerate() {
             let delay_ms = super::resolve_delay(cx.logic, &after.delay, &cx.state.context, event)?;
             if !delay_ms.is_finite() {
