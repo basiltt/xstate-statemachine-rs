@@ -27,6 +27,19 @@ fn every_case_has_both_oracles_with_one_observation_per_step() {
         let expected =
             case.expected.as_ref().unwrap_or_else(|| panic!("{}: no expected", case.name));
         for (oracle, exp) in [("xstate", &expected.xstate), ("python", &expected.python)] {
+            if exp.unsupported.is_some() {
+                assert_eq!(
+                    oracle, "python",
+                    "{}: only the Python oracle may refuse a chart",
+                    case.name
+                );
+                assert!(
+                    case.divergence.is_some(),
+                    "{}: unsupported chart needs a divergence note",
+                    case.name
+                );
+                continue;
+            }
             assert_eq!(
                 exp.steps.len(),
                 case.steps.len(),
@@ -35,11 +48,11 @@ fn every_case_has_both_oracles_with_one_observation_per_step() {
                 exp.steps.len(),
                 case.steps.len()
             );
-            assert!(
-                !exp.initial.state_ids.is_empty(),
-                "{}: {oracle} initial has no states",
-                case.name
-            );
+            let initial = exp
+                .initial
+                .as_ref()
+                .unwrap_or_else(|| panic!("{}: {oracle} has no initial", case.name));
+            assert!(!initial.state_ids.is_empty(), "{}: {oracle} initial has no states", case.name);
         }
         assert_eq!(expected.xstate.oracle.name, "xstate");
         assert_eq!(expected.python.oracle.name, "xstate-statemachine");
@@ -50,6 +63,9 @@ fn every_case_has_both_oracles_with_one_observation_per_step() {
 fn python_expectations_carry_snapshot_vectors() {
     for case in all_cases() {
         let py = &case.expected.as_ref().expect("expected").python;
+        if py.unsupported.is_some() {
+            continue;
+        }
         let hash =
             py.machine_hash.as_deref().unwrap_or_else(|| panic!("{}: no machine_hash", case.name));
         assert_eq!(hash.len(), 16, "{}: machine_hash is not 16 hex chars", case.name);
@@ -75,7 +91,8 @@ fn python_expectations_carry_snapshot_vectors() {
 fn oracle_disagreements_are_documented() {
     for case in all_cases() {
         let expected = case.expected.as_ref().expect("expected");
-        let same = expected.xstate.initial == expected.python.initial
+        let same = expected.python.unsupported.is_none()
+            && expected.xstate.initial == expected.python.initial
             && expected.xstate.steps == expected.python.steps;
         match (same, &case.divergence) {
             (false, None) => panic!("{}: oracles disagree without a divergence note", case.name),

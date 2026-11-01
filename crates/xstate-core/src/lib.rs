@@ -1,16 +1,52 @@
 //! Core engine of `xstate-statemachine`: an [XState v5](https://stately.ai/docs/xstate) /
 //! [W3C SCXML](https://www.w3.org/TR/scxml/) compatible statechart runtime for Rust.
 //!
-//! This crate owns the machine model, the JSON configuration parser and validator, the
-//! sans-I/O step engine (see ADR-0004), the synchronous interpreter, the pure transition API
-//! and the Python-compatible snapshot format (see ADR-0003). It performs no I/O and has no
-//! async runtime dependency; the async interpreter lives in `xstate-tokio`.
+//! Load a machine exported from the Stately editor as JSON, supply the named guards, actions
+//! and services in a [`MachineLogic`] registry, and run it with the [`SyncInterpreter`]
+//! (or the async interpreter in `xstate-tokio`).
 //!
-//! The crate is being built in phases. Phase 0 (this version) only fixes the workspace,
-//! the quality gates and the shared constants; the engine arrives in Phase 1.
+//! ```
+//! use xstate_core::{Machine, MachineLogic, SyncInterpreter};
+//!
+//! let machine = Machine::from_json(r#"{
+//!   "id": "toggle", "initial": "inactive",
+//!   "states": { "inactive": { "on": { "TOGGLE": "active" } },
+//!               "active":   { "on": { "TOGGLE": "inactive" } } }
+//! }"#)?;
+//! let mut interp = SyncInterpreter::new(machine, MachineLogic::dynamic());
+//! interp.start()?;
+//! interp.send("TOGGLE")?;
+//! assert_eq!(interp.state_ids(), ["toggle.active"]);
+//! # Ok::<(), xstate_core::Error>(())
+//! ```
+//!
+//! The crate owns the machine model ([`machine`]), the JSON parser ([`config`]), the
+//! sans-I/O step engine ([`engine`], ADR-0004), the synchronous interpreter and the clocks.
+//! It performs no I/O and has no async runtime dependency.
 
 #![forbid(unsafe_code)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+
+pub mod clock;
+pub mod config;
+pub mod context;
+pub mod engine;
+mod error;
+pub mod event;
+mod ids;
+mod interpreter;
+pub mod logic;
+pub mod machine;
+
+pub use clock::{Clock, RealClock, SimulatedClock};
+pub use context::{Context, DynContext};
+pub use engine::{ActiveState, Effect, Status, StepReport};
+pub use error::{Error, ErrorKind, Result};
+pub use event::{Event, EventOrigin};
+pub use ids::{StateId, TransitionId};
+pub use interpreter::{Receipt, SyncInterpreter};
+pub use logic::{ActionScope, MachineLogic};
+pub use machine::Machine;
 
 /// Snapshot layout version written and accepted by this engine.
 ///

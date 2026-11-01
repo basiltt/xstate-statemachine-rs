@@ -23,3 +23,68 @@ step 0: actions: xstate=['x_a1', 'x_alpha', 'x_z1', 'x_zeta'] python=['x_z1', 'x
 ```
 step 0: actions: xstate=['e_p', 'e_first', 'e_f2', 'e_second', 'e_s1'] python=['e_p', 'e_second', 'e_s1', 'e_first', 'e_f2']
 ```
+
+## `wildcard_vs_engine_events`
+
+**Python behaviour:** Wildcard descriptors (`*`, `foo.*`) never match engine-generated events, so a service failure with only a `*` handler puts the machine into `error`.
+
+**Spec / XState:** XState v5 getCandidates applies `*` to every event, including xstate.done.actor.* and xstate.error.actor.* (its source carries a TODO questioning this). The failure is consumed by the `*` handler and the machine keeps running.
+
+```
+initial: actions: xstate=['starA'] python=[]
+step 0: actions: xstate=['starB'] python=[]
+step 0: status: xstate='running' python='error'
+step 1: actions: xstate=['starB'] python=[]
+step 1: status: xstate='running' python='error'
+```
+
+## `parallel_cross_region_target`
+
+**Python behaviour:** Exits and re-enters only the sibling region that holds the target (r2); the source region r1 stays active.
+
+**Spec / XState:** The transition domain is the parallel state itself, so every descendant of it is exited (both regions) and both regions are re-entered: the target region through the target, the other through its initial state. The parallel state itself is not re-entered.
+
+```
+step 0: actions: xstate=['x_c', 'x_r2', 'x_a', 'x_r1', 'e_r1', 'e_a', 'e_r2', 'e_d'] python=['x_c', 'x_r2', 'e_r2', 'e_d']
+```
+
+## `exit_actions_on_completion`
+
+**Python behaviour:** Reaching a top-level final state completes the machine without running any further exit actions.
+
+**Spec / XState:** XState v5 microstep: once the snapshot status is `done`, the exit actions of every still-active state (including the final state just entered and the root) run in reverse document order.
+
+```
+step 0: actions: xstate=['x_a', 'e_done', 'x_done', 'x_root'] python=['x_a', 'e_done']
+```
+
+## `reenter_descendant_target`
+
+**Python behaviour:** `reenter` is honoured for self-targets only; a re-entering transition to a descendant exits just the previously active child.
+
+**Spec / XState:** With `reenter: true` the domain is the least common ancestor above the source, so the source itself is exited and re-entered (x_p ... e_p) before the target child.
+
+```
+step 1: actions: xstate=['x_b', 'x_p', 'hard', 'e_p', 'e_a'] python=['x_b', 'hard', 'e_a']
+```
+
+## `multi_target_parallel_entry`
+
+**Python behaviour:** Multi-target transitions (`target: [a, b]`) are rejected at build time.
+
+**Spec / XState:** XState (and SCXML) allow several targets as long as they lie in different regions of one parallel state; both are entered instead of the regions' initial states.
+
+```
+python: InvalidConfigError: Transition 'GO' on state 'm.idle': 'target' must be a string (multi-target lists are not supported), got list
+```
+
+## `choose_and_state_in`
+
+**Python behaviour:** The JSON-form `choose` built-in with `params.branches` runs no branch (the oracle recorded no actions), while the `or` guard still selects the LOCK transition.
+
+**Spec / XState:** Translated to XState code (`enqueueActions` with `check`, `and`/`or`/`not`/`stateIn` creators) the first matching branch runs: adminByDay by day, atNight at night, and LOCK is taken.
+
+```
+step 0: actions: xstate=['adminByDay'] python=[]
+step 2: actions: xstate=['atNight'] python=[]
+```

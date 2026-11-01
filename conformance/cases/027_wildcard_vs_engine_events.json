@@ -1,0 +1,165 @@
+{
+  "name": "wildcard_vs_engine_events",
+  "description": "Pins down whether the catch-all descriptor matches engine-generated events: a service completion with no onDone handler, and a service failure with no onError handler, each with only a `*` handler available.",
+  "tags": [
+    "events",
+    "wildcard",
+    "invoke",
+    "divergence-probe"
+  ],
+  "machine": {
+    "id": "w",
+    "initial": "a",
+    "states": {
+      "a": {
+        "invoke": {
+          "src": "ok",
+          "id": "ok"
+        },
+        "on": {
+          "*": {
+            "actions": "starA"
+          },
+          "NEXT": "b"
+        }
+      },
+      "b": {
+        "invoke": {
+          "src": "boom",
+          "id": "boom"
+        },
+        "on": {
+          "*": {
+            "actions": "starB"
+          }
+        }
+      }
+    }
+  },
+  "logic": {
+    "services": {
+      "ok": {
+        "result": 1
+      },
+      "boom": {
+        "error": "kaboom"
+      }
+    }
+  },
+  "steps": [
+    {
+      "send": "NEXT"
+    },
+    {
+      "send": "PING"
+    }
+  ],
+  "divergence": {
+    "python": "Wildcard descriptors (`*`, `foo.*`) never match engine-generated events, so a service failure with only a `*` handler puts the machine into `error`.",
+    "spec": "XState v5 getCandidates applies `*` to every event, including xstate.done.actor.* and xstate.error.actor.* (its source carries a TODO questioning this). The failure is consumed by the `*` handler and the machine keeps running.",
+    "rust_follows": "xstate"
+  },
+  "expected": {
+    "xstate": {
+      "initial": {
+        "state_ids": [
+          "w.a"
+        ],
+        "context": {},
+        "actions": [
+          "starA"
+        ],
+        "status": "running"
+      },
+      "steps": [
+        {
+          "state_ids": [
+            "w.b"
+          ],
+          "context": {},
+          "actions": [
+            "starB"
+          ],
+          "status": "running"
+        },
+        {
+          "state_ids": [
+            "w.b"
+          ],
+          "context": {},
+          "actions": [
+            "starB"
+          ],
+          "status": "running"
+        }
+      ],
+      "oracle": {
+        "name": "xstate",
+        "version": "5.33.3"
+      }
+    },
+    "python": {
+      "oracle": {
+        "name": "xstate-statemachine",
+        "version": "0.12.0"
+      },
+      "initial": {
+        "state_ids": [
+          "w.a"
+        ],
+        "context": {},
+        "actions": [],
+        "status": "running"
+      },
+      "steps": [
+        {
+          "state_ids": [
+            "w.b"
+          ],
+          "context": {},
+          "actions": [],
+          "status": "error",
+          "error": ""
+        },
+        {
+          "state_ids": [
+            "w.b"
+          ],
+          "context": {},
+          "actions": [],
+          "status": "error",
+          "error": ""
+        }
+      ],
+      "machine_hash": "fa529241089d40e3",
+      "snapshot": {
+        "version": 4,
+        "machine_id": "w",
+        "machine_hash": "fa529241089d40e3",
+        "machine_version": null,
+        "taken_at": 0.0,
+        "status": "error",
+        "context": {},
+        "state_ids": [
+          "w.b"
+        ],
+        "value": "b",
+        "configuration": [
+          "w",
+          "w.b"
+        ],
+        "output": null,
+        "error": "kaboom",
+        "chain_trips": 0,
+        "last_chain_error": null,
+        "deferred": [],
+        "pending_events": [],
+        "scheduled_sends": [],
+        "deadlines": [],
+        "history": {},
+        "actors": {},
+        "system": {}
+      }
+    }
+  }
+}

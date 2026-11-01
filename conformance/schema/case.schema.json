@@ -88,8 +88,9 @@
     },
     "expectation": {
       "type": "object",
-      "required": ["oracle", "initial", "steps"],
+      "required": ["oracle"],
       "properties": {
+        "unsupported": { "type": "string" },
         "oracle": {
           "type": "object",
           "required": ["name", "version"],

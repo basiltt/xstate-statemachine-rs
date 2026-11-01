@@ -1,0 +1,126 @@
+{
+  "name": "exit_actions_on_completion",
+  "description": "When a top-level final state is reached, XState runs the exit actions of every remaining active state in reverse document order.",
+  "tags": [
+    "final",
+    "entry-exit-order",
+    "divergence-probe"
+  ],
+  "machine": {
+    "id": "m",
+    "initial": "a",
+    "exit": "x_root",
+    "states": {
+      "a": {
+        "exit": "x_a",
+        "on": {
+          "END": "done"
+        }
+      },
+      "done": {
+        "type": "final",
+        "entry": "e_done",
+        "exit": "x_done"
+      }
+    }
+  },
+  "steps": [
+    {
+      "send": "END"
+    }
+  ],
+  "divergence": {
+    "python": "Reaching a top-level final state completes the machine without running any further exit actions.",
+    "spec": "XState v5 microstep: once the snapshot status is `done`, the exit actions of every still-active state (including the final state just entered and the root) run in reverse document order.",
+    "rust_follows": "xstate"
+  },
+  "expected": {
+    "xstate": {
+      "initial": {
+        "state_ids": [
+          "m.a"
+        ],
+        "context": {},
+        "actions": [],
+        "status": "running"
+      },
+      "steps": [
+        {
+          "state_ids": [
+            "m.done"
+          ],
+          "context": {},
+          "actions": [
+            "x_a",
+            "e_done",
+            "x_done",
+            "x_root"
+          ],
+          "status": "done",
+          "output": null
+        }
+      ],
+      "oracle": {
+        "name": "xstate",
+        "version": "5.33.3"
+      }
+    },
+    "python": {
+      "oracle": {
+        "name": "xstate-statemachine",
+        "version": "0.12.0"
+      },
+      "initial": {
+        "state_ids": [
+          "m.a"
+        ],
+        "context": {},
+        "actions": [],
+        "status": "running"
+      },
+      "steps": [
+        {
+          "state_ids": [
+            "m.done"
+          ],
+          "context": {},
+          "actions": [
+            "x_a",
+            "e_done"
+          ],
+          "status": "done",
+          "output": null
+        }
+      ],
+      "machine_hash": "98b119a6a15d12d7",
+      "snapshot": {
+        "version": 4,
+        "machine_id": "m",
+        "machine_hash": "98b119a6a15d12d7",
+        "machine_version": null,
+        "taken_at": 0.0,
+        "status": "done",
+        "context": {},
+        "state_ids": [
+          "m.done"
+        ],
+        "value": "done",
+        "configuration": [
+          "m",
+          "m.done"
+        ],
+        "output": null,
+        "error": null,
+        "chain_trips": 0,
+        "last_chain_error": null,
+        "deferred": [],
+        "pending_events": [],
+        "scheduled_sends": [],
+        "deadlines": [],
+        "history": {},
+        "actors": {},
+        "system": {}
+      }
+    }
+  }
+}

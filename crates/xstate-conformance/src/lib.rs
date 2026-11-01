@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod runner;
+
 /// Error raised while loading fixtures.
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
@@ -129,9 +131,15 @@ pub struct Expected {
 pub struct Expectation {
     /// Oracle identity.
     pub oracle: Oracle,
+    /// Set when the oracle refused the chart (e.g. the Python library rejecting multi-target
+    /// transitions); `initial` and `steps` are then empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsupported: Option<String>,
     /// Observation right after `start()`.
-    pub initial: Observation,
+    #[serde(default)]
+    pub initial: Option<Observation>,
     /// One observation per step, in order.
+    #[serde(default)]
     pub steps: Vec<Observation>,
     /// Python only: 16 hex chars of the machine structure hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]

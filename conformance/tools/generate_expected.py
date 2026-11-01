@@ -214,9 +214,17 @@ def main() -> int:
         if xs is None or "error" in xs:
             raise SystemExit(f"{name}: xstate oracle error: {xs and xs.get('error')}")
         xs["oracle"] = xs_all["oracle"]
-        py = run_python_oracle(case)
+        try:
+            py = run_python_oracle(case)
+        except Exception as exc:  # noqa: BLE001 - the Python library refusing a chart is itself a finding
+            import xstate_statemachine as xsm
 
-        diffs = compare(xs, py)
+            py = {
+                "oracle": {"name": "xstate-statemachine", "version": xsm.__version__},
+                "unsupported": f"{type(exc).__name__}: {exc}",
+            }
+
+        diffs = [f"python: {py['unsupported']}"] if "unsupported" in py else compare(xs, py)
         if diffs:
             rows.append((name, case.get("divergence"), diffs))
             if not case.get("divergence"):
