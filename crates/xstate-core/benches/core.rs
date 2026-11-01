@@ -77,7 +77,7 @@ fn send_parallel_2(c: &mut Criterion) {
 fn build_50_states(c: &mut Criterion) {
     let json = serde_json::to_string(&chain_machine(50)).expect("json");
     c.bench_function("build_50_states", |b| {
-        b.iter(|| Machine::from_json(black_box(&json)).expect("machine"))
+        b.iter(|| Machine::from_json(black_box(&json)).expect("machine"));
     });
 }
 
