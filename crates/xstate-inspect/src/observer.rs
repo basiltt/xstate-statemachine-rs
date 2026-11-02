@@ -28,8 +28,8 @@ use xstate_core::{Context, Event, Machine, Observer};
 use crate::protocol::{
     ActorMessage, actor_message, event_message, snapshot_body, snapshot_message, status_of,
 };
-use crate::redact::RedactKeys;
 use crate::sinks::Sink;
+use xstate_core::redact::RedactKeys;
 
 /// Source of `createdAt` timestamps: epoch milliseconds.
 pub type ClockFn = dyn Fn() -> i64 + Send + Sync;
@@ -135,7 +135,7 @@ impl InspectorObserver {
         self
     }
 
-    /// Replace the redaction denylist (see [`crate::redact::DEFAULT_REDACT_KEYS`]).
+    /// Replace the redaction denylist (see [`xstate_core::redact::DEFAULT_REDACT_KEYS`]).
     #[must_use]
     pub fn redact_keys(mut self, keys: RedactKeys) -> Self {
         self.redact_keys = keys;
@@ -239,7 +239,7 @@ impl InspectorObserver {
                     continue;
                 }
                 let value = if self.redact_keys.matches(k) {
-                    Value::from(crate::redact::REDACTED)
+                    Value::from(xstate_core::redact::REDACTED)
                 } else {
                     self.redact_keys.redact(v)
                 };

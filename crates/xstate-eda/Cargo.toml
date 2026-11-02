@@ -1,0 +1,32 @@
+[package]
+name = "xstate-eda"
+description = "Event-driven architecture for xstate-core machines: CloudEvents envelopes, broker adapters, inbound dispatcher, transactional outbox, dead-letter queues and AsyncAPI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["sqlite"]
+sqlite = ["dep:rusqlite", "xstate-persistence/sqlite"]
+
+[dependencies]
+xstate-core = { workspace = true }
+xstate-persistence = { workspace = true, default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+rusqlite = { workspace = true, optional = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -30,12 +30,12 @@
 
 pub mod observer;
 pub mod protocol;
-pub mod redact;
 pub mod replay;
 pub mod sinks;
 
 pub use observer::InspectorObserver;
 pub use protocol::{MESSAGE_TYPES, PROTOCOL_VERSION};
-pub use redact::{DEFAULT_REDACT_KEYS, RedactKeys, redact};
 pub use replay::{ReplayError, ReplayOptions, replay_file, replay_with};
 pub use sinks::{JsonLinesSink, MemorySink, Sink, SinkError, encode_line, read_jsonl};
+pub use xstate_core::redact;
+pub use xstate_core::redact::{DEFAULT_REDACT_KEYS, RedactKeys, redact as redact_value};

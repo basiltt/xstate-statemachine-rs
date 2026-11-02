@@ -1,4 +1,5 @@
-//! Redaction of sensitive keys, the counterpart of the Python `redact()` helper.
+//! Redaction of sensitive keys (the Python `redact()` helper), shared by the inspector, the
+//! dead-letter stores and the outbox.
 //!
 //! Keys are matched by case-insensitive substring with `-` treated as `_` on both sides, so
 //! `apiKey`, `API_KEY` and `x-api-key` all match the denylist entry `api_key`. Matching

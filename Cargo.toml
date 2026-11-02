@@ -8,6 +8,8 @@ members = [
     "crates/xstate-conformance",
     "crates/xstate-inspect",
     "crates/xstate-observability",
+    "crates/xstate-eda",
+    "crates/xstate-patterns",
     "crates/xsm",
 ]
 
@@ -30,6 +32,8 @@ xstate-persistence = { path = "crates/xstate-persistence", version = "0.0.1" }
 xstate-testing = { path = "crates/xstate-testing", version = "0.0.1" }
 xstate-inspect = { path = "crates/xstate-inspect", version = "0.0.1" }
 xstate-observability = { path = "crates/xstate-observability", version = "0.0.1" }
+xstate-eda = { path = "crates/xstate-eda", version = "0.0.1" }
+xstate-patterns = { path = "crates/xstate-patterns", version = "0.0.1" }
 
 # core
 serde = { version = "1.0", features = ["derive"] }

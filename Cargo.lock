@@ -1349,6 +1349,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
+name = "uuid"
+version = "1.26.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
+dependencies = [
+ "getrandom 0.4.3",
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1630,6 +1641,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "xstate-eda"
+version = "0.0.1"
+dependencies = [
+ "rand 0.9.5",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "uuid",
+ "xstate-core",
+ "xstate-persistence",
+]
+
+[[package]]
 name = "xstate-inspect"
 version = "0.0.1"
 dependencies = [
@@ -1650,6 +1677,20 @@ dependencies = [
  "serde_json",
  "tracing",
  "xstate-core",
+]
+
+[[package]]
+name = "xstate-patterns"
+version = "0.0.1"
+dependencies = [
+ "rand 0.9.5",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "xstate-core",
+ "xstate-eda",
 ]
 
 [[package]]
