@@ -251,16 +251,6 @@ fn inspect_fails_for_a_machine_that_does_not_build() {
         .stderr(predicate::str::contains("nowhere"));
 }
 
-#[test]
-fn inspect_live_is_not_available_yet() {
-    xsm()
-        .args(["inspect", "--live"])
-        .arg(fixture("toggle.json"))
-        .assert()
-        .code(2)
-        .stderr(predicate::str::contains("not implemented"));
-}
-
 // ------------------------------------------------------------------------------------ diagram
 
 #[test]
@@ -650,8 +640,17 @@ fn info_json_has_versions_and_features() {
     assert_eq!(value["snapshot_layout"], 4);
     assert_eq!(value["crates"]["xstate-core"], env!("CARGO_PKG_VERSION"));
     let commands = value["features"]["commands"].as_array().unwrap();
-    for name in ["validate", "inspect", "diagram", "docs", "simulate", "paths", "snapshots", "info"]
-    {
+    for name in [
+        "validate",
+        "inspect",
+        "replay",
+        "diagram",
+        "docs",
+        "simulate",
+        "paths",
+        "snapshots",
+        "info",
+    ] {
         assert!(commands.iter().any(|c| c == name), "missing command {name}");
     }
     assert!(value["features"]["stores"].as_array().unwrap().iter().any(|s| s == "sqlite"));

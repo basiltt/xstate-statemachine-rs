@@ -24,7 +24,7 @@ use clap::{ArgAction, Parser, Subcommand};
 
 use commands::{
     diagram::DiagramArgs, docs::DocsArgs, info::InfoArgs, inspect::InspectArgs, paths::PathsArgs,
-    simulate::SimulateArgs, snapshots::SnapshotsArgs, validate::ValidateArgs,
+    replay::ReplayArgs, simulate::SimulateArgs, snapshots::SnapshotsArgs, validate::ValidateArgs,
 };
 use ui::Ui;
 
@@ -63,6 +63,8 @@ enum Command {
     /// Show a machine's state tree, transitions, logic and policies.
     #[command(visible_alias = "ins")]
     Inspect(InspectArgs),
+    /// Print or stream (--live) a recorded inspector session.
+    Replay(ReplayArgs),
     /// Export a Mermaid, `PlantUML` or JSON diagram.
     #[command(visible_alias = "dia")]
     Diagram(DiagramArgs),
@@ -83,6 +85,7 @@ fn dispatch(ui: Ui, command: &Command) -> Result<u8> {
     match command {
         Command::Validate(args) => commands::validate::run(ui, args),
         Command::Inspect(args) => commands::inspect::run(ui, args),
+        Command::Replay(args) => commands::replay::run(ui, args),
         Command::Diagram(args) => commands::diagram::run(ui, args),
         Command::Docs(args) => commands::docs::run(ui, args),
         Command::Simulate(args) => commands::simulate::run(ui, args),

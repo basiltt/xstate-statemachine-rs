@@ -201,7 +201,9 @@ fn timers_record_one_deadline_per_fixed_after_delay() {
 fn adopted_deadlines_re_arm_on_restore() {
     let m = machine(&json!({"id": "t", "initial": "wait", "states": {
         "wait": {"after": {"500": "go", "1000": "go"}}, "go": {}}}));
-    let now = xstate_persistence::store::wall_now();
+    // Anchor the deadlines an hour ahead so a slow, loaded test run cannot let one fall due
+    // between adoption and restore.
+    let now = xstate_persistence::store::wall_now() + 3600.0;
     let snap = from_state_ids(&m, &["t.wait"], Value::Null, Status::Running, true, now).unwrap();
     let interp = restore(&m, &snap, RestartTimers::Resume);
     assert_eq!(interp.pending_timers(), 2);

@@ -21,6 +21,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(any(feature = "nats", feature = "rabbitmq"))]
+mod async_core;
 pub mod asyncapi;
 pub mod broker;
 mod chart;
@@ -29,8 +31,12 @@ pub mod dispatcher;
 pub mod envelope;
 mod error;
 pub mod fake;
+#[cfg(feature = "nats")]
+pub mod nats;
 pub mod outbox;
 mod py;
+#[cfg(feature = "rabbitmq")]
+pub mod rabbitmq;
 #[cfg(feature = "redis-streams")]
 pub mod redis_streams;
 #[cfg(feature = "sqlite")]
@@ -58,6 +64,8 @@ pub use envelope::{
 };
 pub use error::{BrokerError, EdaError, EnvelopeError, Result};
 pub use fake::{DEFAULT_DRAIN_LIMIT, FakeBrokerAdapter, SyncFakeBrokerAdapter};
+#[cfg(feature = "nats")]
+pub use nats::{NatsBroker, NatsOptions};
 #[cfg(feature = "sqlite")]
 pub use outbox::SqliteOutboxStore;
 pub use outbox::{
@@ -65,5 +73,7 @@ pub use outbox::{
     PUBLISH_TAG, PublishSource, PublishSpec, publish_specs,
 };
 pub use py::{WallClock, now_iso, wall_now};
+#[cfg(feature = "rabbitmq")]
+pub use rabbitmq::{RabbitMqBroker, RabbitMqOptions};
 #[cfg(feature = "redis-streams")]
 pub use redis_streams::{RedisStreamsBroker, RedisStreamsOptions};

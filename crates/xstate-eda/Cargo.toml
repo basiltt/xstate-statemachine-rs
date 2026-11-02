@@ -14,6 +14,8 @@ categories.workspace = true
 default = ["sqlite"]
 sqlite = ["dep:rusqlite", "xstate-persistence/sqlite"]
 redis-streams = ["dep:redis", "dep:tokio"]
+nats = ["dep:async-nats", "dep:futures-util", "dep:tokio"]
+rabbitmq = ["dep:lapin", "dep:tokio"]
 
 [dependencies]
 xstate-core = { workspace = true }
@@ -25,7 +27,10 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 rusqlite = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["rt"], optional = true }
+async-nats = { workspace = true, optional = true }
+lapin = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time"], optional = true }
 rand = { workspace = true }
 
 [dev-dependencies]

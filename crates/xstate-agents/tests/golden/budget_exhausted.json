@@ -1,0 +1,253 @@
+{
+  "budgets": {
+    "max_turns": 1
+  },
+  "phases": [
+    {
+      "input": {
+        "prompt": "look it up"
+      },
+      "result": {
+        "context": {
+          "approved_call_ids": [],
+          "attempt": 0,
+          "cost_usd": 0.0,
+          "error": {
+            "kind": "budget",
+            "message": "turn limit reached"
+          },
+          "human_approved": false,
+          "messages": [
+            {
+              "content": "look it up",
+              "role": "user"
+            },
+            {
+              "content": "",
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "arguments": {
+                    "query": "q"
+                  },
+                  "id": "call_1_0",
+                  "name": "lookup"
+                }
+              ]
+            },
+            {
+              "content": "{\"answer\": 42, \"query\": \"q\", \"api_key\": \"***\", \"note\": \"***\"}",
+              "name": "lookup",
+              "role": "tool",
+              "tool_call_id": "call_1_0"
+            }
+          ],
+          "output_retries": 0,
+          "pending_tool_calls": [],
+          "result": null,
+          "spent_call_ids": [
+            "call_1_0"
+          ],
+          "tokens_in": 10,
+          "tokens_out": 5,
+          "turns": 1
+        },
+        "error": {
+          "kind": "budget",
+          "message": "turn limit reached"
+        },
+        "final_state": "toolLoop.error",
+        "output": null,
+        "status": "done",
+        "usage": {
+          "cost_usd": 0.0,
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "turns": 1
+        },
+        "waiting": false
+      },
+      "states": [
+        [
+          "toolLoop.idle"
+        ],
+        [
+          "toolLoop.checking_budget"
+        ],
+        [
+          "toolLoop.awaiting_model"
+        ],
+        [
+          "toolLoop.awaiting_tool"
+        ],
+        [
+          "toolLoop.checking_budget"
+        ],
+        [
+          "toolLoop.error"
+        ]
+      ],
+      "totals": {
+        "agents": {
+          "toolLoop": {
+            "cost_usd": 0.0,
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "turns": 1
+          }
+        },
+        "total": {
+          "cost_usd": 0.0,
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "turns": 1
+        }
+      },
+      "trace": [
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "agent_start",
+          "kind": "agent_start",
+          "parent_id": null,
+          "state": [],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "transition",
+          "kind": "transition",
+          "parent_id": null,
+          "state": [
+            "toolLoop.idle"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "transition",
+          "kind": "transition",
+          "parent_id": null,
+          "state": [
+            "toolLoop.checking_budget"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "transition",
+          "kind": "transition",
+          "parent_id": null,
+          "state": [
+            "toolLoop.awaiting_model"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "cost_usd": 0.0,
+          "gen_ai.completion": "",
+          "gen_ai.operation.name": "chat",
+          "gen_ai.prompt": [
+            {
+              "content": "look it up",
+              "role": "user"
+            }
+          ],
+          "gen_ai.request.model": "fake",
+          "gen_ai.response.tool_calls": [
+            "lookup"
+          ],
+          "gen_ai.usage.input_tokens": 10,
+          "gen_ai.usage.output_tokens": 5,
+          "kind": "model_call",
+          "parent_id": null,
+          "state": [
+            "toolLoop.awaiting_model"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "transition",
+          "kind": "transition",
+          "parent_id": null,
+          "state": [
+            "toolLoop.awaiting_tool"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "execute_tool",
+          "gen_ai.tool.arguments": {
+            "query": "q"
+          },
+          "gen_ai.tool.name": "lookup",
+          "gen_ai.tool.output": {
+            "answer": 42,
+            "api_key": "***",
+            "note": "***",
+            "query": "q"
+          },
+          "kind": "tool_call",
+          "parent_id": null,
+          "state": [
+            "toolLoop.awaiting_tool"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "transition",
+          "kind": "transition",
+          "parent_id": null,
+          "state": [
+            "toolLoop.checking_budget"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "agent_end",
+          "kind": "agent_end",
+          "parent_id": null,
+          "state": [
+            "toolLoop.error"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "transition",
+          "kind": "transition",
+          "parent_id": null,
+          "state": [
+            "toolLoop.error"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        }
+      ]
+    }
+  ],
+  "script": [
+    {
+      "args": {
+        "query": "q"
+      },
+      "tool": "lookup"
+    },
+    {
+      "text": "never reached"
+    }
+  ]
+}

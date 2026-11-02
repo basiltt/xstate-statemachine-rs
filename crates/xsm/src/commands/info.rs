@@ -10,11 +10,11 @@ use crate::ui::{Role, Ui, print_lines};
 const WORKSPACE_CRATES: [&str; 4] = ["xsm", "xstate-core", "xstate-persistence", "xstate-inspect"];
 
 /// Commands this build ships.
-const COMMANDS: [&str; 8] =
-    ["validate", "inspect", "diagram", "docs", "simulate", "paths", "snapshots", "info"];
+const COMMANDS: [&str; 9] =
+    ["validate", "inspect", "replay", "diagram", "docs", "simulate", "paths", "snapshots", "info"];
 
 /// Features that are not available yet (documented TODOs).
-const PLANNED: [&str; 3] = ["inspect --live", "simulate --record", "simulate (interactive)"];
+const PLANNED: [&str; 1] = ["simulate (interactive)"];
 
 /// Arguments of `info`.
 #[derive(Debug, clap::Args)]

@@ -9,6 +9,7 @@ use xstate_core::machine::{NodeKind, Trigger};
 use xstate_core::{Machine, StateId};
 
 use super::analysis::{Analysis, analyse};
+use super::live::{LiveOptions, run_inspect_live};
 use super::model::{action_list, kind_name, policy_rows, short_id, transition_rows};
 use crate::output::{self, exit_for, print_json};
 use crate::ui::{Cell, Role, Table, Ui, print_lines};
@@ -24,19 +25,18 @@ pub(crate) struct InspectArgs {
     /// Skip the transitions table.
     #[arg(long)]
     no_events: bool,
-    /// Serve the live inspector (not implemented yet).
+    /// Serve the live inspector (Stately Inspector protocol over SSE) and drive the machine
+    /// from stdin: `EVENT`, `EVENT {"json": "payload"}`, `+500`, `reset`, `quit`.
     #[arg(long)]
     live: bool,
+    #[command(flatten)]
+    live_options: LiveOptions,
 }
 
 /// Run `inspect`.
 pub(crate) fn run(ui: Ui, args: &InspectArgs) -> Result<u8> {
     if args.live {
-        // TODO(xstate-inspect): serve the Stately Inspector protocol over SSE and drive the
-        // machine with the simulator once the `xstate-inspect` crate API is available.
-        return Err(output::usage(
-            "--live is not implemented yet: it needs the xstate-inspect integration",
-        ));
+        return run_inspect_live(ui, &args.file, &args.live_options);
     }
     let analysis = analyse(ui, &args.file, true, true);
     if args.json {

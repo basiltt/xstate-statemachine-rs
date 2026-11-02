@@ -1,0 +1,381 @@
+{
+  "budgets": null,
+  "phases": [
+    {
+      "input": {
+        "prompt": "refund order B-2"
+      },
+      "result": {
+        "context": {
+          "approved_call_ids": [],
+          "attempt": 0,
+          "cost_usd": 0.0,
+          "error": null,
+          "human_approved": false,
+          "messages": [
+            {
+              "content": "refund order B-2",
+              "role": "user"
+            },
+            {
+              "content": "",
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "arguments": {
+                    "amount_cents": 900,
+                    "order_id": "B-2"
+                  },
+                  "id": "call_1_0",
+                  "name": "refund"
+                }
+              ]
+            }
+          ],
+          "output_retries": 0,
+          "pending_tool_calls": [
+            {
+              "arguments": {
+                "amount_cents": 900,
+                "order_id": "B-2"
+              },
+              "id": "call_1_0",
+              "name": "refund"
+            }
+          ],
+          "result": null,
+          "spent_call_ids": [
+            "call_1_0"
+          ],
+          "tokens_in": 10,
+          "tokens_out": 5,
+          "turns": 1
+        },
+        "error": null,
+        "final_state": "toolLoop.awaiting_human",
+        "output": null,
+        "status": "running",
+        "usage": {
+          "cost_usd": 0.0,
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "turns": 1
+        },
+        "waiting": true
+      },
+      "states": [
+        [
+          "toolLoop.idle"
+        ],
+        [
+          "toolLoop.checking_budget"
+        ],
+        [
+          "toolLoop.awaiting_model"
+        ],
+        [
+          "toolLoop.awaiting_human"
+        ]
+      ],
+      "totals": {
+        "agents": {
+          "toolLoop": {
+            "cost_usd": 0.0,
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "turns": 1
+          }
+        },
+        "total": {
+          "cost_usd": 0.0,
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "turns": 1
+        }
+      },
+      "trace": [
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "agent_start",
+          "kind": "agent_start",
+          "parent_id": null,
+          "state": [],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "transition",
+          "kind": "transition",
+          "parent_id": null,
+          "state": [
+            "toolLoop.idle"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "transition",
+          "kind": "transition",
+          "parent_id": null,
+          "state": [
+            "toolLoop.checking_budget"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "transition",
+          "kind": "transition",
+          "parent_id": null,
+          "state": [
+            "toolLoop.awaiting_model"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "cost_usd": 0.0,
+          "gen_ai.completion": "",
+          "gen_ai.operation.name": "chat",
+          "gen_ai.prompt": [
+            {
+              "content": "refund order B-2",
+              "role": "user"
+            }
+          ],
+          "gen_ai.request.model": "fake",
+          "gen_ai.response.tool_calls": [
+            "refund"
+          ],
+          "gen_ai.usage.input_tokens": 10,
+          "gen_ai.usage.output_tokens": 5,
+          "kind": "model_call",
+          "parent_id": null,
+          "state": [
+            "toolLoop.awaiting_model"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "transition",
+          "kind": "transition",
+          "parent_id": null,
+          "state": [
+            "toolLoop.awaiting_human"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        }
+      ]
+    },
+    {
+      "input": {
+        "approve": false
+      },
+      "result": {
+        "context": {
+          "approved_call_ids": [],
+          "attempt": 0,
+          "cost_usd": 0.0,
+          "error": null,
+          "human_approved": false,
+          "messages": [
+            {
+              "content": "refund order B-2",
+              "role": "user"
+            },
+            {
+              "content": "",
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "arguments": {
+                    "amount_cents": 900,
+                    "order_id": "B-2"
+                  },
+                  "id": "call_1_0",
+                  "name": "refund"
+                }
+              ]
+            },
+            {
+              "content": "rejected by a human reviewer.",
+              "name": "refund",
+              "role": "tool",
+              "tool_call_id": "call_1_0"
+            },
+            {
+              "content": "understood, no refund",
+              "role": "assistant"
+            }
+          ],
+          "output_retries": 0,
+          "pending_tool_calls": [],
+          "result": "understood, no refund",
+          "spent_call_ids": [
+            "call_1_0"
+          ],
+          "tokens_in": 20,
+          "tokens_out": 10,
+          "turns": 2
+        },
+        "error": null,
+        "final_state": "toolLoop.done",
+        "output": "understood, no refund",
+        "status": "done",
+        "usage": {
+          "cost_usd": 0.0,
+          "input_tokens": 20,
+          "output_tokens": 10,
+          "turns": 2
+        },
+        "waiting": false
+      },
+      "states": [
+        [
+          "toolLoop.checking_budget"
+        ],
+        [
+          "toolLoop.awaiting_model"
+        ],
+        [
+          "toolLoop.done"
+        ]
+      ],
+      "totals": {
+        "agents": {
+          "toolLoop": {
+            "cost_usd": 0.0,
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "turns": 1
+          }
+        },
+        "total": {
+          "cost_usd": 0.0,
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "turns": 1
+        }
+      },
+      "trace": [
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "agent_start",
+          "kind": "agent_start",
+          "parent_id": null,
+          "state": [
+            "toolLoop.awaiting_human"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "transition",
+          "kind": "transition",
+          "parent_id": null,
+          "state": [
+            "toolLoop.checking_budget"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "transition",
+          "kind": "transition",
+          "parent_id": null,
+          "state": [
+            "toolLoop.awaiting_model"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "cost_usd": 0.0,
+          "gen_ai.completion": "understood, no refund",
+          "gen_ai.operation.name": "chat",
+          "gen_ai.prompt": [
+            {
+              "content": "refund order B-2",
+              "role": "user"
+            },
+            {
+              "content": "",
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "arguments": {
+                    "amount_cents": 900,
+                    "order_id": "B-2"
+                  },
+                  "id": "call_1_0",
+                  "name": "refund"
+                }
+              ]
+            },
+            {
+              "content": "rejected by a human reviewer.",
+              "name": "refund",
+              "role": "tool",
+              "tool_call_id": "call_1_0"
+            }
+          ],
+          "gen_ai.request.model": "fake",
+          "gen_ai.response.tool_calls": [],
+          "gen_ai.usage.input_tokens": 10,
+          "gen_ai.usage.output_tokens": 5,
+          "kind": "model_call",
+          "parent_id": null,
+          "state": [
+            "toolLoop.awaiting_model"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "agent_end",
+          "kind": "agent_end",
+          "parent_id": null,
+          "state": [
+            "toolLoop.done"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        },
+        {
+          "agent_id": "<agent>",
+          "gen_ai.operation.name": "transition",
+          "kind": "transition",
+          "parent_id": null,
+          "state": [
+            "toolLoop.done"
+          ],
+          "trace_id": "<agent>",
+          "ts": 0.0
+        }
+      ]
+    }
+  ],
+  "script": [
+    {
+      "args": {
+        "amount_cents": 900,
+        "order_id": "B-2"
+      },
+      "tool": "refund"
+    },
+    {
+      "text": "understood, no refund"
+    }
+  ]
+}

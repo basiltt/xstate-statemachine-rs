@@ -14,6 +14,7 @@ categories.workspace = true
 default = ["sqlite"]
 sqlite = ["dep:rusqlite"]
 redis = ["dep:redis"]
+postgres = ["dep:sqlx", "dep:tokio"]
 
 [dependencies]
 xstate-core = { workspace = true }
@@ -23,6 +24,11 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 rusqlite = { workspace = true, optional = true }
 redis = { workspace = true, features = ["script"], optional = true }
+sqlx = { workspace = true, optional = true }
+# `rt-multi-thread`: the owned runtime that `PostgresStore::connect` drives sqlx with must keep
+# working when several threads call `block_on` at once (a current-thread runtime would let one
+# waiting `lock()` poll starve the holder that has to release it).
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"], optional = true }
 fd-lock = { workspace = true }
 rand = { workspace = true }
 percent-encoding = { workspace = true }

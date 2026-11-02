@@ -15,6 +15,8 @@ pub mod locking;
 pub mod log;
 pub mod memory_store;
 pub mod migration;
+#[cfg(feature = "postgres")]
+pub mod postgres_backend;
 pub mod receipts;
 #[cfg(feature = "redis")]
 pub mod redis_backend;
@@ -43,6 +45,10 @@ pub use log::{
 };
 pub use memory_store::MemoryStore;
 pub use migration::{MigrationError, SnapshotMigrator};
+#[cfg(feature = "postgres")]
+pub use postgres_backend::{
+    DEFAULT_LOCK_TTL, PostgresInbox, PostgresLog, PostgresStore, PostgresStoreOptions,
+};
 pub use receipts::{ReceiptError, ReceiptErrorKind, ReceiptFlags, ReceiptJson, receipt_to_status};
 #[cfg(feature = "redis")]
 pub use redis_backend::{DEFAULT_LOCK_TTL_MS, RedisInbox, RedisLog, RedisStore, RedisStoreOptions};

@@ -52,7 +52,7 @@ pub(crate) struct SimulateArgs {
     #[arg(long, value_name = "KEYS")]
     context: Option<String>,
     /// Append the session to PATH as Stately Inspector messages (JSON Lines), replayable with
-    /// `xsm inspect --replay` and the Python CLI. Context and payloads are not recorded.
+    /// `xsm replay` and the Python CLI. Context and payloads are not recorded.
     #[arg(long, value_name = "PATH")]
     record: Option<PathBuf>,
 }

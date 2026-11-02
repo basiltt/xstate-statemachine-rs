@@ -6,7 +6,9 @@
 //! * [`protocol`] — the message builders (byte-compatible with the Python library's);
 //! * [`sinks`] — [`MemorySink`], [`JsonLinesSink`] (`.jsonl` recordings readable by the
 //!   Python `xsm inspect replay` and vice versa) and the [`Sink`] trait for custom transports;
-//! * [`replay`] — replay a recording into any sink, optionally honouring recorded timing.
+//! * [`replay`] — replay a recording into any sink, optionally honouring recorded timing;
+//! * [`sse`] — [`SseSink`], a hardened loopback HTTP server that streams the messages to the
+//!   Stately Inspector page over Server-Sent Events (standard library only).
 //!
 //! ```
 //! use std::sync::Arc;
@@ -32,10 +34,12 @@ pub mod observer;
 pub mod protocol;
 pub mod replay;
 pub mod sinks;
+pub mod sse;
 
 pub use observer::InspectorObserver;
 pub use protocol::{MESSAGE_TYPES, PROTOCOL_VERSION};
 pub use replay::{ReplayError, ReplayOptions, replay_file, replay_with};
 pub use sinks::{JsonLinesSink, MemorySink, Sink, SinkError, encode_line, read_jsonl};
+pub use sse::{SseError, SseOptions, SseSink};
 pub use xstate_core::redact;
 pub use xstate_core::redact::{DEFAULT_REDACT_KEYS, RedactKeys, redact as redact_value};

@@ -43,7 +43,7 @@ xstate-agents = { path = "crates/xstate-agents", version = "0.0.1" }
 
 # core
 serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0", features = ["preserve_order"] }
+serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"] }
 thiserror = "2.0"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 smallvec = { version = "1.13", features = ["union", "const_generics"] }
@@ -60,7 +60,7 @@ tokio = { version = "1.40", default-features = false }
 # persistence
 rusqlite = { version = "0.33", features = ["bundled"] }
 redis = { version = "0.32", default-features = false, features = ["tokio-comp", "connection-manager"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "json", "chrono"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "json", "chrono"] }
 
 # brokers
 async-nats = "0.44"

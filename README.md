@@ -10,7 +10,7 @@ This is the Rust port of the Python library
 snapshot format and store layouts (a Rust worker can resume an instance a Python worker saved),
 same CLI; built for speed with Rust's type system doing the checking.
 
-> **Status: Phases 1–5 landed — engine, persistence, observability, inspector, CLI, EDA, typed DSL, HTTP and Redis.**
+> **Status: Phases 1–6 landed — engine, persistence (SQLite, Redis, PostgreSQL), observability, inspector, CLI, EDA with Redis Streams / NATS / RabbitMQ, typed DSL, HTTP and agents.**
 > `xstate-core` parses XState v5 JSON, compiles it, and runs it with a synchronous
 > interpreter; `xstate-tokio` runs it as an async actor with timers, async services and child
 > actors; `xstate-persistence` saves and resumes instances in Python-compatible stores;
@@ -21,8 +21,10 @@ same CLI; built for speed with Rust's type system doing the checking.
 > Python-identical snapshots, structure hashes, inspector recordings, saga charts and AsyncAPI
 > documents; `xstate-macros` adds typed events, typed states and the `statechart!` DSL,
 > `xstate-axum` serves machines over REST, SSE and WebSocket, and Redis backends (store, inbox,
-> log, Streams broker) share their layout with Python. Remaining: sqlx stores, Kafka / RabbitMQ /
-> NATS / SQS adapters, agents, Python bindings. See [`docs/feasibility-report.md`](docs/feasibility-report.md) and
+> log, Streams broker) and PostgreSQL backends share their layout with Python; NATS and
+> RabbitMQ adapters interoperate with the Python consumers; `xstate-agents` runs LLM tool loops
+> as statecharts; `xsm inspect --live` and `xsm replay` serve the Stately Inspector locally.
+> Remaining: Kafka and SQS adapters, Python bindings. See [`docs/feasibility-report.md`](docs/feasibility-report.md) and
 > [`docs/adr/`](docs/adr/).
 
 ## Quick start
@@ -66,12 +68,12 @@ assert_eq!(door.state_ids(), ["door.opened"]);
 | [`xstate-patterns`](crates/xstate-patterns) | retry policy, circuit breaker, saga builder, choreography router |
 | [`xstate-macros`](crates/xstate-macros) | `#[derive(TypedEvent)]`, `#[derive(TypedState)]` and the compile-time checked `statechart!` DSL |
 | [`xstate-axum`](crates/xstate-axum) | registry, REST / per-event routes, SSE and WebSocket streaming, problem details, idempotency, Stately Inspector endpoint |
-| [`xsm`](crates/xsm) | command-line tool: validate, inspect, diagram, docs, simulate, paths, snapshots |
+| [`xstate-agents`](crates/xstate-agents) | LLM agents as statecharts: tool-loop chart, budgets as guards, tool registry with allow-lists and approvals, runner, trace, multi-agent helpers |
+| [`xsm`](crates/xsm) | command-line tool: validate, inspect (`--live`), diagram, docs, simulate, paths, snapshots, replay |
 
-Feature flags: `xstate-persistence/redis` (`RedisStore`, `RedisInbox`, `RedisLog`) and
-`xstate-eda/redis-streams` (`RedisStreamsBroker`) target a Redis shared with the Python library.
-Planned for later phases: sqlx stores, Kafka / RabbitMQ / NATS / SQS adapters, `xstate-agents`,
-`xstate-py`.
+Feature flags: `xstate-persistence/{redis,postgres}` (`RedisStore` / `PostgresStore` with inbox
+and log) and `xstate-eda/{redis-streams,nats,rabbitmq}` broker adapters, all sharing their
+layouts and wire formats with the Python library. Planned: Kafka and SQS adapters, `xstate-py`.
 
 ## Conformance
 
