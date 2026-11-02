@@ -10,6 +10,8 @@ members = [
     "crates/xstate-observability",
     "crates/xstate-eda",
     "crates/xstate-patterns",
+    "crates/xstate-macros",
+    "crates/xstate-axum",
     "crates/xsm",
 ]
 
@@ -34,6 +36,8 @@ xstate-inspect = { path = "crates/xstate-inspect", version = "0.0.1" }
 xstate-observability = { path = "crates/xstate-observability", version = "0.0.1" }
 xstate-eda = { path = "crates/xstate-eda", version = "0.0.1" }
 xstate-patterns = { path = "crates/xstate-patterns", version = "0.0.1" }
+xstate-macros = { path = "crates/xstate-macros", version = "0.0.1" }
+xstate-axum = { path = "crates/xstate-axum", version = "0.0.1" }
 
 # core
 serde = { version = "1.0", features = ["derive"] }
@@ -53,6 +57,7 @@ tokio = { version = "1.40", default-features = false }
 
 # persistence
 rusqlite = { version = "0.33", features = ["bundled"] }
+redis = { version = "0.32", default-features = false, features = ["tokio-comp", "connection-manager"] }
 fd-lock = "4.0"
 rand = "0.9"
 tempfile = "3.14"
@@ -63,6 +68,19 @@ clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"
 owo-colors = "4.1"
 is-terminal = "0.4"
+
+# http
+axum = { version = "0.8", features = ["ws", "json", "macros"] }
+tower = { version = "0.5", features = ["util"] }
+http = "1.3"
+http-body-util = "0.1"
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+# proc-macros
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+quote = "1.0"
+proc-macro2 = "1.0"
 
 # observability
 metrics = "0.24"
