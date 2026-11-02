@@ -1,0 +1,156 @@
+{
+  "id": "order_plain",
+  "initial": "steps",
+  "context": {
+    "results": {},
+    "compensated": [],
+    "error": null,
+    "input": null
+  },
+  "states": {
+    "steps": {
+      "initial": "reserve",
+      "states": {
+        "reserve": {
+          "invoke": {
+            "id": "reserve",
+            "src": "reserveStock",
+            "onDone": {
+              "target": "#order_plain.steps.charge",
+              "actions": [
+                {
+                  "type": "sagaRecord",
+                  "params": {
+                    "step": "reserve"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_plain.reserve.completed"
+                }
+              }
+            },
+            "onError": {
+              "target": "#order_plain.failed",
+              "actions": [
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "reserve",
+                    "reason": "error"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_plain.reserve.failed"
+                }
+              }
+            }
+          }
+        },
+        "charge": {
+          "invoke": {
+            "id": "charge",
+            "src": "chargeCard",
+            "onDone": {
+              "target": "#order_plain.steps.ship",
+              "actions": [
+                {
+                  "type": "sagaRecord",
+                  "params": {
+                    "step": "charge"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_plain.charge.completed"
+                }
+              }
+            },
+            "onError": {
+              "target": "#order_plain.failed",
+              "actions": [
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "charge",
+                    "reason": "error"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_plain.charge.failed"
+                }
+              }
+            }
+          }
+        },
+        "ship": {
+          "invoke": {
+            "id": "ship",
+            "src": "shipOrder",
+            "onDone": {
+              "target": "#order_plain.completed",
+              "actions": [
+                {
+                  "type": "sagaRecord",
+                  "params": {
+                    "step": "ship"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_plain.ship.completed"
+                }
+              }
+            },
+            "onError": {
+              "target": "#order_plain.failed",
+              "actions": [
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "ship",
+                    "reason": "error"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_plain.ship.failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "completed": {
+      "type": "final",
+      "tags": [
+        "publish"
+      ]
+    },
+    "failed": {
+      "type": "final",
+      "tags": [
+        "publish"
+      ],
+      "entry": [
+        "notifyOps"
+      ]
+    },
+    "compensationFailed": {
+      "type": "final",
+      "tags": [
+        "dead-letter",
+        "publish"
+      ]
+    }
+  }
+}

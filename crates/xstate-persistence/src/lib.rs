@@ -41,7 +41,7 @@ pub use log::{
 };
 pub use memory_store::MemoryStore;
 pub use migration::{MigrationError, SnapshotMigrator};
-pub use receipts::{ReceiptErrorKind, ReceiptJson, receipt_to_status};
+pub use receipts::{ReceiptError, ReceiptErrorKind, ReceiptFlags, ReceiptJson, receipt_to_status};
 #[cfg(feature = "sqlite")]
 pub use sqlite_store::{JournalMode, SqliteStore, SqliteStoreOptions};
 pub use store::{

@@ -1691,6 +1691,7 @@ dependencies = [
  "tracing",
  "xstate-core",
  "xstate-eda",
+ "xstate-persistence",
 ]
 
 [[package]]

@@ -1,0 +1,353 @@
+{
+  "id": "order_timeouts",
+  "initial": "idle",
+  "context": {
+    "results": {},
+    "compensated": [],
+    "error": null,
+    "attempt_charge_card": 0,
+    "input": null
+  },
+  "states": {
+    "idle": {
+      "on": {
+        "ORDER_PLACED": {
+          "target": "steps",
+          "actions": [
+            "sagaStart"
+          ]
+        }
+      }
+    },
+    "steps": {
+      "initial": "reserve_stock",
+      "states": {
+        "reserve_stock": {
+          "invoke": {
+            "id": "reserve_stock",
+            "src": "reserveStock",
+            "onDone": {
+              "target": "#order_timeouts.steps.verify",
+              "actions": [
+                {
+                  "type": "sagaRecord",
+                  "params": {
+                    "step": "reserve_stock"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_timeouts.reserve_stock.completed"
+                }
+              }
+            },
+            "onError": {
+              "target": "#order_timeouts.failed",
+              "actions": [
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "reserve_stock",
+                    "reason": "error"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_timeouts.reserve_stock.failed"
+                }
+              }
+            }
+          },
+          "after": {
+            "5000": {
+              "target": "#order_timeouts.failed",
+              "actions": [
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "reserve_stock",
+                    "reason": "timeout"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_timeouts.reserve_stock.failed"
+                }
+              }
+            }
+          }
+        },
+        "verify": {
+          "invoke": {
+            "id": "verify",
+            "src": "verifyFraud",
+            "onDone": {
+              "target": "#order_timeouts.steps.charge_card",
+              "actions": [
+                {
+                  "type": "sagaRecord",
+                  "params": {
+                    "step": "verify"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_timeouts.verify.completed"
+                }
+              }
+            },
+            "onError": {
+              "target": "#order_timeouts.compensating.reserve_stock",
+              "actions": [
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "verify",
+                    "reason": "error"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_timeouts.verify.failed"
+                }
+              }
+            }
+          },
+          "after": {
+            "2500": {
+              "target": "#order_timeouts.compensating.reserve_stock",
+              "actions": [
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "verify",
+                    "reason": "timeout"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_timeouts.verify.failed"
+                }
+              }
+            }
+          }
+        },
+        "charge_card": {
+          "invoke": {
+            "id": "charge_card",
+            "src": "chargeCard",
+            "onDone": {
+              "target": "#order_timeouts.steps.ship",
+              "actions": [
+                {
+                  "type": "sagaRecord",
+                  "params": {
+                    "step": "charge_card"
+                  }
+                },
+                "chargeCardRetryReset"
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_timeouts.charge_card.completed"
+                }
+              }
+            },
+            "onError": {
+              "target": "#order_timeouts.steps.charge_cardRetrying",
+              "actions": [
+                "chargeCardRetryBump",
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "charge_card",
+                    "reason": "error"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_timeouts.charge_card.failed"
+                }
+              }
+            }
+          },
+          "after": {
+            "10000": {
+              "target": "#order_timeouts.steps.charge_cardRetrying",
+              "actions": [
+                "chargeCardRetryBump",
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "charge_card",
+                    "reason": "timeout"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_timeouts.charge_card.failed"
+                }
+              }
+            }
+          }
+        },
+        "charge_cardRetrying": {
+          "after": {
+            "chargeCardRetryDelay": [
+              {
+                "guard": "chargeCardRetryCanRetry",
+                "target": "charge_card"
+              },
+              {
+                "target": "#order_timeouts.compensating.reserve_stock"
+              }
+            ]
+          }
+        },
+        "ship": {
+          "invoke": {
+            "id": "ship",
+            "src": "shipOrder",
+            "onDone": {
+              "target": "#order_timeouts.completed",
+              "actions": [
+                {
+                  "type": "sagaRecord",
+                  "params": {
+                    "step": "ship"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_timeouts.ship.completed"
+                }
+              }
+            },
+            "onError": {
+              "target": "#order_timeouts.compensating.charge_card",
+              "actions": [
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "ship",
+                    "reason": "error"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_timeouts.ship.failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "compensating": {
+      "initial": "charge_card",
+      "states": {
+        "charge_card": {
+          "invoke": {
+            "id": "compensate_charge_card",
+            "src": "refundCard",
+            "onDone": {
+              "target": "#order_timeouts.compensating.reserve_stock",
+              "actions": [
+                {
+                  "type": "sagaCompensated",
+                  "params": {
+                    "step": "charge_card"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_timeouts.charge_card.compensated"
+                }
+              }
+            },
+            "onError": {
+              "target": "#order_timeouts.compensationFailed",
+              "actions": [
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "charge_card",
+                    "reason": "compensation"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "reserve_stock": {
+          "invoke": {
+            "id": "compensate_reserve_stock",
+            "src": "releaseStock",
+            "onDone": {
+              "target": "#order_timeouts.failed",
+              "actions": [
+                {
+                  "type": "sagaCompensated",
+                  "params": {
+                    "step": "reserve_stock"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_timeouts.reserve_stock.compensated"
+                }
+              }
+            },
+            "onError": {
+              "target": "#order_timeouts.compensationFailed",
+              "actions": [
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "reserve_stock",
+                    "reason": "compensation"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "completed": {
+      "type": "final",
+      "tags": [
+        "publish"
+      ]
+    },
+    "failed": {
+      "type": "final",
+      "tags": [
+        "publish"
+      ],
+      "entry": [
+        "notifyOps",
+        "pageOncall"
+      ]
+    },
+    "compensationFailed": {
+      "type": "final",
+      "tags": [
+        "dead-letter",
+        "publish"
+      ]
+    }
+  }
+}

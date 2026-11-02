@@ -1,0 +1,258 @@
+{
+  "id": "order_retry",
+  "initial": "steps",
+  "context": {
+    "results": {},
+    "compensated": [],
+    "error": null,
+    "attempt_reserve_stock": 0,
+    "attempt_ship": 0,
+    "input": null
+  },
+  "states": {
+    "steps": {
+      "initial": "reserve_stock",
+      "states": {
+        "reserve_stock": {
+          "invoke": {
+            "id": "reserve_stock",
+            "src": "reserveStock",
+            "onDone": {
+              "target": "#order_retry.steps.charge_card",
+              "actions": [
+                {
+                  "type": "sagaRecord",
+                  "params": {
+                    "step": "reserve_stock"
+                  }
+                },
+                "reserveStockRetryReset"
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_retry.reserve_stock.completed"
+                }
+              }
+            },
+            "onError": {
+              "target": "#order_retry.steps.reserve_stockRetrying",
+              "actions": [
+                "reserveStockRetryBump",
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "reserve_stock",
+                    "reason": "error"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_retry.reserve_stock.failed"
+                }
+              }
+            }
+          }
+        },
+        "reserve_stockRetrying": {
+          "after": {
+            "reserveStockRetryDelay": [
+              {
+                "guard": "reserveStockRetryCanRetry",
+                "target": "reserve_stock"
+              },
+              {
+                "target": "#order_retry.failed"
+              }
+            ]
+          }
+        },
+        "charge_card": {
+          "invoke": {
+            "id": "charge_card",
+            "src": "chargeCard",
+            "onDone": {
+              "target": "#order_retry.steps.ship",
+              "actions": [
+                {
+                  "type": "sagaRecord",
+                  "params": {
+                    "step": "charge_card"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_retry.charge_card.completed"
+                }
+              }
+            },
+            "onError": {
+              "target": "#order_retry.compensating.reserve_stock",
+              "actions": [
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "charge_card",
+                    "reason": "error"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_retry.charge_card.failed"
+                }
+              }
+            }
+          }
+        },
+        "ship": {
+          "invoke": {
+            "id": "ship",
+            "src": "shipOrder",
+            "onDone": {
+              "target": "#order_retry.completed",
+              "actions": [
+                {
+                  "type": "sagaRecord",
+                  "params": {
+                    "step": "ship"
+                  }
+                },
+                "shipRetryReset"
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_retry.ship.completed"
+                }
+              }
+            },
+            "onError": {
+              "target": "#order_retry.steps.shipRetrying",
+              "actions": [
+                "shipRetryBump",
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "ship",
+                    "reason": "error"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_retry.ship.failed"
+                }
+              }
+            }
+          }
+        },
+        "shipRetrying": {
+          "after": {
+            "shipRetryDelay": [
+              {
+                "guard": "shipRetryCanRetry",
+                "target": "ship"
+              },
+              {
+                "target": "#order_retry.compensating.charge_card"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "compensating": {
+      "initial": "charge_card",
+      "states": {
+        "charge_card": {
+          "invoke": {
+            "id": "compensate_charge_card",
+            "src": "refundCard",
+            "onDone": {
+              "target": "#order_retry.compensating.reserve_stock",
+              "actions": [
+                {
+                  "type": "sagaCompensated",
+                  "params": {
+                    "step": "charge_card"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_retry.charge_card.compensated"
+                }
+              }
+            },
+            "onError": {
+              "target": "#order_retry.compensationFailed",
+              "actions": [
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "charge_card",
+                    "reason": "compensation"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "reserve_stock": {
+          "invoke": {
+            "id": "compensate_reserve_stock",
+            "src": "releaseStock",
+            "onDone": {
+              "target": "#order_retry.failed",
+              "actions": [
+                {
+                  "type": "sagaCompensated",
+                  "params": {
+                    "step": "reserve_stock"
+                  }
+                }
+              ],
+              "meta": {
+                "publish": {
+                  "type": "order_retry.reserve_stock.compensated"
+                }
+              }
+            },
+            "onError": {
+              "target": "#order_retry.compensationFailed",
+              "actions": [
+                {
+                  "type": "sagaFail",
+                  "params": {
+                    "step": "reserve_stock",
+                    "reason": "compensation"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "completed": {
+      "type": "final",
+      "tags": [
+        "publish"
+      ]
+    },
+    "failed": {
+      "type": "final",
+      "tags": [
+        "publish"
+      ]
+    },
+    "compensationFailed": {
+      "type": "final",
+      "tags": [
+        "dead-letter",
+        "publish"
+      ]
+    }
+  }
+}

@@ -1,0 +1,137 @@
+{
+  "record": {
+    "dict": {
+      "machine_id": "order",
+      "state_id": "order.dead",
+      "event": {
+        "type": "PAY",
+        "payload": {
+          "n": 1,
+          "token": "***"
+        }
+      },
+      "attempts": 3,
+      "errors": [
+        {
+          "source": "service",
+          "name": "charge",
+          "type": "RuntimeError",
+          "message": "declined \u00e9"
+        }
+      ],
+      "snapshot": {
+        "context": {
+          "total": 1
+        }
+      },
+      "taken_at": 1700000000.25,
+      "id": "rec-1",
+      "reason": "max_attempts",
+      "envelope": {
+        "id": "rec-1",
+        "type": "xsm.order.PAY"
+      },
+      "topic": "orders",
+      "machine_hash": "abcdef0123456789",
+      "machine_version": "1.2.0",
+      "resolved_at": null
+    },
+    "json": "{\"attempts\": 3, \"envelope\": {\"id\": \"rec-1\", \"type\": \"xsm.order.PAY\"}, \"errors\": [{\"message\": \"declined \\u00e9\", \"name\": \"charge\", \"source\": \"service\", \"type\": \"RuntimeError\"}], \"event\": {\"payload\": {\"n\": 1, \"token\": \"***\"}, \"type\": \"PAY\"}, \"id\": \"rec-1\", \"machine_hash\": \"abcdef0123456789\", \"machine_id\": \"order\", \"machine_version\": \"1.2.0\", \"reason\": \"max_attempts\", \"resolved_at\": null, \"snapshot\": {\"context\": {\"total\": 1}}, \"state_id\": \"order.dead\", \"taken_at\": 1700000000.25, \"topic\": \"orders\"}"
+  },
+  "dispatcher": [
+    {
+      "outcomes": [
+        [
+          "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+          "dead_lettered:unknown_event"
+        ]
+      ],
+      "record": {
+        "machine_id": "?",
+        "state_id": "",
+        "event": {
+          "type": "xsm.other.GO",
+          "payload": {
+            "password": "***",
+            "n": 1
+          }
+        },
+        "attempts": 1,
+        "errors": [
+          {
+            "source": "dispatcher",
+            "name": "unknown_event",
+            "type": "LookupError",
+            "message": "no machine handles type 'xsm.other.GO'"
+          }
+        ],
+        "snapshot": {},
+        "taken_at": 0.0,
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "reason": "unknown_event",
+        "envelope": {
+          "specversion": "1.0",
+          "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+          "type": "xsm.other.GO",
+          "source": "xsm/other",
+          "subject": "o-1",
+          "time": "2024-07-01T12:00:00.123456Z",
+          "datacontenttype": "application/json",
+          "data": {
+            "password": "***",
+            "n": 1
+          }
+        },
+        "topic": "orders",
+        "machine_hash": null,
+        "machine_version": null,
+        "resolved_at": null
+      }
+    },
+    {
+      "outcomes": [
+        [
+          "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0c",
+          "dead_lettered:corrupt"
+        ]
+      ],
+      "record": {
+        "machine_id": "?",
+        "state_id": "",
+        "event": {
+          "type": "xsm.order.PAY",
+          "payload": {}
+        },
+        "attempts": 1,
+        "errors": [
+          {
+            "source": "dispatcher",
+            "name": "corrupt",
+            "type": "EnvelopeCorruptError",
+            "message": "envelope data must be a JSON object to become an event payload, got list"
+          }
+        ],
+        "snapshot": {},
+        "taken_at": 0.0,
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0c",
+        "reason": "corrupt",
+        "envelope": {
+          "specversion": "1.0",
+          "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0c",
+          "type": "xsm.order.PAY",
+          "source": "xsm/order",
+          "subject": "o-2",
+          "datacontenttype": "application/json",
+          "data": [
+            1,
+            2
+          ]
+        },
+        "topic": "orders",
+        "machine_hash": null,
+        "machine_version": null,
+        "resolved_at": null
+      }
+    }
+  ]
+}

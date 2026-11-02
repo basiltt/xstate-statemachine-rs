@@ -1,0 +1,61 @@
+{
+  "id": "circuitBreaker",
+  "version": "1",
+  "initial": "closed",
+  "context": {
+    "failures": 0,
+    "failure_threshold": 5,
+    "half_open_calls": 0,
+    "half_open_max_calls": 1,
+    "opened_count": 0
+  },
+  "states": {
+    "closed": {
+      "description": "Calls pass through; consecutive failures counted.",
+      "entry": "resetFailures",
+      "on": {
+        "SUCCESS": {
+          "actions": "resetFailures"
+        },
+        "FAILURE": [
+          {
+            "guard": "thresholdReached",
+            "target": "open",
+            "actions": "countFailure"
+          },
+          {
+            "actions": "countFailure"
+          }
+        ]
+      }
+    },
+    "open": {
+      "description": "Calls fail fast; waiting out the cooldown.",
+      "tags": [
+        "rejecting"
+      ],
+      "entry": "countOpen",
+      "after": {
+        "cooldown": {
+          "target": "half_open"
+        }
+      }
+    },
+    "half_open": {
+      "description": "A bounded number of probe calls is admitted.",
+      "entry": "resetProbes",
+      "on": {
+        "PROBE": {
+          "guard": "probeAvailable",
+          "actions": "countProbe"
+        },
+        "SUCCESS": {
+          "target": "closed"
+        },
+        "FAILURE": {
+          "target": "open"
+        }
+      }
+    }
+  }
+}

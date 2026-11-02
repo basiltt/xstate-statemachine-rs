@@ -1,0 +1,476 @@
+{
+  "full": {
+    "dict": {
+      "specversion": "1.0",
+      "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+      "type": "xsm.order.PAY",
+      "source": "xsm/order",
+      "subject": "order-42",
+      "time": "2024-07-01T12:00:00.123456Z",
+      "datacontenttype": "application/json",
+      "data": {
+        "total": 12.5,
+        "note": "caf\u00e9 \u65e5\u672c",
+        "items": [
+          1,
+          null
+        ]
+      },
+      "correlationid": "corr-1",
+      "causationid": "cause-1",
+      "machineid": "order",
+      "machineversion": "1.2.0",
+      "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+      "xsmattempt": 2,
+      "tenant": "t1"
+    },
+    "json": "{\"specversion\":\"1.0\",\"id\":\"0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b\",\"type\":\"xsm.order.PAY\",\"source\":\"xsm/order\",\"subject\":\"order-42\",\"time\":\"2024-07-01T12:00:00.123456Z\",\"datacontenttype\":\"application/json\",\"data\":{\"total\":12.5,\"note\":\"caf\\u00e9 \\u65e5\\u672c\",\"items\":[1,null]},\"correlationid\":\"corr-1\",\"causationid\":\"cause-1\",\"machineid\":\"order\",\"machineversion\":\"1.2.0\",\"traceparent\":\"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\",\"xsmattempt\":2,\"tenant\":\"t1\"}"
+  },
+  "minimal": {
+    "dict": {
+      "specversion": "1.0",
+      "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+      "type": "t",
+      "source": "s",
+      "datacontenttype": "application/json"
+    },
+    "json": "{\"specversion\":\"1.0\",\"id\":\"0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b\",\"type\":\"t\",\"source\":\"s\",\"datacontenttype\":\"application/json\"}"
+  },
+  "from_dict": [
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order"
+      },
+      "ok": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "datacontenttype": "application/json"
+      }
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "datacontenttype": null,
+        "subject": "s-1",
+        "data": null
+      },
+      "ok": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "subject": "s-1"
+      }
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "data": [
+          1,
+          2
+        ],
+        "tenant": "t1",
+        "flag": true,
+        "count": 3
+      },
+      "ok": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "datacontenttype": "application/json",
+        "data": [
+          1,
+          2
+        ],
+        "tenant": "t1",
+        "flag": true,
+        "count": 3
+      }
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order"
+      },
+      "ok": {
+        "specversion": "1.0",
+        "id": "<generated>",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "datacontenttype": "application/json"
+      }
+    },
+    {
+      "input": {
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "t",
+        "source": "s"
+      },
+      "error": "envelope attribute 'specversion' missing"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "type": "t",
+        "source": "s"
+      },
+      "error": "envelope attribute 'id' missing"
+    },
+    {
+      "input": {
+        "specversion": "2.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order"
+      },
+      "error": "unsupported specversion '2.0'"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "",
+        "source": "xsm/order"
+      },
+      "error": "envelope attribute 'type' must be a non-empty string"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": 5,
+        "source": "xsm/order"
+      },
+      "error": "envelope attribute 'type' must be a non-empty string"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "subject": 7
+      },
+      "error": "envelope attribute 'subject' must be a non-empty string"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "subject": ""
+      },
+      "ok": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "subject": "",
+        "datacontenttype": "application/json"
+      }
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "error": "envelope attribute 'source' exceeds 1024 characters"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "Tenant": "x"
+      },
+      "error": "invalid CloudEvents extension name 'Tenant' (lower-case letters/digits, at most 20)"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "authtoken": "x"
+      },
+      "error": "extension 'authtoken' looks credential-bearing; secrets never travel in envelope extensions (X0.8)"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "apikey": "x"
+      },
+      "error": "extension 'apikey' looks credential-bearing; secrets never travel in envelope extensions (X0.8)"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "tenant": 1.5
+      },
+      "error": "extension 'tenant' must be a string, integer or boolean"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "tenant": {
+          "a": 1
+        }
+      },
+      "error": "extension 'tenant' must be a string, integer or boolean"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "traceparent": "00-abc"
+      },
+      "error": "invalid W3C traceparent extension"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+      },
+      "ok": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "datacontenttype": "application/json",
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+      }
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "xsmattempt": -1
+      },
+      "error": "xsmattempt must be a non-negative integer"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "xsmattempt": true
+      },
+      "error": "xsmattempt must be a non-negative integer"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "xsmattempt": "2"
+      },
+      "error": "xsmattempt must be a non-negative integer"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "waytoolongextensionname1": "x"
+      },
+      "error": "invalid CloudEvents extension name 'waytoolongextensionname1' (lower-case letters/digits, at most 20)"
+    },
+    {
+      "input": {
+        "specversion": "1.0",
+        "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+        "type": "xsm.order.PAY",
+        "source": "xsm/order",
+        "data": {
+          "n": {
+            "n": {
+              "n": {
+                "n": {
+                  "n": {
+                    "n": {
+                      "n": {
+                        "n": {
+                          "n": {
+                            "n": {
+                              "n": {
+                                "n": {
+                                  "n": {
+                                    "n": {
+                                      "n": {
+                                        "n": {
+                                          "n": {
+                                            "n": {
+                                              "n": {
+                                                "n": {
+                                                  "n": {
+                                                    "n": {
+                                                      "n": {
+                                                        "n": {
+                                                          "n": {
+                                                            "n": {
+                                                              "n": {
+                                                                "n": {
+                                                                  "n": {
+                                                                    "n": {
+                                                                      "n": {
+                                                                        "n": {
+                                                                          "n": {
+                                                                            "n": {
+                                                                              "n": {
+                                                                                "n": {
+                                                                                  "n": {
+                                                                                    "n": {
+                                                                                      "n": {
+                                                                                        "n": {
+                                                                                          "n": {
+                                                                                            "n": {
+                                                                                              "n": {
+                                                                                                "n": {
+                                                                                                  "n": {
+                                                                                                    "n": {
+                                                                                                      "n": {
+                                                                                                        "n": {
+                                                                                                          "n": {
+                                                                                                            "n": {
+                                                                                                              "n": {
+                                                                                                                "n": {
+                                                                                                                  "n": {
+                                                                                                                    "n": {
+                                                                                                                      "n": {
+                                                                                                                        "n": {
+                                                                                                                          "n": {
+                                                                                                                            "n": {
+                                                                                                                              "n": {
+                                                                                                                                "n": {
+                                                                                                                                  "n": {
+                                                                                                                                    "n": {
+                                                                                                                                      "n": {
+                                                                                                                                        "n": {
+                                                                                                                                          "n": {
+                                                                                                                                            "n": {
+                                                                                                                                              "n": {
+                                                                                                                                                "n": {
+                                                                                                                                                  "n": {
+                                                                                                                                                    "n": {
+                                                                                                                                                      "a": 1
+                                                                                                                                                    }
+                                                                                                                                                  }
+                                                                                                                                                }
+                                                                                                                                              }
+                                                                                                                                            }
+                                                                                                                                          }
+                                                                                                                                        }
+                                                                                                                                      }
+                                                                                                                                    }
+                                                                                                                                  }
+                                                                                                                                }
+                                                                                                                              }
+                                                                                                                            }
+                                                                                                                          }
+                                                                                                                        }
+                                                                                                                      }
+                                                                                                                    }
+                                                                                                                  }
+                                                                                                                }
+                                                                                                              }
+                                                                                                            }
+                                                                                                          }
+                                                                                                        }
+                                                                                                      }
+                                                                                                    }
+                                                                                                  }
+                                                                                                }
+                                                                                              }
+                                                                                            }
+                                                                                          }
+                                                                                        }
+                                                                                      }
+                                                                                    }
+                                                                                  }
+                                                                                }
+                                                                              }
+                                                                            }
+                                                                          }
+                                                                        }
+                                                                      }
+                                                                    }
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "error": "envelope data is nested deeper than 64"
+    }
+  ],
+  "default_event_name": {
+    "xsm.order.PAY": "PAY",
+    "xsm.order": "xsm.order",
+    "xsm.order.": "xsm.order.",
+    "order.paid": "order.paid",
+    "xsm.a.b.c": "b.c",
+    "xsm..X": "X"
+  }
+}
