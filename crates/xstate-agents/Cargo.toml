@@ -1,0 +1,24 @@
+[package]
+name = "xstate-agents"
+description = "LLM agents as statecharts for xstate-core: the tool-loop chart, budgets as guards, tool registry with allow-lists and approvals, runner, trace and multi-agent helpers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+xstate-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

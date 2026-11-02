@@ -2312,6 +2312,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "xstate-agents"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "xstate-core",
+]
+
+[[package]]
 name = "xstate-axum"
 version = "0.0.1"
 dependencies = [
