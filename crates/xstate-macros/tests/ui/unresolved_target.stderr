@@ -1,0 +1,17 @@
+error: unknown target `opend` from `door.closed`: not a sibling (or a sibling of an ancestor); use `.child` for children or `#id.path` for any state
+ --> tests/ui/unresolved_target.rs:8:35
+  |
+8 |             closed { on { OPEN => opend, LOCK => #door.locked, PEEK => .inside } }
+  |                                   ^^^^^
+
+error: unknown target `#door.locked`: no state has the custom or full id `door.locked`
+ --> tests/ui/unresolved_target.rs:8:50
+  |
+8 |             closed { on { OPEN => opend, LOCK => #door.locked, PEEK => .inside } }
+  |                                                  ^^^^^^^^^^^^
+
+error: unknown target `.inside`: `door.closed` has no descendant `inside`
+ --> tests/ui/unresolved_target.rs:8:72
+  |
+8 |             closed { on { OPEN => opend, LOCK => #door.locked, PEEK => .inside } }
+  |                                                                        ^^^^^^^

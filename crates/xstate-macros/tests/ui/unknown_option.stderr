@@ -1,0 +1,5 @@
+error: unknown transition option `gaurd`; did you mean `guard`?
+ --> tests/ui/unknown_option.rs:8:43
+  |
+8 |             closed { on { OPEN => opened [gaurd: isUnlocked] } }
+  |                                           ^^^^^

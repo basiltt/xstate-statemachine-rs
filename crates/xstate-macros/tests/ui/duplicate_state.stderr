@@ -1,0 +1,5 @@
+error: duplicate state `closed`
+  --> tests/ui/duplicate_state.rs:10:13
+   |
+10 |             closed {}
+   |             ^^^^^^

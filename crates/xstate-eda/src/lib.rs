@@ -31,6 +31,8 @@ mod error;
 pub mod fake;
 pub mod outbox;
 mod py;
+#[cfg(feature = "redis-streams")]
+pub mod redis_streams;
 #[cfg(feature = "sqlite")]
 mod sqlite_util;
 
@@ -63,3 +65,5 @@ pub use outbox::{
     PUBLISH_TAG, PublishSource, PublishSpec, publish_specs,
 };
 pub use py::{WallClock, now_iso, wall_now};
+#[cfg(feature = "redis-streams")]
+pub use redis_streams::{RedisStreamsBroker, RedisStreamsOptions};

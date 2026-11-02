@@ -1,0 +1,23 @@
+error: event type `Open` is declared by more than one variant
+ --> tests/ui/derive_errors.rs:7:5
+  |
+7 |     AlsoOpen,
+  |     ^^^^^^^^
+
+error: a tuple variant carries exactly one payload value; use named fields for an object payload
+  --> tests/ui/derive_errors.rs:12:9
+   |
+12 |     Pair(u8, u8),
+   |         ^^^^^^^^
+
+error: no state id: add `#[state(id = "machine.path")]` here or `#[state(machine = "...")]` on the enum
+  --> tests/ui/derive_errors.rs:17:5
+   |
+17 |     Closed,
+   |     ^^^^^^
+
+error: unknown case convention `Train-Case`; expected "snake_case", "SCREAMING_SNAKE_CASE", "kebab-case", "camelCase" or "PascalCase"
+  --> tests/ui/derive_errors.rs:21:22
+   |
+21 | #[event(rename_all = "Train-Case")]
+   |                      ^^^^^^^^^^^^

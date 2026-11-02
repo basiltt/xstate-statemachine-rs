@@ -45,6 +45,7 @@ pub mod pure;
 pub mod pyjson;
 pub mod redact;
 pub mod snapshot;
+pub mod typed;
 
 pub use clock::{Clock, RealClock, SimulatedClock};
 pub use context::{Context, DynContext};
@@ -57,6 +58,7 @@ pub use logic::{ActionScope, AsyncServiceFn, MachineLogic, ServiceFuture, Servic
 pub use machine::Machine;
 pub use observer::{Observer, TracingObserver};
 pub use snapshot::Snapshot;
+pub use typed::{TypedEvent, TypedState};
 
 /// Snapshot layout version written and accepted by this engine.
 ///

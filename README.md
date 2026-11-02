@@ -10,7 +10,7 @@ This is the Rust port of the Python library
 snapshot format and store layouts (a Rust worker can resume an instance a Python worker saved),
 same CLI; built for speed with Rust's type system doing the checking.
 
-> **Status: Phases 1–4 landed — engine, persistence, observability, inspector, CLI and EDA.**
+> **Status: Phases 1–5 landed — engine, persistence, observability, inspector, CLI, EDA, typed DSL, HTTP and Redis.**
 > `xstate-core` parses XState v5 JSON, compiles it, and runs it with a synchronous
 > interpreter; `xstate-tokio` runs it as an async actor with timers, async services and child
 > actors; `xstate-persistence` saves and resumes instances in Python-compatible stores;
@@ -19,8 +19,10 @@ same CLI; built for speed with Rust's type system doing the checking.
 > envelopes, the inbound dispatcher, outbox, dead letters, AsyncAPI, retry, circuit breaker,
 > saga and choreography. The engine matches XState v5 on every conformance case and produces
 > Python-identical snapshots, structure hashes, inspector recordings, saga charts and AsyncAPI
-> documents. Remaining integrations (Redis/sqlx stores, broker adapters, typed DSL macros,
-> axum, agents, Python bindings) follow. See [`docs/feasibility-report.md`](docs/feasibility-report.md) and
+> documents; `xstate-macros` adds typed events, typed states and the `statechart!` DSL,
+> `xstate-axum` serves machines over REST, SSE and WebSocket, and Redis backends (store, inbox,
+> log, Streams broker) share their layout with Python. Remaining: sqlx stores, Kafka / RabbitMQ /
+> NATS / SQS adapters, agents, Python bindings. See [`docs/feasibility-report.md`](docs/feasibility-report.md) and
 > [`docs/adr/`](docs/adr/).
 
 ## Quick start
@@ -62,10 +64,14 @@ assert_eq!(door.state_ids(), ["door.opened"]);
 | [`xstate-observability`](crates/xstate-observability) | `metrics`-facade observer with the Python `PrometheusPlugin` metric set and label hygiene |
 | [`xstate-eda`](crates/xstate-eda) | CloudEvents envelopes, broker contract and fake broker, inbound dispatcher, transactional outbox, dead letters, AsyncAPI 3.0 |
 | [`xstate-patterns`](crates/xstate-patterns) | retry policy, circuit breaker, saga builder, choreography router |
+| [`xstate-macros`](crates/xstate-macros) | `#[derive(TypedEvent)]`, `#[derive(TypedState)]` and the compile-time checked `statechart!` DSL |
+| [`xstate-axum`](crates/xstate-axum) | registry, REST / per-event routes, SSE and WebSocket streaming, problem details, idempotency, Stately Inspector endpoint |
 | [`xsm`](crates/xsm) | command-line tool: validate, inspect, diagram, docs, simulate, paths, snapshots |
 
-Planned for later phases: broker adapters (Kafka, RabbitMQ, NATS, SQS, Redis Streams),
-`xstate-macros` (typed DSL), `xstate-axum`, `xstate-agents`, `xstate-py`.
+Feature flags: `xstate-persistence/redis` (`RedisStore`, `RedisInbox`, `RedisLog`) and
+`xstate-eda/redis-streams` (`RedisStreamsBroker`) target a Redis shared with the Python library.
+Planned for later phases: sqlx stores, Kafka / RabbitMQ / NATS / SQS adapters, `xstate-agents`,
+`xstate-py`.
 
 ## Conformance
 

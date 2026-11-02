@@ -1,0 +1,29 @@
+error: `initial` must name a child of `door` (closed, opened, broken)
+ --> tests/ui/shape_errors.rs:6:18
+  |
+6 |         initial: shut,
+  |                  ^^^^
+
+error: `onDone` is only valid on compound or parallel states
+ --> tests/ui/shape_errors.rs:9:17
+  |
+9 |                 onDone => opened,
+  |                 ^^^^^^
+
+error: `target` is only valid with `type: history`
+  --> tests/ui/shape_errors.rs:10:17
+   |
+10 |                 target: opened,
+   |                 ^^^^^^
+
+error: final states cannot have children
+  --> tests/ui/shape_errors.rs:13:23
+   |
+13 |                 type: final,
+   |                       ^^^^^
+
+error: `door.broken` has several children and needs `initial`
+  --> tests/ui/shape_errors.rs:16:13
+   |
+16 |             broken {
+   |             ^^^^^^

@@ -13,6 +13,7 @@ categories.workspace = true
 [features]
 default = ["sqlite"]
 sqlite = ["dep:rusqlite"]
+redis = ["dep:redis"]
 
 [dependencies]
 xstate-core = { workspace = true }
@@ -21,6 +22,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 rusqlite = { workspace = true, optional = true }
+redis = { workspace = true, features = ["script"], optional = true }
 fd-lock = { workspace = true }
 rand = { workspace = true }
 percent-encoding = { workspace = true }

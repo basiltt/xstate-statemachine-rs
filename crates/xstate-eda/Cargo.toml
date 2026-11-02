@@ -13,6 +13,7 @@ categories.workspace = true
 [features]
 default = ["sqlite"]
 sqlite = ["dep:rusqlite", "xstate-persistence/sqlite"]
+redis-streams = ["dep:redis", "dep:tokio"]
 
 [dependencies]
 xstate-core = { workspace = true }
@@ -23,10 +24,13 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 rusqlite = { workspace = true, optional = true }
+redis = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt"], optional = true }
 rand = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [lints]
 workspace = true

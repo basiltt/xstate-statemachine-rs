@@ -16,6 +16,8 @@ pub mod log;
 pub mod memory_store;
 pub mod migration;
 pub mod receipts;
+#[cfg(feature = "redis")]
+pub mod redis_backend;
 #[cfg(feature = "sqlite")]
 pub mod sqlite_store;
 pub mod store;
@@ -42,6 +44,8 @@ pub use log::{
 pub use memory_store::MemoryStore;
 pub use migration::{MigrationError, SnapshotMigrator};
 pub use receipts::{ReceiptError, ReceiptErrorKind, ReceiptFlags, ReceiptJson, receipt_to_status};
+#[cfg(feature = "redis")]
+pub use redis_backend::{DEFAULT_LOCK_TTL_MS, RedisInbox, RedisLog, RedisStore, RedisStoreOptions};
 #[cfg(feature = "sqlite")]
 pub use sqlite_store::{JournalMode, SqliteStore, SqliteStoreOptions};
 pub use store::{

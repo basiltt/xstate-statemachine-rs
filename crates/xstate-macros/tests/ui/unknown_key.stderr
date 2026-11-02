@@ -1,0 +1,5 @@
+error: unknown key `on_done`; did you mean `onDone`?
+ --> tests/ui/unknown_key.rs:8:22
+  |
+8 |             closed { on_done => opened }
+  |                      ^^^^^^^
