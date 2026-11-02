@@ -1,0 +1,25 @@
+[package]
+name = "xstate-py"
+description = "Python bindings for the xstate-core engine (PyO3): the Python library's API backed by the Rust engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[lib]
+name = "xstate_rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+xstate-core = { workspace = true }
+xstate-persistence = { workspace = true, default-features = false }
+pyo3 = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

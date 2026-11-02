@@ -1,0 +1,17 @@
+[package]
+name = "xstate-statemachine"
+description = "XState v5 / SCXML statecharts for Rust: one facade crate re-exporting the engine, async runtime, persistence, EDA, patterns, observability, inspector and typed DSL behind feature flags"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+xstate-core = { workspace = true }
+
+[lints]
+workspace = true
