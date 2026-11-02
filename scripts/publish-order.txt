@@ -1,0 +1,30 @@
+# Publish order for the workspace: every crate comes after the crates it depends on.
+# One crate name per line; blank lines and `#` comments are ignored. scripts/publish.sh reads
+# this file. Not listed on purpose: xstate-conformance and xstate-py (`publish = false`).
+
+# the engine: no workspace dependencies
+xstate-core
+
+# crates that depend on xstate-core only (any order among themselves)
+xstate-macros
+xstate-tokio
+xstate-persistence
+xstate-testing
+xstate-inspect
+xstate-observability
+xstate-agents
+
+# xstate-persistence
+xstate-eda
+
+# xstate-core + xstate-eda + xstate-persistence
+xstate-patterns
+
+# xstate-core + xstate-persistence + xstate-inspect
+xstate-axum
+
+# the facade: every library crate behind a feature
+xstate-statemachine
+
+# the CLI (binary `xsm`; the name `xsm` is taken on crates.io): xstate-core + xstate-persistence + xstate-inspect
+xstate-statemachine-cli

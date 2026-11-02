@@ -19,7 +19,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -31,18 +31,20 @@ categories = ["data-structures", "asynchronous", "simulation"]
 
 [workspace.dependencies]
 # internal crates
-xstate-core = { path = "crates/xstate-core", version = "0.0.1" }
-xstate-tokio = { path = "crates/xstate-tokio", version = "0.0.1" }
-xstate-persistence = { path = "crates/xstate-persistence", version = "0.0.1" }
-xstate-testing = { path = "crates/xstate-testing", version = "0.0.1" }
-xstate-inspect = { path = "crates/xstate-inspect", version = "0.0.1" }
-xstate-observability = { path = "crates/xstate-observability", version = "0.0.1" }
-xstate-eda = { path = "crates/xstate-eda", version = "0.0.1" }
-xstate-patterns = { path = "crates/xstate-patterns", version = "0.0.1" }
-xstate-macros = { path = "crates/xstate-macros", version = "0.0.1" }
-xstate-axum = { path = "crates/xstate-axum", version = "0.0.1" }
-xstate-agents = { path = "crates/xstate-agents", version = "0.0.1" }
-xstate-statemachine = { path = "crates/xstate-statemachine", version = "0.0.1" }
+xstate-core = { path = "crates/xstate-core", version = "0.1.0" }
+xstate-tokio = { path = "crates/xstate-tokio", version = "0.1.0" }
+# default-features = false: member crates opt in (xsm enables `sqlite`); with the key absent here, a
+# member's `default-features = false` is an error on cargo 1.88 (the MSRV).
+xstate-persistence = { path = "crates/xstate-persistence", version = "0.1.0", default-features = false }
+xstate-testing = { path = "crates/xstate-testing", version = "0.1.0" }
+xstate-inspect = { path = "crates/xstate-inspect", version = "0.1.0" }
+xstate-observability = { path = "crates/xstate-observability", version = "0.1.0" }
+xstate-eda = { path = "crates/xstate-eda", version = "0.1.0", default-features = false }
+xstate-patterns = { path = "crates/xstate-patterns", version = "0.1.0" }
+xstate-macros = { path = "crates/xstate-macros", version = "0.1.0" }
+xstate-axum = { path = "crates/xstate-axum", version = "0.1.0" }
+xstate-agents = { path = "crates/xstate-agents", version = "0.1.0" }
+xstate-statemachine = { path = "crates/xstate-statemachine", version = "0.1.0" }
 
 # core
 serde = { version = "1.0", features = ["derive"] }
@@ -66,10 +68,10 @@ redis = { version = "0.32", default-features = false, features = ["tokio-comp", 
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "json", "chrono"] }
 
 # brokers
-async-nats = "0.44"
+async-nats = "0.50"
 lapin = "3.6"
-aws-config = { version = "1.8", default-features = false, features = ["behavior-version-latest", "rt-tokio", "rustls"] }
-aws-sdk-sqs = { version = "1.93", default-features = false, features = ["rt-tokio", "rustls"] }
+aws-config = { version = "1.8", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client"] }
+aws-sdk-sqs = { version = "1.93", default-features = false, features = ["rt-tokio", "default-https-client"] }
 
 # python bindings
 pyo3 = { version = "0.30", features = ["extension-module", "abi3-py39"] }

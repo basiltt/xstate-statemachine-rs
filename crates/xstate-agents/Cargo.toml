@@ -1,6 +1,7 @@
 [package]
 name = "xstate-agents"
 description = "LLM agents as statecharts for xstate-core: the tool-loop chart, budgets as guards, tool registry with allow-lists and approvals, runner, trace and multi-agent helpers"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

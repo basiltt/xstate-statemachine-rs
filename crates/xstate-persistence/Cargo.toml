@@ -1,6 +1,7 @@
 [package]
 name = "xstate-persistence"
 description = "Stores, locks, durable timers, idempotency and audit log for xstate-core machines (Python-compatible snapshot layout v4)"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +9,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 keywords.workspace = true
-categories.workspace = true
+categories = ["database", "data-structures"]
 
 [features]
 default = ["sqlite"]

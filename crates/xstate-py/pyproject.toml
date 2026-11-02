@@ -1,0 +1,28 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "xstate-rs"
+description = "The xstate-statemachine Python API running on the Rust engine (xstate-core)"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Basil T T" }]
+keywords = ["statechart", "state-machine", "xstate", "scxml", "fsm"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Typing :: Typed",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.maturin]
+manifest-path = "Cargo.toml"
+python-source = "python"
+module-name = "xstate_rs.xstate_rs"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -21,7 +21,7 @@
 
 #![forbid(unsafe_code)]
 
-#[cfg(any(feature = "nats", feature = "rabbitmq"))]
+#[cfg(any(feature = "nats", feature = "rabbitmq", feature = "sqs"))]
 mod async_core;
 pub mod asyncapi;
 pub mod broker;
@@ -41,6 +41,8 @@ pub mod rabbitmq;
 pub mod redis_streams;
 #[cfg(feature = "sqlite")]
 mod sqlite_util;
+#[cfg(feature = "sqs")]
+pub mod sqs;
 
 pub use asyncapi::{
     ASYNCAPI_VERSION, AsyncApiOptions, asyncapi_document, consumed_events, load_asyncapi_schema,
@@ -77,3 +79,5 @@ pub use py::{WallClock, now_iso, wall_now};
 pub use rabbitmq::{RabbitMqBroker, RabbitMqOptions};
 #[cfg(feature = "redis-streams")]
 pub use redis_streams::{RedisStreamsBroker, RedisStreamsOptions};
+#[cfg(feature = "sqs")]
+pub use sqs::{SqsBroker, SqsOptions};

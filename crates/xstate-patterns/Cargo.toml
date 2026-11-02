@@ -1,6 +1,7 @@
 [package]
 name = "xstate-patterns"
 description = "Resilience patterns for xstate-core machines: retry policies, circuit breaker, saga builder, choreography router"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

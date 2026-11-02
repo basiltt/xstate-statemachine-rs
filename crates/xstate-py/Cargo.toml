@@ -14,12 +14,18 @@ publish = false
 [lib]
 name = "xstate_rs"
 crate-type = ["cdylib", "rlib"]
+# With pyo3's `extension-module` feature a test harness cannot link libpython on Linux / macOS
+# (the symbols come from the host interpreter at import time). The bindings are tested from
+# Python instead: `pytest crates/xstate-py/tests` after `maturin develop`.
+test = false
+doctest = false
 
 [dependencies]
 xstate-core = { workspace = true }
 xstate-persistence = { workspace = true, default-features = false }
 pyo3 = { workspace = true }
 serde_json = { workspace = true }
+smol_str = { workspace = true }
 
 [lints]
 workspace = true

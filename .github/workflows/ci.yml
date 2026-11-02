@@ -64,7 +64,103 @@ jobs:
         with:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace --all-features --locked
+      # `postgres` (sqlx 0.9) needs Rust 1.94; every other feature honours the 1.88 MSRV.
+      - run: cargo check --workspace --locked
+      - run: cargo check -p xstate-statemachine --locked --features "tokio,sqlite,redis,eda,redis-streams,nats,rabbitmq,sqs,patterns,observability,inspect,macros,axum,agents,testing"
+
+  integration:
+    name: integration (redis, postgres, nats, rabbitmq, sqs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Real servers for the backend tests. Without them those tests print "skipping `...`: no ..."
+    # and pass, so the run is failed below if any of them skipped for a missing service.
+    services:
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: xsm
+          POSTGRES_PASSWORD: xsm
+          POSTGRES_DB: xsm
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U xsm -d xsm"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      rabbitmq:
+        image: rabbitmq:3
+        # `guest` may only connect from localhost inside the container, hence a dedicated user.
+        env:
+          RABBITMQ_DEFAULT_USER: xsm
+          RABBITMQ_DEFAULT_PASS: xsm
+        ports: ["5672:5672"]
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s --health-timeout 5s --health-retries 12
+      elasticmq:
+        image: softwaremill/elasticmq-native
+        ports: ["9324:9324"]
+    env:
+      XSM_REDIS_URL: redis://127.0.0.1:6379/
+      XSM_POSTGRES_URL: postgres://xsm:xsm@127.0.0.1:5432/xsm
+      XSM_NATS_URL: nats://127.0.0.1:4222
+      XSM_AMQP_URL: amqp://xsm:xsm@127.0.0.1:5672/%2f
+      XSM_SQS_ENDPOINT: http://127.0.0.1:9324
+      XSM_PYTHON: ${{ github.workspace }}/.venv-py/bin/python
+    steps:
+      - uses: actions/checkout@v4
+      # `services:` cannot pass arguments to the container command, and NATS needs `-js`
+      # (JetStream), so this one is started by hand.
+      - name: Start NATS with JetStream
+        run: docker run -d --name nats -p 4222:4222 nats:2 -js
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The cross-language tests (Rust writes, Python reads, and back) need the Python library.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install the Python library for the cross-language tests
+        run: |
+          python -m venv .venv-py
+          .venv-py/bin/python -m pip install --upgrade pip
+          .venv-py/bin/python -m pip install \
+            "xstate-statemachine[redis,sqlalchemy,nats,rabbitmq,sqs]==0.12.0" "psycopg[binary]"
+      - name: Wait for the services
+        run: |
+          for port in 6379 5432 4222 5672 9324; do
+            for _ in $(seq 1 60); do
+              (echo >"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break
+              sleep 2
+            done
+            (echo >"/dev/tcp/127.0.0.1/$port") 2>/dev/null || { echo "port $port is not up"; exit 1; }
+          done
+      - name: Test the workspace with every backend
+        run: |
+          set -o pipefail
+          cargo test --workspace --all-features --locked -- --nocapture 2>&1 | tee test.log
+      - name: Fail if a backend test skipped for a missing service
+        run: |
+          if grep -E 'skipping `[^`]+`: no ' test.log; then
+            echo "::error::a backend test was skipped because its service was unreachable"
+            exit 1
+          fi
+
+  bench-gate:
+    name: benchmarks build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Compiles every criterion benchmark so they cannot rot; benches/budgets.json is the
+      # reference for the (relative) perf gate that runs them.
+      - run: cargo bench --workspace --benches --no-run --locked
+      - name: budgets.json is valid JSON
+        run: node -e 'JSON.parse(require("fs").readFileSync("benches/budgets.json", "utf8"))'
 
   docs:
     name: rustdoc
@@ -82,7 +178,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          command: check advisories licenses bans sources
+          command: check
 
   audit:
     name: cargo-audit

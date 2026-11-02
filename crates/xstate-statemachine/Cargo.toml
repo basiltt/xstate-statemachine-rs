@@ -7,11 +7,85 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
+readme = "README.md"
+
+# The feature set mirrors the extras of the Python library (`pip install
+# "xstate-statemachine[redis]"` ~ `features = ["redis"]`). The core engine has no optional
+# part: it is always present, exactly as the Python core has zero runtime dependencies.
+[features]
+default = []
+
+# async runtime
+tokio = ["dep:xstate-tokio"]
+
+# persistence: `persistence` is the contract, memory / file stores, locks, durable timers,
+# the idempotency inbox and the transition log; the rest add a backend.
+persistence = ["dep:xstate-persistence"]
+sqlite = ["persistence", "xstate-persistence/sqlite", "xstate-eda?/sqlite"]
+redis = ["persistence", "xstate-persistence/redis"]
+postgres = ["persistence", "xstate-persistence/postgres"]
+
+# event-driven architecture: `eda` is the envelope, dispatcher, outbox, dead letters and
+# AsyncAPI over the in-memory broker; the rest add a broker adapter.
+eda = ["dep:xstate-eda", "persistence"]
+redis-streams = ["eda", "xstate-eda/redis-streams"]
+nats = ["eda", "xstate-eda/nats"]
+rabbitmq = ["eda", "xstate-eda/rabbitmq"]
+sqs = ["eda", "xstate-eda/sqs"]
+
+# everything else
+patterns = ["dep:xstate-patterns", "eda"]
+observability = ["dep:xstate-observability"]
+inspect = ["dep:xstate-inspect"]
+macros = ["dep:xstate-macros"]
+axum = ["dep:xstate-axum", "persistence", "inspect"]
+agents = ["dep:xstate-agents"]
+testing = ["dep:xstate-testing"]
+
+# every feature that is not a platform-specific backend choice
+full = [
+    "tokio",
+    "persistence",
+    "sqlite",
+    "redis",
+    "postgres",
+    "eda",
+    "redis-streams",
+    "nats",
+    "rabbitmq",
+    "sqs",
+    "patterns",
+    "observability",
+    "inspect",
+    "macros",
+    "axum",
+    "agents",
+    "testing",
+]
 
 [dependencies]
 xstate-core = { workspace = true }
+xstate-tokio = { workspace = true, optional = true }
+xstate-persistence = { workspace = true, optional = true, default-features = false }
+xstate-eda = { workspace = true, optional = true, default-features = false }
+xstate-patterns = { workspace = true, optional = true }
+xstate-observability = { workspace = true, optional = true }
+xstate-inspect = { workspace = true, optional = true }
+xstate-macros = { workspace = true, optional = true }
+xstate-axum = { workspace = true, optional = true }
+xstate-agents = { workspace = true, optional = true }
+xstate-testing = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lints]
 workspace = true

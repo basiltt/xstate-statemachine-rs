@@ -1,6 +1,7 @@
 [package]
 name = "xstate-eda"
 description = "Event-driven architecture for xstate-core machines: CloudEvents envelopes, broker adapters, inbound dispatcher, transactional outbox, dead-letter queues and AsyncAPI"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +9,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 keywords.workspace = true
-categories.workspace = true
+categories = ["network-programming", "asynchronous", "data-structures"]
 
 [features]
 default = ["sqlite"]
@@ -16,6 +17,7 @@ sqlite = ["dep:rusqlite", "xstate-persistence/sqlite"]
 redis-streams = ["dep:redis", "dep:tokio"]
 nats = ["dep:async-nats", "dep:futures-util", "dep:tokio"]
 rabbitmq = ["dep:lapin", "dep:tokio"]
+sqs = ["dep:aws-config", "dep:aws-sdk-sqs", "dep:tokio"]
 
 [dependencies]
 xstate-core = { workspace = true }
@@ -29,6 +31,8 @@ rusqlite = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
 async-nats = { workspace = true, optional = true }
 lapin = { workspace = true, optional = true }
+aws-config = { workspace = true, optional = true }
+aws-sdk-sqs = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time"], optional = true }
 rand = { workspace = true }

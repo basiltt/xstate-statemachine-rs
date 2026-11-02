@@ -1,0 +1,5 @@
+# Native modules that `maturin develop` copies into the package for editable installs.
+/python/xstate_rs/*.pyd
+/python/xstate_rs/*.so
+/python/xstate_rs/*.pdb
+/python/xstate_rs/*.dylib

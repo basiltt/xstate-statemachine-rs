@@ -26,6 +26,8 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
+#[cfg(feature = "sqs")]
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::{Duration, Instant};
@@ -48,8 +50,13 @@ const RUNTIME_THREADS: usize = 2;
 
 static NEXT_BROKER: AtomicU64 = AtomicU64::new(1);
 
-/// CloudEvents structured-mode content type (Kafka/AMQP/NATS bindings).
+/// CloudEvents structured-mode content type (Kafka/AMQP/NATS bindings; SQS has no such header).
+#[cfg(any(feature = "nats", feature = "rabbitmq"))]
 pub(crate) const CE_CONTENT_TYPE: &str = "application/cloudevents+json; charset=UTF-8";
+
+/// One broker-specific operation on a held message, ready to run (`sqs`).
+#[cfg(feature = "sqs")]
+type HeldFuture = Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send>>;
 
 /// One message as a transport fetched it.
 #[derive(Debug)]
@@ -238,6 +245,26 @@ impl<T: Transport> Core<T> {
             return None;
         }
         self.state().inflight.remove(&delivery.tag)
+    }
+
+    /// Start `op` on the native handle of a delivery that is handed out and not yet settled,
+    /// without settling it (`None` for a delivery of another broker or one already settled).
+    /// Used for broker-specific operations on a held message, such as SQS `extend_visibility`.
+    #[cfg(feature = "sqs")]
+    fn on_native<Fut>(
+        self: &Arc<Self>,
+        delivery: &Delivery,
+        op: impl FnOnce(&T::Native) -> Fut,
+    ) -> Option<HeldFuture>
+    where
+        Fut: Future<Output = Result<(), BrokerError>> + Send + 'static,
+    {
+        if delivery.broker_id != self.id {
+            return None;
+        }
+        let fut = op(&self.state().inflight.get(&delivery.tag)?.native);
+        let core = Arc::clone(self);
+        Some(Box::pin(async move { core.record(fut.await) }))
     }
 
     // -- receive --------------------------------------------------------------------------
@@ -500,6 +527,39 @@ impl<T: Transport> Broker<T> {
         let core = Arc::clone(&self.core);
         let run = self.runner.spawn(async move { core.transport.close().await });
         async move { run.await? }
+    }
+
+    /// Run `op` against the native handle of a held delivery on the owned runtime, without
+    /// settling it; a no-op for a delivery of another broker or one already settled.
+    #[cfg(feature = "sqs")]
+    pub(crate) async fn on_native_async<Fut>(
+        &self,
+        delivery: &Delivery,
+        op: impl FnOnce(&T::Native) -> Fut,
+    ) -> Result<(), BrokerError>
+    where
+        Fut: Future<Output = Result<(), BrokerError>> + Send + 'static,
+    {
+        match self.core.on_native(delivery, op) {
+            Some(fut) => self.runner.spawn(fut).await?,
+            None => Ok(()),
+        }
+    }
+
+    /// Blocking [`on_native_async`](Self::on_native_async).
+    #[cfg(feature = "sqs")]
+    pub(crate) fn on_native_blocking<Fut>(
+        &self,
+        delivery: &Delivery,
+        op: impl FnOnce(&T::Native) -> Fut,
+    ) -> Result<(), BrokerError>
+    where
+        Fut: Future<Output = Result<(), BrokerError>> + Send + 'static,
+    {
+        match self.core.on_native(delivery, op) {
+            Some(fut) => self.runner.block(fut)?,
+            None => Ok(()),
+        }
     }
 
     // -- blocking contract ----------------------------------------------------------------

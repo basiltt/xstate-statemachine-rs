@@ -1,6 +1,7 @@
 [package]
 name = "xstate-conformance"
 description = "Conformance fixture format and harness (XState v5 and Python oracles) for the xstate-statemachine Rust engine"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

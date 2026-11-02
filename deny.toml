@@ -4,7 +4,10 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+# Only advisories with no fix reachable from this workspace are listed, each with the reason.
+ignore = [
+    { id = "RUSTSEC-2025-0134", reason = "informational: `rustls-pemfile` is unmaintained. Reached only through lapin 3 -> amq-protocol-tcp -> tcp-stream (feature `rabbitmq` of xstate-eda); there is no vulnerability, and the fix is lapin 4, whose API is not source compatible with the RabbitMQ adapter. Revisit when the adapter moves to lapin 4." },
+]
 
 [licenses]
 version = 2
@@ -19,6 +22,8 @@ allow = [
     "Zlib",
     "MPL-2.0",
     "CC0-1.0",
+    # `webpki-roots` (Mozilla's CA bundle, pulled in by sqlx and async-nats): the data licence.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 
@@ -28,6 +33,50 @@ wildcards = "deny"
 highlight = "all"
 deny = [
     { crate = "openssl-sys", reason = "use rustls; no OpenSSL in the dependency tree" },
+]
+# Duplicates we cannot remove: each is a version split between two third-party dependency
+# families that we do not control. The older version is listed; the newer one stays counted, so
+# a *third* version appearing is still reported. Drop an entry when its parents converge.
+skip = [
+    # RustCrypto generations: digest/hmac/sha2/crypto-common/block-buffer/cpufeatures 0.10-era
+    # (aws-sigv4, ed25519-dalek via async-nats, p12-keystore via lapin) next to the 0.11-era
+    # ones sqlx-postgres 0.9 uses.
+    { crate = "block-buffer@0.10.4", reason = "digest 0.10 (aws-sigv4, nkeys, p12-keystore) vs digest 0.11 (sqlx-postgres)" },
+    { crate = "crypto-common@0.1.7", reason = "digest 0.10 / cipher 0.4 (aws-sigv4, p12-keystore) vs digest 0.11 (sqlx-postgres)" },
+    { crate = "digest@0.10.7", reason = "aws-sigv4, ed25519-dalek (async-nats) and p12-keystore (lapin) vs sqlx-postgres 0.9" },
+    { crate = "hmac@0.12.1", reason = "aws-sigv4 and p12-keystore (lapin) vs hkdf/sqlx-postgres 0.9" },
+    { crate = "sha2@0.10.9", reason = "aws-sigv4, ed25519-dalek and our own checksum code vs sqlx-postgres 0.9 (sha2 0.11)" },
+    { crate = "cpufeatures@0.2.17", reason = "aes/sha1 (axum, p12-keystore) vs chacha20 0.10 behind rand 0.10 (proptest, async-nats)" },
+    # rand generations.
+    { crate = "rand@0.8.8", reason = "nkeys, nuid and tokio-websockets (all behind async-nats) still use rand 0.8" },
+    { crate = "rand@0.9.5", reason = "our own `rand` workspace dependency, tungstenite (axum) and metrics-util use 0.9; async-nats, proptest and sqlx use 0.10" },
+    { crate = "rand_core@0.6.4", reason = "follows rand 0.8 (async-nats)" },
+    { crate = "rand_core@0.9.5", reason = "follows rand 0.9" },
+    { crate = "rand_chacha@0.3.1", reason = "follows rand 0.8 (async-nats)" },
+    { crate = "getrandom@0.2.17", reason = "follows rand 0.8 / nkeys (async-nats)" },
+    { crate = "getrandom@0.3.4", reason = "follows rand 0.9; jobserver/cc (build scripts) use 0.4" },
+    { crate = "r-efi@5.3.0", reason = "follows getrandom 0.3 (UEFI target shim)" },
+    # hashing / containers.
+    { crate = "foldhash@0.1.5", reason = "hashbrown 0.15 (rusqlite via hashlink 0.10, metrics-util) and our xstate-core vs hashbrown 0.16 (sqlx-core)" },
+    { crate = "hashbrown@0.15.5", reason = "rusqlite 0.33 (hashlink 0.10) and metrics-util vs sqlx-core 0.9 (0.16) and indexmap (0.17)" },
+    { crate = "hashbrown@0.16.1", reason = "sqlx-core 0.9 (hashlink 0.11) vs indexmap 2.14 (0.17)" },
+    { crate = "hashlink@0.10.0", reason = "rusqlite 0.33 vs sqlx-core 0.9 (hashlink 0.11)" },
+    # http stack.
+    { crate = "http@0.2.12", reason = "aws-sdk-sqs and aws-smithy-types keep http 0.2 types for backwards compatibility next to http 1.x" },
+    { crate = "http-body@0.4.6", reason = "same aws-smithy http 0.2 compatibility layer" },
+    { crate = "base64@0.22.1", reason = "axum, async-nats, sqlx and p12-keystore vs hyper-util 0.1 (base64 0.23)" },
+    { crate = "webpki-roots@0.26.11", reason = "tokio-websockets 0.10 (async-nats) vs sqlx-core 0.9 (1.x)" },
+    # lapin 3 / amq-protocol 8 internals (feature `rabbitmq`): two generations of the executor
+    # and reactor traits and a parser in different major versions.
+    { crate = "executor-trait@2.1.2", reason = "lapin 3 pulls two generations of its executor abstraction" },
+    { crate = "reactor-trait@2.8.0", reason = "lapin 3 pulls two generations of its reactor abstraction" },
+    { crate = "nom@7.1.3", reason = "x509-parser/asn1-rs (TLS stack of lapin) vs nom 8 in amq-protocol" },
+    # proc-macro helpers.
+    { crate = "syn@2.0.119", reason = "most of the tree is on syn 2; async-trait 0.1.92 (lapin) moved to syn 3" },
+    { crate = "synstructure@0.13.2", reason = "asn1-rs-derive vs yoke-derive (icu, via url) use different synstructure releases" },
+    # Windows bindings.
+    { crate = "windows-sys@0.52.0", reason = "ring 0.17 (rustls) pins 0.52" },
+    { crate = "windows-sys@0.59.0", reason = "fd-lock 4 (file locks in xstate-persistence) pins 0.59" },
 ]
 
 [sources]

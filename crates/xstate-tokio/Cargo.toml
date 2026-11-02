@@ -1,6 +1,7 @@
 [package]
 name = "xstate-tokio"
 description = "Async (tokio) interpreter for xstate-core machines: mailbox, timers, invoked services and actors"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

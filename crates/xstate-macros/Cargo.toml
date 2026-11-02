@@ -1,6 +1,7 @@
 [package]
 name = "xstate-macros"
 description = "Procedural macros for xstate-core: typed events and a statechart DSL checked at compile time"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +9,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 keywords.workspace = true
-categories.workspace = true
+categories = ["development-tools::procedural-macro-helpers", "data-structures"]
 
 [lib]
 proc-macro = true
