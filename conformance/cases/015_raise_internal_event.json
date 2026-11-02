@@ -136,7 +136,8 @@
         "history": {},
         "actors": {},
         "system": {}
-      }
+      },
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"r\",\n  \"machine_hash\": \"a57b68e35b534b70\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"running\",\n  \"context\": {},\n  \"state_ids\": [\n    \"r.c\"\n  ],\n  \"value\": \"c\",\n  \"configuration\": [\n    \"r\",\n    \"r.c\"\n  ],\n  \"output\": null,\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
     }
   }
 }

@@ -16,12 +16,16 @@ use std::time::Duration;
 
 use redis::{Connection, RedisResult, Value};
 
-use super::pool::{Pool, SOCKET_TIMEOUT};
+use super::pool::Pool;
 use crate::envelope::Envelope;
 use crate::error::BrokerError;
 
 /// A stream and an entry id: what settles one delivery.
 pub(super) type Native = (String, String);
+
+/// `XPENDING` lists this many candidates per wanted entry: some are skipped (still held by this
+/// transport, or not idle long enough).
+const PENDING_SCAN_FACTOR: usize = 4;
 
 /// One message as the transport fetched it.
 #[derive(Debug)]
@@ -45,6 +49,7 @@ pub(super) struct Settings {
     pub(super) maxlen: Option<u64>,
     pub(super) batch: usize,
     pub(super) max_bytes: usize,
+    pub(super) io_timeout: Duration,
 }
 
 #[derive(Debug, Default)]
@@ -195,9 +200,10 @@ impl Transport {
 
     fn read_new(&self, streams: &[String], wait: Duration) -> Result<Vec<Raw>, BrokerError> {
         let block_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX);
+        let io_timeout = self.pool.io_timeout();
         let reply = self.pool.run(|conn| {
             // A blocking read may legitimately outlast the socket timeout.
-            conn.set_read_timeout(Some(wait + SOCKET_TIMEOUT))?;
+            conn.set_read_timeout(Some(wait.saturating_add(io_timeout)))?;
             let mut cmd = redis::cmd("XREADGROUP");
             cmd.arg("GROUP").arg(&self.settings.group).arg(&self.settings.consumer);
             cmd.arg("COUNT").arg(self.settings.batch);
@@ -213,16 +219,14 @@ impl Transport {
                 cmd.arg(">");
             }
             let reply = cmd.query::<Value>(conn);
-            conn.set_read_timeout(Some(SOCKET_TIMEOUT))?;
+            conn.set_read_timeout(Some(io_timeout))?;
             reply
         })?;
         let mut out = Vec::new();
         for (stream, entries) in read_reply(&reply) {
-            for entry in entries {
-                if let Some(fields) = entry.fields {
-                    out.push(raw_of(&stream, entry.id, fields, 0));
-                }
-            }
+            // an entry deleted meanwhile has nothing to deliver; a malformed one is handed on
+            // empty so the core reports and acks it
+            out.extend(entries.into_iter().filter_map(|e| e.fields.raw(&stream, e.id, 0)));
         }
         Ok(out)
     }
@@ -241,7 +245,7 @@ impl Transport {
                 .arg(&self.settings.group)
                 .arg(&start)
                 .arg("+")
-                .arg(self.settings.batch * 4)
+                .arg(self.settings.batch.saturating_mul(PENDING_SCAN_FACTOR))
                 .query(conn)
         })?;
         let Some((last, ..)) = pending.last() else {
@@ -256,14 +260,13 @@ impl Transport {
         let reply = self.pool.run(|conn| claim(conn, stream, &self.settings, &counts))?;
         let mut out = Vec::new();
         for entry in entries_of(&reply) {
-            match entry.fields {
-                Some(fields) => {
-                    // the claim itself was a delivery: attempts = the count before it
-                    let attempts = counts.iter().find(|(id, _)| *id == entry.id).map_or(0, |c| c.1);
-                    out.push(raw_of(stream, entry.id, fields, attempts));
-                }
+            // the claim itself was a delivery: attempts = the count before it
+            let attempts = counts.iter().find(|(id, _)| *id == entry.id).map_or(0, |c| c.1);
+            let id = entry.id.clone();
+            match entry.fields.raw(stream, entry.id, attempts) {
+                Some(raw) => out.push(raw),
                 // deleted while pending: nothing to deliver
-                None => self.ack(&(stream.to_owned(), entry.id))?,
+                None => self.ack(&(stream.to_owned(), id))?,
             }
         }
         Ok(out)
@@ -309,11 +312,35 @@ fn raw_of(stream: &str, id: String, mut fields: HashMap<String, Vec<u8>>, attemp
 
 // -- reply parsing ----------------------------------------------------------------------
 
-/// One stream entry; `fields` is `None` for an entry deleted while pending.
+/// What the server said about one entry's fields.
+#[derive(Debug)]
+enum Fields {
+    /// The entry was deleted while pending (a nil where the fields go): nothing to deliver.
+    Deleted,
+    /// The entry exists but its fields cannot be read (not a flat list of text names and byte
+    /// values): reported as undecodable, never mistaken for a deleted entry.
+    Malformed,
+    /// `name -> value`.
+    Present(HashMap<String, Vec<u8>>),
+}
+
+impl Fields {
+    /// The message to deliver; a malformed entry yields one with an empty body, which the core
+    /// reports through the undecodable hook and acks. `None` for a deleted entry.
+    fn raw(self, stream: &str, id: String, attempts: u64) -> Option<Raw> {
+        match self {
+            Self::Deleted => None,
+            Self::Malformed => Some(raw_of(stream, id, HashMap::new(), attempts)),
+            Self::Present(fields) => Some(raw_of(stream, id, fields, attempts)),
+        }
+    }
+}
+
+/// One stream entry.
 #[derive(Debug)]
 struct Entry {
     id: String,
-    fields: Option<HashMap<String, Vec<u8>>>,
+    fields: Fields,
 }
 
 fn bytes(value: &Value) -> Option<Vec<u8>> {
@@ -328,15 +355,21 @@ fn text(value: &Value) -> Option<String> {
     String::from_utf8(bytes(value)?).ok()
 }
 
-fn fields_of(value: &Value) -> Option<HashMap<String, Vec<u8>>> {
-    let Value::Array(items) = value else { return None };
+fn fields_of(value: &Value) -> Fields {
+    let items = match value {
+        Value::Nil => return Fields::Deleted,
+        Value::Array(items) => items,
+        _ => return Fields::Malformed,
+    };
     let mut out = HashMap::new();
     for pair in items.chunks(2) {
-        if let [name, content] = pair {
-            out.insert(text(name)?, bytes(content)?);
-        }
+        let [name, content] = pair else { return Fields::Malformed };
+        let (Some(name), Some(content)) = (text(name), bytes(content)) else {
+            return Fields::Malformed;
+        };
+        out.insert(name, content);
     }
-    Some(out)
+    Fields::Present(out)
 }
 
 /// `[[id, [field, value, ...] | nil], ...]` (the shape of `XCLAIM` and the inner part of
@@ -348,7 +381,7 @@ fn entries_of(value: &Value) -> Vec<Entry> {
         .filter_map(|item| {
             let Value::Array(parts) = item else { return None };
             let id = text(parts.first()?)?;
-            Some(Entry { id, fields: parts.get(1).and_then(fields_of) })
+            Some(Entry { id, fields: parts.get(1).map_or(Fields::Deleted, fields_of) })
         })
         .collect()
 }
@@ -390,8 +423,35 @@ mod tests {
         ]);
         let entries = entries_of(&reply);
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].fields.as_ref().and_then(|f| f.get("ce")), Some(&b"{}".to_vec()));
-        assert!(entries[1].fields.is_none());
+        let Fields::Present(fields) = &entries[0].fields else { panic!("entry 0 has fields") };
+        assert_eq!(fields.get("ce"), Some(&b"{}".to_vec()));
+        assert!(matches!(entries[1].fields, Fields::Deleted));
         assert!(read_reply(&Value::Nil).is_empty());
+    }
+
+    #[test]
+    fn an_unparseable_entry_is_malformed_not_deleted() {
+        let entry = |fields: Value| {
+            Value::Array(vec![Value::Array(vec![Value::BulkString(b"3-0".to_vec()), fields])])
+        };
+        let first = |value: Value| entries_of(&entry(value)).remove(0).fields;
+        // not a list, a field value that is not a string, an odd number of items, a non-UTF-8 name
+        assert!(matches!(first(Value::Int(7)), Fields::Malformed));
+        let bad_value = Value::Array(vec![Value::BulkString(b"ce".to_vec()), Value::Int(1)]);
+        assert!(matches!(first(bad_value), Fields::Malformed));
+        assert!(matches!(
+            first(Value::Array(vec![Value::BulkString(b"ce".to_vec())])),
+            Fields::Malformed
+        ));
+        let bad_name = Value::Array(vec![Value::BulkString(vec![0xff]), Value::BulkString(vec![])]);
+        assert!(matches!(first(bad_name), Fields::Malformed));
+        // a malformed entry is delivered empty (the core reports and acks it); a deleted one is not
+        assert!(Fields::Malformed.raw("s", "3-0".into(), 2).is_some_and(|r| r.body.is_empty()));
+        assert!(Fields::Deleted.raw("s", "3-0".into(), 0).is_none());
+    }
+
+    #[test]
+    fn the_pending_scan_width_saturates() {
+        assert_eq!(usize::MAX.saturating_mul(PENDING_SCAN_FACTOR), usize::MAX);
     }
 }

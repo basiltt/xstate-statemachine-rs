@@ -41,6 +41,7 @@ pub type RngFn = Arc<dyn Fn() -> f64 + Send + Sync>;
 
 /// How a delay is randomised.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum JitterMode {
     /// Pure exponential.
     None,
@@ -274,11 +275,17 @@ impl RetryPolicy {
     /// * `Reset` zeroes the counter, forgets the decorrelated memory and clears the
     ///   dead-letter error chain under [`ERRORS_CONTEXT_KEY`]; call it on success.
     ///
-    /// For [`JitterMode::Decorrelated`] the previous delay is remembered inside the returned
-    /// logic (a delay implementation only sees the context immutably), tagged with its attempt
-    /// number so a stale memory from another run is never reused, and `Reset` clears it. A
-    /// value under `ctx["{attempt_key}_delay_ms"]` (the Python layout) is honoured when the
-    /// memory is empty, which keeps restored snapshots working.
+    /// For [`JitterMode::Decorrelated`] the previous delay lives in `ctx["{attempt_key}_delay_ms"]`
+    /// (the Python layout). A delay implementation only sees the context immutably, so the
+    /// delay itself cannot write it: it is also remembered inside the returned logic, tagged
+    /// with its attempt number so a stale memory from another run is never reused, and the next
+    /// `Bump` copies that memory into the context. The delay reads the context key first and
+    /// falls back to the memory only when the key is absent. `Reset` clears both.
+    ///
+    /// The one remaining difference from Python: Python's delay writes the key the moment it is
+    /// computed, so a snapshot taken while waiting shows the current delay; here the key trails
+    /// by one delay (the first delay reaches the context at the second `Bump`), and a snapshot
+    /// taken while waiting shows the previous one. The delays themselves are identical.
     #[must_use]
     pub fn apply(
         &self,
@@ -293,6 +300,8 @@ impl RetryPolicy {
         let bump_key = attempt_key.to_owned();
         let reset_key = attempt_key.to_owned();
         let prev_key = previous_key(attempt_key);
+        let bump_prev_key = prev_key.clone();
+        let bump_memory = Arc::clone(&memory);
         logic
             .delay_fn(format!("{prefix}Delay"), delay)
             .guard(format!("{prefix}CanRetry"), move |ctx, _event, _params| {
@@ -301,6 +310,13 @@ impl RetryPolicy {
             .action(format!("{prefix}Bump"), move |scope: &mut ActionScope<'_, DynContext>| {
                 let next = counter(scope.context, &bump_key) + 1;
                 set_key(scope.context, &bump_key, Value::from(next));
+                // Publish the delay the failed attempt waited, for the next delay to chain on.
+                let remembered = *bump_memory.lock().unwrap_or_else(PoisonError::into_inner);
+                if let Some((attempts, ms)) = remembered
+                    && attempts + 1 == next
+                {
+                    set_key(scope.context, &bump_prev_key, Value::from(ms));
+                }
                 Ok(())
             })
             .action(format!("{prefix}Reset"), move |scope: &mut ActionScope<'_, DynContext>| {
@@ -325,11 +341,10 @@ impl RetryPolicy {
             let attempt = u32::try_from(attempts).unwrap_or(u32::MAX);
             let decorrelated = policy.jitter == JitterMode::Decorrelated;
             let previous = if decorrelated {
-                let remembered = *memory.lock().unwrap_or_else(PoisonError::into_inner);
-                remembered
-                    .filter(|(n, _)| *n + 1 == attempts)
-                    .map(|(_, ms)| ms)
-                    .or_else(|| ctx.get(&prev_key).and_then(Value::as_f64))
+                ctx.get(&prev_key).and_then(Value::as_f64).or_else(|| {
+                    let remembered = *memory.lock().unwrap_or_else(PoisonError::into_inner);
+                    remembered.filter(|(n, _)| *n + 1 == attempts).map(|(_, ms)| ms)
+                })
             } else {
                 None
             };

@@ -56,10 +56,15 @@ impl<B> OutboxRelay<B> {
     }
 
     /// Rows per run.
-    #[must_use]
-    pub fn batch(mut self, batch: usize) -> Self {
+    ///
+    /// # Errors
+    /// [`EdaError::InvalidArgument`] for 0.
+    pub fn batch(mut self, batch: usize) -> Result<Self> {
+        if batch < 1 {
+            return Err(EdaError::InvalidArgument("batch must be >= 1".into()));
+        }
         self.batch = batch;
-        self
+        Ok(self)
     }
 
     /// Lease owner name (unique per relay).

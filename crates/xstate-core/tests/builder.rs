@@ -1,6 +1,6 @@
 //! `MachineBuilder` against the JSON parser and the interpreter.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stderr)]
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,9 +17,20 @@ use xstate_core::{ErrorKind, Machine, MachineLogic, SimulatedClock, SyncInterpre
 // Helpers
 // ---------------------------------------------------------------------------------------------
 
-/// The `machine` document of the conformance case whose file name starts with `prefix_`.
-fn conformance_machine(prefix: &str) -> Value {
+/// The conformance cases live outside the crate, so the crates.io package does not contain them;
+/// the tests that read them skip (with a note) instead of failing there.
+fn conformance_dir() -> Option<PathBuf> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../conformance/cases");
+    if dir.is_dir() {
+        return Some(dir);
+    }
+    eprintln!("skipping: {} is absent (a crates.io package ships only this crate)", dir.display());
+    None
+}
+
+/// The `machine` document of the conformance case whose file name starts with `prefix_`.
+fn conformance_machine(prefix: &str) -> Option<Value> {
+    let dir = conformance_dir()?;
     let wanted = format!("{prefix}_");
     let path = std::fs::read_dir(&dir)
         .expect("conformance directory")
@@ -27,7 +38,7 @@ fn conformance_machine(prefix: &str) -> Value {
         .find(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&wanted)))
         .unwrap_or_else(|| panic!("no conformance case {prefix}"));
     let doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    doc["machine"].clone()
+    Some(doc["machine"].clone())
 }
 
 /// Assert that `builder` and the JSON `doc` are interchangeable: same configuration tree,
@@ -51,7 +62,8 @@ fn assert_interchangeable(doc: &Value, builder: MachineBuilder) {
 }
 
 fn assert_case(prefix: &str, builder: MachineBuilder) {
-    assert_interchangeable(&conformance_machine(prefix), builder);
+    let Some(doc) = conformance_machine(prefix) else { return };
+    assert_interchangeable(&doc, builder);
 }
 
 // ---------------------------------------------------------------------------------------------

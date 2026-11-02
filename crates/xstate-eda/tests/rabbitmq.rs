@@ -8,6 +8,8 @@
 // The skip notes are printed on purpose: a CI without RabbitMQ must say why nothing ran.
 #![allow(clippy::print_stderr)]
 
+mod common;
+
 use std::fmt::Display;
 use std::future::Future;
 use std::sync::mpsc;
@@ -144,6 +146,16 @@ impl Raw {
         }));
     }
 
+    /// Publish a message with `properties`, the way another writer would.
+    fn plant_with(&self, queue: &str, body: &[u8], properties: BasicProperties) {
+        let (channel, queue, body) = (self.channel(), queue.to_owned(), body.to_vec());
+        ok(self.run(async move {
+            let options = BasicPublishOptions::default();
+            let confirm = channel.basic_publish("", &queue, options, &body, properties);
+            confirm.await?.await.map(|_| ())
+        }));
+    }
+
     fn declare_exchange(&self, name: &str, bind_queue: &str, key: &str) {
         let (channel, name) = (self.channel(), name.to_owned());
         let (queue, key) = (bind_queue.to_owned(), key.to_owned());
@@ -212,7 +224,7 @@ impl Ns {
     fn new(test: &str) -> Option<Self> {
         let url = amqp_url();
         let Some(raw) = Raw::connect(&url) else {
-            eprintln!("skipping `{test}`: no RabbitMQ at {url} (set XSM_AMQP_URL)");
+            common::service_unavailable(test, &format!("no RabbitMQ at {url} (set XSM_AMQP_URL)"));
             return None;
         };
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
@@ -266,6 +278,7 @@ fn options_and_urls_are_validated() {
     assert!(bad(RabbitMqOptions::new().prefetch(0)));
     assert!(bad(RabbitMqOptions::new().batch(0)));
     assert!(bad(RabbitMqOptions::new().exchange("")));
+    assert!(bad(RabbitMqOptions::new().io_timeout(Duration::ZERO)));
     let secret = "amqp://user:hunter2@host:notaport/";
     let Err(error) = RabbitMqBroker::open(secret, &RabbitMqOptions::new()) else {
         panic!("a bad URL must be refused")
@@ -555,7 +568,9 @@ mod sync_api {
         let broker = ns.broker(&Ns::options().exchange(exchange.clone()));
         let (routed, unrouted) = (envelope("order:1", 1), envelope("nobody", 2));
         ok(broker.publish("ignored-topic", &routed)); // the exchange, not the topic, routes
-        ok(broker.publish("ignored-topic", &unrouted)); // no binding: dropped by the broker
+        // no binding: the broker returns the (mandatory) message instead of dropping it silently
+        let refused = broker.publish("ignored-topic", &unrouted);
+        assert!(matches!(refused, Err(BrokerError::Publish(_))), "{refused:?}");
         let got = take(&broker, &queue, 1).remove(0);
         assert_eq!(got.envelope, routed);
         assert!(idle(&broker, &queue));
@@ -566,6 +581,79 @@ mod sync_api {
         assert!(!missing.healthy());
         assert!(idle(&missing, &queue), "the next call reconnects");
         assert!(missing.healthy());
+    }
+
+    #[test]
+    fn a_publish_nothing_accepts_fails_instead_of_vanishing() {
+        let ns = ns!("unroutable");
+        let (queue, exchange) = (ns.extra("-q"), ns.extra("-ex"));
+        ns.raw.declare(&queue);
+        ns.raw.declare_exchange(&exchange, &queue, "bound-subject");
+        let broker = ns.broker(&Ns::options().exchange(exchange));
+        let unbound = broker.publish("t", &envelope("not-bound", 1));
+        let Err(BrokerError::Publish(why)) = unbound else {
+            panic!("an unroutable message must fail the publish, got {unbound:?}")
+        };
+        assert!(why.contains("unroutable"), "{why}");
+        // the bound subject still goes through, on the same channel
+        ok(broker.publish("t", &envelope("bound-subject", 2)));
+        eventually("the routed message is queued", || ns.raw.count(&queue) == Some(1));
+        assert_eq!(ns.raw.count(&queue), Some(1), "only the routed one");
+    }
+
+    #[test]
+    fn a_classic_queue_ignores_a_forged_delivery_count() {
+        let ns = ns!("forged");
+        ns.raw.declare(&ns.topic);
+        let mut headers = FieldTable::default();
+        headers.insert("x-delivery-count".into(), AMQPValue::LongLongInt(50));
+        let body = ok(envelope("s", 1).to_json(1 << 20));
+        ns.raw.plant_with(
+            &ns.topic,
+            body.as_bytes(),
+            BasicProperties::default().with_headers(headers),
+        );
+        let broker = ns.broker(&Ns::options());
+        let got = take(&broker, &ns.topic, 1).remove(0);
+        assert_eq!(got.envelope.attempt(), 0, "a publisher cannot set the attempt");
+    }
+
+    #[test]
+    fn quorum_queues_are_declared_on_request_and_count_redeliveries() {
+        let ns = ns!("quorum");
+        // the type is part of the declaration: a queue that exists as classic refuses it
+        ns.raw.declare(&ns.topic);
+        let quorum = Ns::options().quorum_queues(true);
+        let clash = ns.broker(&quorum).publish(&ns.topic, &envelope("s", 1));
+        assert!(matches!(clash, Err(BrokerError::Publish(_))), "{clash:?}");
+
+        let fresh = ns.extra("a");
+        let broker = ns.broker(&quorum);
+        ok(broker.publish(&fresh, &envelope("s", 2)));
+        let first = take(&broker, &fresh, 1).remove(0);
+        assert_eq!(first.envelope.attempt(), 0);
+        // an un-acked message goes back when the connection closes, with the broker's own count
+        ok(broker.close_blocking());
+        let again = ns.broker(&quorum);
+        let redelivered = take(&again, &fresh, 1).remove(0);
+        assert_eq!(redelivered.envelope.attempt(), 1);
+    }
+
+    #[test]
+    fn a_broker_that_never_answers_times_out() {
+        let port = common::silent_server();
+        let options = Ns::options().io_timeout(Duration::from_millis(300));
+        let broker = ok(RabbitMqBroker::open(&format!("amqp://127.0.0.1:{port}/%2f"), &options));
+        let started = Instant::now();
+        let result = broker.publish("orders", &envelope("s", 1));
+        let Err(BrokerError::Publish(why)) = result else {
+            panic!("expected a timeout: {result:?}")
+        };
+        assert!(why.contains("timed out"), "{why}");
+        assert!(started.elapsed() < Duration::from_secs(10), "bounded by io_timeout");
+        assert!(!broker.healthy());
+        let polled = broker.poll("orders", Some(Duration::ZERO));
+        assert!(matches!(polled, Err(BrokerError::Other(ref why)) if why.contains("timed out")));
     }
 }
 
@@ -622,173 +710,5 @@ mod async_api {
     }
 }
 
-/// RabbitMQ shared with the Python library: each runtime publishes, the other consumes. Skipped
-/// (with a note) when the Python virtualenv or `aio-pika` is missing; override the interpreter
-/// with `XSM_PYTHON`.
-mod cross_language {
-    use std::path::{Path, PathBuf};
-    use std::process::Command;
-
-    use serde_json::Value;
-    use xstate_eda::SyncBrokerAdapter;
-
-    use super::*;
-
-    const SUBJECTS: [&str; 4] = ["order:1", "order.2 x", "ключ-3", "日本/4"];
-
-    const PY_HEAD: &str = "
-import sys, json, asyncio
-from xstate_statemachine.contrib.brokers.rabbitmq import RabbitMQBroker
-from xstate_statemachine.eda.envelope import Envelope
-url, topic, subjects = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
-";
-
-    /// Python publishes one envelope per subject and prints their ids.
-    const PY_PUBLISH: &str = "
-async def main():
-    broker = RabbitMQBroker(url=url)
-    ids = []
-    for i, subject in enumerate(subjects):
-        env = Envelope.new(type='xsm.order.GO', subject=subject,
-                           data={'n': i, 't': '\\u00e9'}, correlationid='corr-' + str(i))
-        ids.append(env.id)
-        await broker.publish(topic, env)
-    print(json.dumps(ids))
-    await broker.close()
-asyncio.run(main())
-";
-
-    /// Python consumes (and acks) everything on the topic.
-    const PY_CONSUME: &str = "
-async def main():
-    broker = RabbitMQBroker(url=url)
-    got = []
-    async for d in broker.subscribe(topic, timeout=1.5):
-        attempt = d.envelope.attempt
-        got.append({'id': d.envelope.id, 'type': d.envelope.type, 'subject': d.envelope.subject,
-                    'data': d.envelope.data, 'attempt': attempt() if callable(attempt) else attempt})
-        await d.ack()
-    print(json.dumps(got))
-    await broker.close()
-asyncio.run(main())
-";
-
-    fn python() -> Option<PathBuf> {
-        if let Ok(p) = std::env::var("XSM_PYTHON") {
-            let p = PathBuf::from(p);
-            return p.exists().then_some(p);
-        }
-        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../../PythonProjects/xstate-statemachine");
-        [".venv/Scripts/python.exe", ".venv/bin/python"]
-            .iter()
-            .map(|rel| checkout.join(rel))
-            .find(|p| p.exists())
-    }
-
-    struct Py {
-        exe: PathBuf,
-        url: String,
-    }
-
-    impl Py {
-        fn command(&self, script: &str, topic: &str, subjects: &[&str]) -> Command {
-            let mut cmd = Command::new(&self.exe);
-            cmd.arg("-I")
-                .arg("-c")
-                .arg(format!("{PY_HEAD}{script}"))
-                .args([&self.url, topic])
-                .arg(json!(subjects).to_string());
-            cmd
-        }
-
-        fn run(&self, script: &str, topic: &str, subjects: &[&str]) -> Value {
-            let out = self
-                .command(script, topic, subjects)
-                .output()
-                .unwrap_or_else(|e| panic!("python: {e}"));
-            assert!(
-                out.status.success(),
-                "python failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-            ok(serde_json::from_slice(&out.stdout))
-        }
-    }
-
-    fn usable_python(ns: &Ns) -> Option<Py> {
-        let Some(exe) = python() else {
-            eprintln!(
-                "skipping RabbitMQ cross-language test: no Python virtualenv (set XSM_PYTHON)"
-            );
-            return None;
-        };
-        let py = Py { exe, url: ns.url.clone() };
-        let probe = py.command("", "t", &[]).output().ok()?;
-        if probe.status.success() {
-            return Some(py);
-        }
-        eprintln!(
-            "skipping RabbitMQ cross-language test: {}",
-            String::from_utf8_lossy(&probe.stderr).lines().last().unwrap_or("python import failed")
-        );
-        None
-    }
-
-    #[test]
-    fn python_publishes_rust_consumes_then_rust_publishes_python_consumes() {
-        let ns = ns!("xlang");
-        let Some(py) = usable_python(&ns) else { return };
-        let rust = ns.broker(&Ns::options());
-
-        // Python -> Rust: the same durable queue, the same envelope
-        let topic_a = ns.extra("a");
-        let ids = py.run(PY_PUBLISH, &topic_a, &SUBJECTS);
-        let mut got = Vec::new();
-        while let Some(d) = ok(rust.poll(&topic_a, Some(Duration::from_millis(500)))) {
-            assert_eq!(d.envelope.attempt(), 0);
-            ok(rust.ack(&d));
-            got.push(d.envelope);
-        }
-        assert_eq!(got.len(), SUBJECTS.len());
-        for (i, subject) in SUBJECTS.iter().enumerate() {
-            let e = &got[i]; // one queue: publish order
-            assert_eq!(e.id.as_str(), ids[i].as_str().unwrap_or("?"));
-            assert_eq!(e.subject.as_deref(), Some(*subject));
-            assert_eq!((e.ty.as_str(), &e.data), ("xsm.order.GO", &json!({"n": i, "t": "é"})));
-            assert_eq!(e.correlationid.as_deref(), Some(format!("corr-{i}").as_str()));
-        }
-
-        // what Python puts on the wire next to the envelope: the properties Rust writes too
-        let topic_b = ns.extra("b");
-        let ids = py.run(PY_PUBLISH, &topic_b, &SUBJECTS[..1]);
-        let wire = ns.raw.get(&topic_b).unwrap_or_else(|| panic!("a message"));
-        let p = &wire.properties;
-        assert_eq!(Got::text(p.content_type().as_ref()).as_deref(), Some(CE_CONTENT_TYPE));
-        assert_eq!(Got::text(p.message_id().as_ref()).as_deref(), ids[0].as_str());
-        assert_eq!(Got::text(p.kind().as_ref()).as_deref(), Some("xsm.order.GO"));
-        assert_eq!(*p.delivery_mode(), Some(2));
-        assert_eq!(wire.header("ce_subject").as_deref(), Some(SUBJECTS[0]));
-        assert!(!wire.redelivered);
-
-        // Rust -> Python
-        let sent: Vec<Envelope> =
-            SUBJECTS.iter().zip(0..).map(|(subject, n)| envelope(subject, n)).collect();
-        for e in &sent {
-            ok(rust.publish(&topic_b, e));
-        }
-        let consumed = py.run(PY_CONSUME, &topic_b, &SUBJECTS);
-        let consumed = consumed.as_array().unwrap_or_else(|| panic!("list"));
-        assert_eq!(consumed.len(), sent.len());
-        for (i, e) in sent.iter().enumerate() {
-            assert_eq!(consumed[i]["id"], e.id.as_str(), "publish order");
-            assert_eq!(consumed[i]["type"], e.ty.as_str());
-            assert_eq!(consumed[i]["subject"], e.subject.as_deref().unwrap_or_default());
-            assert_eq!(consumed[i]["data"], e.data);
-            assert_eq!(consumed[i]["attempt"], 0);
-        }
-        eventually("both queues drained", || {
-            ns.raw.count(&topic_a) == Some(0) && ns.raw.count(&topic_b) == Some(0)
-        });
-    }
-}
+#[path = "rabbitmq/cross_language.rs"]
+mod cross_language;

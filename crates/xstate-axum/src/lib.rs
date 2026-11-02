@@ -15,7 +15,7 @@
 //!
 //! ```no_run
 //! use std::sync::Arc;
-//! use xstate_axum::{RegisterOptions, RouterOptions, StatechartRegistry, router};
+//! use xstate_axum::{RegisterOptions, RouterOptions, StatechartRegistry, allow_all, router};
 //! use xstate_core::{Machine, MachineLogic};
 //! use xstate_persistence::MemoryStore;
 //!
@@ -23,8 +23,10 @@
 //! let machine = Machine::from_json(
 //!     r#"{"id":"order","initial":"pending","states":{"pending":{"on":{"PAY":"paid"}},"paid":{}}}"#,
 //! )?;
+//! // allow_all: no authorization (development only); pass your own Authorizer in production.
+//! let options = RegisterOptions::new(allow_all());
 //! let registry = StatechartRegistry::builder(Arc::new(MemoryStore::new()))
-//!     .register("order", machine, MachineLogic::dynamic(), RegisterOptions::default())?
+//!     .register("order", machine, MachineLogic::dynamic(), options)?
 //!     .build()?;
 //! registry.start()?;
 //! let app = router(&registry, "order", RouterOptions::default())?.merge(registry.probes_router());
@@ -65,8 +67,9 @@ pub use receipt::{
     ContextSerializer, StateView, declared_events, receipt_body, receipt_to_status, state_body,
 };
 pub use registry::{
-    ConnectionSlot, KEY_SEP, ObserverFactory, OptionsFactory, RegisterOptions, RegistryBuilder,
-    RegistryError, SendOutcome, SendRequest, StatechartRegistry,
+    ConnectionRefused, ConnectionSlot, DEFAULT_MAX_CONNECTIONS, KEY_SEP, ObserverFactory,
+    OptionsFactory, RegisterOptions, RegistryBuilder, RegistryError, SendOutcome, SendRequest,
+    StatechartRegistry,
 };
 pub use routes::stream::transition_stream;
 pub use routes::ws::{

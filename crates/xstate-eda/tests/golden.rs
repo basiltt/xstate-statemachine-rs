@@ -137,7 +137,7 @@ fn python_outbox_file_is_readable() {
     assert_eq!(pending[0].topic, "orders");
     assert_eq!(pending[0].envelope.data, json!({"n": 1, "note": "日本"}));
     assert_eq!(pending[0].envelope.subject.as_deref(), Some("o-1"));
-    // Python's relay holds a one-hour lease on row 2: another relay only gets row 3
+    // Python's relay holds a 100-year lease on row 2 (`eda_golden.py`): another relay only gets row 3
     let claimed = store.claim(10, "rust-relay", DEFAULT_CLAIM_LEASE_S).unwrap().unwrap();
     assert_eq!(claimed.iter().map(|r| r.seq).collect::<Vec<_>>(), [3]);
     assert_eq!(store.mark_sent(&[3]).unwrap(), 1);

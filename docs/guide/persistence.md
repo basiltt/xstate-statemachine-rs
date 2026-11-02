@@ -45,6 +45,9 @@ If the closure returns `Err`, nothing is written.
 
 Restoring does **not** re-run entry actions; pending `after` timers are handled by
 `restart_timers` (`Resume` by default: remaining time is honoured against the wall clock).
+`persisted()` resumes timers in both libraries; a bare Python `from_snapshot` parks them, whereas
+`RestoreOptions::default()` in Rust resumes them (use `RestartTimers::Parked` for Python's
+behaviour).
 
 ## Stores
 
@@ -130,9 +133,16 @@ key-based redaction of payloads. Attach it with `interp.observe(..)` or `Persist
 ## Operating it
 
 ```bash
-xsm snapshots --store sqlite:///app.db checkout.json --stale   # records written by another machine version
+xsm snapshots --store sqlite:///app.db checkout.json --stale   # records labelled with another machine `version`
 xsm snapshots --store file:///var/lib/app/states --fail-if-stale checkout.json   # CI / deploy gate
+xsm snapshots --store sqlite:///app.db checkout.json --stale --stale-by hash   # structure changed (restore would refuse)
 ```
+
+`--stale` follows the Python CLI: a record is stale when its `machine_version` label differs from
+the `version` of the machine JSON (an unversioned machine or an unlabelled record is never stale).
+`--stale-by version` (the default), `hash` and `either` choose the rule, and every row carries a
+`hash_mismatch` flag (the `Hash` column of the table). Only `sqlite:///` and `file:///` stores can
+be read; there is no `memory://`.
 
 Backends other than memory, file and SQLite are tested against live servers; see the
 [development section](../../README.md#development) for the `XSM_REDIS_URL` and `XSM_POSTGRES_URL`

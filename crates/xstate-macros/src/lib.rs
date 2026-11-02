@@ -5,9 +5,14 @@
 //! * [`statechart!`]: a Rust-literal statechart DSL, checked at compile time, that builds an
 //!   `xstate_core::Machine`.
 //!
-//! The derives implement the `xstate_core::TypedEvent` / `xstate_core::TypedState` traits and
-//! need `xstate-core` (plus `serde` for payload types) in the calling crate; `statechart!`
-//! additionally needs `serde_json`.
+//! The derives implement the `xstate_core::TypedEvent` / `xstate_core::TypedState` traits.
+//! The generated code reaches the engine through `xstate-core` when the calling crate depends
+//! on it directly, else through the `xstate-statemachine` facade (`xstate_statemachine::core`),
+//! whichever name the dependency is renamed to; `serde_json` is taken from `xstate-core`'s
+//! re-export, so the calling crate needs neither `serde_json` nor `xstate-core` when it uses
+//! the facade. Payload types of `TypedEvent` still need `serde`. When the detection is wrong
+//! (a re-export under another path), name the crate explicitly: `#[xstate(crate = "my::core")]`
+//! on a derive's enum, or a leading `crate: my::core,` item in [`statechart!`].
 //!
 //! ```
 //! use xstate_core::{MachineLogic, SyncInterpreter};
@@ -46,6 +51,7 @@ use syn::{DeriveInput, parse_macro_input};
 
 mod case;
 mod chart;
+mod krate;
 mod typed_event;
 mod typed_state;
 
@@ -79,7 +85,12 @@ mod typed_state;
 ///   reads as `null`, so `Option` fields may be omitted)
 /// * `impl xstate_core::TypedEvent for Enum`
 ///
-/// The inherent items take the enum's visibility.
+/// The inherent items take the enum's visibility. They are ordinary inherent methods, so an
+/// enum that already has an inherent `event_type`, `declared_events` or `check` (or any
+/// associated item of those names) fails to compile with a duplicate-definition error.
+///
+/// `#[xstate(crate = "path")]` on the enum overrides the path of the `xstate-core` crate in
+/// the generated code (see the crate docs).
 ///
 /// # Example
 ///
@@ -113,7 +124,7 @@ mod typed_state;
 /// assert!(OrderEvent::try_from(Event::new("NOPE")).is_err());
 /// # Ok::<(), xstate_core::Error>(())
 /// ```
-#[proc_macro_derive(TypedEvent, attributes(event))]
+#[proc_macro_derive(TypedEvent, attributes(event, xstate))]
 pub fn derive_typed_event(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     typed_event::derive(&input).unwrap_or_else(syn::Error::into_compile_error).into()
@@ -137,6 +148,13 @@ pub fn derive_typed_event(input: TokenStream) -> TokenStream {
 /// * `fn check(machine: &Machine) -> Result<(), String>`: lists ids that are not states of
 ///   the chart, ids of states that are not leaves, and leaf states the enum does not cover
 /// * `impl xstate_core::TypedState for Enum`
+///
+/// The inherent items are `id`, `all`, `from_id`, `is_active` and `check`, in the enum's
+/// visibility. They are plain inherent methods, so they take precedence over trait methods of
+/// the same name, and an enum with its own inherent item of one of these names fails to
+/// compile with a duplicate-definition error. Rename the clashing item.
+/// `#[xstate(crate = "path")]` on the enum overrides the path of the `xstate-core` crate in
+/// the generated code (see the crate docs).
 ///
 /// # Example
 ///
@@ -170,7 +188,7 @@ pub fn derive_typed_event(input: TokenStream) -> TokenStream {
 /// assert_eq!(active, [Door::Bolted]);
 /// # Ok::<(), xstate_core::Error>(())
 /// ```
-#[proc_macro_derive(TypedState, attributes(state))]
+#[proc_macro_derive(TypedState, attributes(state, xstate))]
 pub fn derive_typed_state(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     typed_state::derive(&input).unwrap_or_else(syn::Error::into_compile_error).into()
@@ -181,13 +199,15 @@ pub fn derive_typed_state(input: TokenStream) -> TokenStream {
 /// The macro expands to an expression of type `Result<Machine, xstate_core::Error>`: the
 /// chart becomes a `serde_json::Value` in XState v5 JSON form, passed to
 /// `Machine::from_value`. Every JSON fragment you write (`context`, `meta`, `output`, invoke
-/// `input`, action and guard parameters) goes through `::serde_json::json!` verbatim, so it
-/// may interpolate Rust expressions; the calling crate needs `serde_json` as a dependency.
+/// `input`, action and guard parameters) goes through `serde_json::json!` verbatim, so it
+/// may interpolate Rust expressions. `serde_json` and `xstate_core` are reached through
+/// `xstate-core` (or the `xstate-statemachine` facade), whichever the calling crate depends
+/// on; a leading `crate: path,` item names the `xstate_core` path explicitly.
 ///
 /// # Grammar
 ///
 /// ```text
-/// chart       := item,*                      // must contain `id` and `states`
+/// chart       := [crate: path,] item,*       // must contain `id` and `states`
 /// item        := state-item | root-item      // root-items only at the top level
 /// root-item   := id: name                    // the machine id
 ///              | context: JSON | version: JSON | strict: JSON | strictTargets: JSON
@@ -225,8 +245,12 @@ pub fn derive_typed_state(input: TokenStream) -> TokenStream {
 /// names       := name | [name,*]
 /// ```
 ///
-/// Items are separated by commas; a comma after an item that ends in `{ ... }` is optional.
-/// `JSON` is anything `serde_json::json!` accepts, up to the next top-level comma. Keys keep
+/// Items are separated by commas; a comma after an item that ends in a `{ ... }` block
+/// (`on { .. }`, `states { .. }`, a bare state `name { .. }`) is optional, but a `JSON` value
+/// (`context`, `meta`, `output`, `input`, ...) always needs its comma, even when it is itself
+/// a `{ ... }` object: `context: { "n": 0 } states: { .. }` is the error
+/// ``expected `,` after JSON value``. `JSON` is anything `serde_json::json!` accepts, up to
+/// the next top-level comma. Keys keep
 /// their XState spelling (`onDone`, `systemId`, `strictTargets`). `none` is the targetless
 /// keyword, so a state called `none` must be targeted as a string (`"none"`).
 ///
@@ -341,9 +365,17 @@ pub fn derive_typed_state(input: TokenStream) -> TokenStream {
 pub fn statechart(input: TokenStream) -> TokenStream {
     chart::statechart(input.into())
         .unwrap_or_else(|errors| {
-            // Several `compile_error!`s side by side are not an expression; a block is.
+            // Several `compile_error!`s side by side are not an expression; a block is. The
+            // block still has the type of a successful expansion (`Result<Machine, Error>`),
+            // so `statechart! { .. }?` and `let m: Machine = ..` add no second error.
             let errors = errors.into_compile_error();
-            quote::quote!({ #errors })
+            let krate = krate::resolve(None);
+            quote::quote!({
+                #errors
+                ::core::result::Result::<#krate::Machine, #krate::Error>::Err(
+                    #krate::Error::logic("statechart! failed to compile"),
+                )
+            })
         })
         .into()
 }

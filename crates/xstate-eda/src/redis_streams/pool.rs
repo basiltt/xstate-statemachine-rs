@@ -8,9 +8,6 @@ use redis::{Client, Connection, RedisError, RedisResult};
 
 use crate::error::BrokerError;
 
-/// Bound on connecting and on every socket read / write.
-pub(super) const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
-
 /// Idle connections kept for reuse.
 const MAX_IDLE: usize = 8;
 
@@ -19,6 +16,8 @@ const MAX_IDLE: usize = 8;
 pub(super) struct Pool {
     client: Client,
     idle: Mutex<Vec<Connection>>,
+    /// Bound on connecting and on every socket read / write.
+    io_timeout: Duration,
 }
 
 impl fmt::Debug for Pool {
@@ -43,19 +42,24 @@ pub(super) fn broker_error(e: &RedisError) -> BrokerError {
 
 impl Pool {
     /// Parse `url`; no connection is made yet.
-    pub(super) fn open(url: &str) -> Result<Self, String> {
+    pub(super) fn open(url: &str, io_timeout: Duration) -> Result<Self, String> {
         let client =
             Client::open(url).map_err(|e| format!("invalid Redis URL ({:?})", e.kind()))?;
-        Ok(Self { client, idle: Mutex::new(Vec::new()) })
+        Ok(Self { client, idle: Mutex::new(Vec::new()), io_timeout })
+    }
+
+    /// The bound on connecting and on every socket read / write.
+    pub(super) fn io_timeout(&self) -> Duration {
+        self.io_timeout
     }
 
     fn checkout(&self) -> RedisResult<(Connection, bool)> {
         if let Some(conn) = relock(&self.idle).pop() {
             return Ok((conn, true));
         }
-        let conn = self.client.get_connection_with_timeout(SOCKET_TIMEOUT)?;
-        conn.set_read_timeout(Some(SOCKET_TIMEOUT))?;
-        conn.set_write_timeout(Some(SOCKET_TIMEOUT))?;
+        let conn = self.client.get_connection_with_timeout(self.io_timeout)?;
+        conn.set_read_timeout(Some(self.io_timeout))?;
+        conn.set_write_timeout(Some(self.io_timeout))?;
         Ok((conn, false))
     }
 

@@ -77,7 +77,8 @@ impl Authorizer for AllowAll {
     }
 }
 
-/// [`AllowAll`] as a shared authorizer (the default of [`crate::RegisterOptions`]).
+/// [`AllowAll`] as a shared authorizer, for [`crate::RegisterOptions::new`]. There is no
+/// default authorizer: passing this is the explicit opt-out.
 #[must_use]
 pub fn allow_all() -> Arc<dyn Authorizer> {
     Arc::new(AllowAll)

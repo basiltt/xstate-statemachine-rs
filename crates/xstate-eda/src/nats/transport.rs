@@ -24,7 +24,7 @@ use async_nats::jetstream::{self, AckKind, Context, stream};
 use futures_util::StreamExt;
 
 use super::ConnectFactory;
-use crate::async_core::{CE_CONTENT_TYPE, Raw, Transport};
+use crate::async_core::{CE_CONTENT_TYPE, Raw, Transport, into_publish};
 use crate::envelope::Envelope;
 use crate::error::BrokerError;
 
@@ -42,6 +42,7 @@ pub(super) struct Settings {
     pub(super) ack_wait: Duration,
     pub(super) batch: usize,
     pub(super) max_bytes: usize,
+    pub(super) io_timeout: Duration,
 }
 
 /// Where the `JetStream` context comes from.
@@ -66,6 +67,8 @@ pub(super) struct NatsTransport {
     source: Source,
     pub(super) settings: Settings,
     cache: Mutex<Cache>,
+    /// Held while connecting, so concurrent first callers share one connection.
+    connecting: tokio::sync::Mutex<()>,
 }
 
 /// A NATS-safe single token for an envelope subject: `.`, `*`, `>` and whitespace become `_`,
@@ -102,14 +105,15 @@ fn publish_failed(error: impl Display) -> BrokerError {
 impl NatsTransport {
     pub(super) fn new(source: Source, settings: Settings, context: Option<Context>) -> Self {
         let cache = Cache { context, ..Cache::default() };
-        Self { source, settings, cache: Mutex::new(cache) }
+        Self { source, settings, cache: Mutex::new(cache), connecting: tokio::sync::Mutex::new(()) }
     }
 
     fn cache(&self) -> MutexGuard<'_, Cache> {
         self.cache.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The `JetStream` context, connecting on first use.
+    /// The `JetStream` context, connecting on first use. Connecting is serialised: of several
+    /// concurrent first callers one connects and the others reuse its connection.
     async fn context(&self) -> Result<Context, BrokerError> {
         if let Some(context) = self.cache().context.clone() {
             return Ok(context);
@@ -117,6 +121,11 @@ impl NatsTransport {
         let Source::Servers { addrs, connect_with } = &self.source else {
             return Err(failed("the JetStream context was closed"));
         };
+        let _connecting = self.connecting.lock().await;
+        // another caller may have connected while this one waited
+        if let Some(context) = self.cache().context.clone() {
+            return Ok(context);
+        }
         let options = connect_with.as_ref().map_or_else(async_nats::ConnectOptions::new, |f| f());
         let client = options.connect(addrs.clone()).await.map_err(failed)?;
         let context = jetstream::new(client);
@@ -214,6 +223,10 @@ impl Transport for NatsTransport {
         self.settings.max_bytes
     }
 
+    fn io_timeout(&self) -> Duration {
+        self.settings.io_timeout
+    }
+
     /// Publish on `{topic}.{subject token}` and wait for the stream's acknowledgement.
     async fn send(&self, topic: &str, envelope: &Envelope) -> Result<(), BrokerError> {
         let body = envelope.to_json(self.settings.max_bytes)?;
@@ -269,14 +282,6 @@ impl Transport for NatsTransport {
             Some(context) => context.client().drain().await.map_err(failed),
             None => Ok(()),
         }
-    }
-}
-
-/// A failure while preparing a publish is a publish failure.
-fn into_publish(error: BrokerError) -> BrokerError {
-    match error {
-        BrokerError::Other(why) => BrokerError::Publish(why),
-        other => other,
     }
 }
 

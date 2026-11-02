@@ -57,8 +57,9 @@ pub use dead_letter::{
     ReplayResult, dlq_topic, redact_record, replay_dead_letter, sink_fn,
 };
 pub use dispatcher::{
-    DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_BATCH, DEFAULT_MAX_IN_FLIGHT, Dispatch, DispatchResult,
-    EnvelopeHandler, HandlerError, InboundDispatcher, OnUnknown, machines_by_type,
+    DEFAULT_DEAD_LETTER_CAPACITY, DEFAULT_MAX_ATTEMPTS, DEFAULT_MAX_BATCH, DEFAULT_MAX_IN_FLIGHT,
+    Dispatch, DispatchResult, EnvelopeHandler, HandlerError, InboundDispatcher, OnUnknown,
+    machines_by_type,
 };
 pub use envelope::{
     ATTEMPT_EXTENSION, Envelope, EnvelopeBuilder, MAX_DATA_DEPTH, SPECVERSION, TransitionOrigin,
@@ -71,8 +72,8 @@ pub use nats::{NatsBroker, NatsOptions};
 #[cfg(feature = "sqlite")]
 pub use outbox::SqliteOutboxStore;
 pub use outbox::{
-    DEFAULT_CLAIM_LEASE_S, MemoryOutboxStore, OutboxPlugin, OutboxRecord, OutboxRelay, OutboxStore,
-    PUBLISH_TAG, PublishSource, PublishSpec, publish_specs,
+    DEFAULT_CLAIM_LEASE_S, DEFAULT_MAX_BUFFERED, MemoryOutboxStore, OutboxFailure, OutboxPlugin,
+    OutboxRecord, OutboxRelay, OutboxStore, PUBLISH_TAG, PublishSource, PublishSpec, publish_specs,
 };
 pub use py::{WallClock, now_iso, wall_now};
 #[cfg(feature = "rabbitmq")]

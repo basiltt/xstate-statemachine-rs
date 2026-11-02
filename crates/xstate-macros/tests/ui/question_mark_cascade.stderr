@@ -1,0 +1,5 @@
+error: unknown target `opend` from `door.closed`: not a sibling (or a sibling of an ancestor); use `.child` for children or `#id.path` for any state
+  --> tests/ui/question_mark_cascade.rs:10:35
+   |
+10 |             closed { on { OPEN => opend } }
+   |                                   ^^^^^

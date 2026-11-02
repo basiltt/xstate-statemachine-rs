@@ -34,12 +34,12 @@ lapin = { workspace = true, optional = true }
 aws-config = { workspace = true, optional = true }
 aws-sdk-sqs = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time"], optional = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time", "sync"], optional = true }
 rand = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["rt", "macros", "time"] }
+tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }
 
 [lints]
 workspace = true

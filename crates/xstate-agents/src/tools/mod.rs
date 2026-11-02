@@ -35,6 +35,12 @@ pub const DEFAULT_TOOL_TIMEOUT_S: f64 = 30.0;
 pub const DEFAULT_MAX_OUTPUT_CHARS: usize = 4000;
 /// The allow-list wildcard: every REGISTERED tool.
 pub const ALL_TOOLS: &str = "*";
+/// Longest accepted tool timeout (24 hours); a larger bound is a configuration mistake and
+/// would not fit every platform's `Duration` arithmetic.
+pub const MAX_TOOL_TIMEOUT_S: f64 = 86_400.0;
+/// Default cap on tool calls running at once across a registry (a timed-out tool keeps its
+/// thread until it returns).
+pub const DEFAULT_MAX_IN_FLIGHT: usize = 64;
 
 /// A tool implementation: validated arguments in, a JSON result out. It runs on a worker
 /// thread bounded by the tool's `timeout_s`.
@@ -93,6 +99,16 @@ impl ToolSpec {
 
     /// JSON schema of the arguments (an `object` schema; use `additionalProperties: false`
     /// to refuse unknown keys).
+    ///
+    /// Only the subset [`schema::validate`] enforces is accepted: `type` (string or list),
+    /// `properties`, `required`, `additionalProperties` (bool or schema), `items`, `enum`,
+    /// `const`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `minLength`,
+    /// `maxLength`, `minItems`, `maxItems`, `anyOf` / `oneOf`, `default`, local `$ref`
+    /// (`#`, `#/$defs/Name`, `#/definitions/Name`) and the annotations `title`,
+    /// `description`, `$defs`, `definitions`, `examples`. A keyword the validator would
+    /// silently ignore (`pattern`, `format`, `allOf`, `not`, `uniqueItems`, `minProperties`,
+    /// `if` / `then` / `else`, a remote `$ref`, ...) is refused by [`build`](Self::build) with
+    /// [`AgentError::Config`], because an ignored constraint reads as an enforced one.
     #[must_use]
     pub fn parameters(mut self, schema: Value) -> Self {
         self.parameters = schema;
@@ -116,13 +132,21 @@ impl ToolSpec {
     /// Resolve registry defaults into a [`Tool`].
     ///
     /// # Errors
-    /// [`AgentError::Config`] for a non-positive timeout or a reserved name.
+    /// [`AgentError::Config`] for a non-finite, non-positive or over-long (more than
+    /// [`MAX_TOOL_TIMEOUT_S`]) timeout, a reserved name, or a parameter schema using a
+    /// keyword outside the supported subset (see [`parameters`](Self::parameters)).
     pub fn build(self, default_timeout_s: f64, default_side_effect: bool) -> Result<Tool> {
         let timeout = self.timeout_s.unwrap_or(default_timeout_s);
         check_timeout(&self.name, timeout)?;
         if self.name == ALL_TOOLS {
             return Err(AgentError::config("'*' is reserved for the wildcard"));
         }
+        schema::check_supported(&self.parameters).map_err(|problem| {
+            AgentError::config(format!(
+                "tool {}: parameters: {problem}",
+                crate::pyfmt::py_repr_str(&self.name)
+            ))
+        })?;
         Ok(Tool {
             name: self.name,
             description: self.description,
@@ -135,11 +159,12 @@ impl ToolSpec {
 }
 
 pub(crate) fn check_timeout(name: &str, timeout: f64) -> Result<()> {
-    if timeout.is_finite() && timeout > 0.0 {
+    if timeout.is_finite() && timeout > 0.0 && timeout <= MAX_TOOL_TIMEOUT_S {
         return Ok(());
     }
     Err(AgentError::config(format!(
-        "tool {}: timeout_s must be a positive number (got {}); every tool is bounded (X0.13)",
+        "tool {}: timeout_s must be a positive number of at most {MAX_TOOL_TIMEOUT_S} (got {}); \
+         every tool is bounded (X0.13)",
         crate::pyfmt::py_repr_str(name),
         crate::pyfmt::py_float(timeout)
     )))
@@ -242,7 +267,47 @@ mod tests {
         assert_eq!(t.schema()["description"], "d");
         assert!(ToolSpec::new("t", |_| Ok(Value::Null)).timeout_s(0.0).build(1.0, false).is_err());
         assert!(ToolSpec::new("*", |_| Ok(Value::Null)).build(1.0, false).is_err());
+        for bad in [f64::NAN, f64::INFINITY, -1.0, 1e30, MAX_TOOL_TIMEOUT_S + 1.0] {
+            let spec = ToolSpec::new("t", |_| Ok(Value::Null)).timeout_s(bad);
+            assert!(spec.build(1.0, false).is_err(), "{bad}");
+        }
+        let longest = ToolSpec::new("t", |_| Ok(Value::Null)).timeout_s(MAX_TOOL_TIMEOUT_S);
+        assert!(longest.build(1.0, false).is_ok());
         assert!(format!("{t:?}").contains("Tool"));
+    }
+
+    #[test]
+    fn unsupported_schema_keywords_are_refused_at_build() {
+        let build = |schema: Value| {
+            ToolSpec::new("t", |_| Ok(Value::Null)).parameters(schema).build(1.0, false)
+        };
+        let unsupported = [
+            json!({"type": "object", "properties": {"q": {"type": "string", "pattern": "^a"}}}),
+            json!({"type": "object", "properties": {"d": {"type": "string", "format": "date"}}}),
+            json!({"allOf": [{"type": "object"}]}),
+            json!({"type": "object", "not": {"required": ["x"]}}),
+            json!({"type": "object", "properties": {"a": {"type": "array", "uniqueItems": true}}}),
+            json!({"type": "object", "minProperties": 1}),
+            json!({"type": "object", "if": {}, "then": {}, "else": {}}),
+            json!({"type": "object", "properties": {"a": {"$ref": "https://example.test/x.json"}}}),
+            json!({"properties": {"a": {"anyOf": [{"type": "null"}, {"pattern": "x"}]}}}),
+            json!({"type": "object", "$defs": {"X": {"format": "uuid"}}}),
+        ];
+        for schema in unsupported {
+            let err = build(schema.clone()).err().map(|e| e.to_string()).unwrap_or_default();
+            assert!(err.contains("tool 't': parameters:"), "{schema}: {err}");
+        }
+        // Names of properties and literal values are data, not keywords.
+        let fine = json!({
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "enum": ["format", "not"], "default": "not"},
+                "format": {"$ref": "#/$defs/F"}
+            },
+            "$defs": {"F": {"type": "string"}},
+            "required": ["format"]
+        });
+        assert!(build(fine).is_ok());
     }
 
     #[test]

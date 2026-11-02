@@ -91,7 +91,7 @@ bundled copy of SQLite, and the rustls backends of `postgres`, `nats`, `rabbitmq
 
 ## MSRV
 
-The workspace declares Rust 1.88. Every feature builds on 1.88 **except `postgres`**: `sqlx` 0.9
-requires Rust 1.94, so enabling it needs a toolchain that new. Until that is resolved (raise the MSRV, or move to an
-`sqlx` release that supports 1.88), `cargo check --workspace --all-features` on 1.88 fails, and so
-does the `MSRV` job in `ci.yml`.
+The workspace declares Rust 1.88. Every feature builds on 1.88 **except `postgres`** (and therefore
+`full`, which includes it): `sqlx` 0.9 requires Rust 1.94, so enabling it needs a toolchain that
+new. The `MSRV` job in `ci.yml` checks the workspace and every other feature on 1.88 and skips
+`postgres`; the other jobs run on stable, which covers it.

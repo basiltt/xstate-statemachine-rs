@@ -76,3 +76,15 @@ fn check_reports_unknown_non_leaf_and_missing_states() {
          door.locked.latched"
     );
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, TypedState)]
+#[state(machine = "door")]
+#[xstate(crate = "::xstate_core")]
+enum Overridden {
+    Closed,
+}
+
+#[test]
+fn crate_path_can_be_overridden() {
+    assert_eq!(Overridden::Closed.id(), "door.closed");
+}

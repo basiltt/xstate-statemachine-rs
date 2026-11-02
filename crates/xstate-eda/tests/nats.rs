@@ -8,6 +8,8 @@
 // The skip notes are printed on purpose: a CI without NATS must say why nothing ran.
 #![allow(clippy::print_stderr)]
 
+mod common;
+
 use std::fmt::Display;
 use std::future::Future;
 use std::sync::mpsc;
@@ -148,7 +150,7 @@ impl Ns {
     fn new(test: &str) -> Option<Self> {
         let url = nats_url();
         let Some(raw) = Raw::connect(&url) else {
-            eprintln!("skipping `{test}`: no NATS at {url} (set XSM_NATS_URL)");
+            common::service_unavailable(test, &format!("no NATS at {url} (set XSM_NATS_URL)"));
             return None;
         };
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
@@ -197,8 +199,23 @@ fn options_and_urls_are_validated() {
     assert!(bad(NatsOptions::new().durable("a b")));
     assert!(bad(NatsOptions::new().batch(0)));
     assert!(bad(NatsOptions::new().ack_wait(Duration::ZERO)));
+    assert!(bad(NatsOptions::new().io_timeout(Duration::ZERO)));
     assert!(matches!(NatsBroker::open("", &NatsOptions::new()), Err(EdaError::InvalidArgument(_))));
     assert!(NatsBroker::open("nats://a:4222, nats://b:4222", &NatsOptions::new()).is_ok());
+}
+
+#[test]
+fn a_server_that_never_answers_times_out() {
+    use xstate_eda::SyncBrokerAdapter;
+    let port = common::silent_server();
+    let options = NatsOptions::new().io_timeout(Duration::from_millis(300));
+    let broker = ok(NatsBroker::open(&format!("nats://127.0.0.1:{port}"), &options));
+    let started = Instant::now();
+    let result = SyncBrokerAdapter::publish(&broker, "orders", &envelope("s", 1));
+    let Err(BrokerError::Publish(why)) = result else { panic!("expected a timeout: {result:?}") };
+    assert!(why.contains("timed out"), "{why}");
+    assert!(started.elapsed() < Duration::from_secs(10), "bounded by io_timeout");
+    assert!(!broker.healthy());
 }
 
 mod sync_api {

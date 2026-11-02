@@ -8,11 +8,16 @@ use serde_json::Value;
 use crate::protocol::is_message_type;
 use crate::sinks::{Sink, SinkError, read_jsonl};
 
+/// The longest pause [`replay_with`] asks `sleep` for between two messages (one hour), so a
+/// recording with a huge or corrupt `createdAt` gap, or a tiny `speed`, cannot hang a replay.
+pub const MAX_REPLAY_GAP: Duration = Duration::from_secs(3600);
+
 /// Replay options.
 #[derive(Debug, Clone, Copy)]
 pub struct ReplayOptions {
     /// `0.0` (default) sends as fast as possible; `1.0` honours the recorded `createdAt`
-    /// gaps; `2.0` is twice as fast. Must be finite and `>= 0`.
+    /// gaps; `2.0` is twice as fast. Must be finite and `>= 0`. A single gap is capped at
+    /// [`MAX_REPLAY_GAP`] after scaling.
     pub speed: f64,
 }
 
@@ -58,11 +63,9 @@ pub fn replay_with<'a>(
         if options.speed > 0.0 {
             let at = created_at(msg);
             if let (Some(at), Some(prev)) = (at, last)
-                && at > prev
+                && let Some(gap_ms) = at.checked_sub(prev).filter(|gap| *gap > 0)
             {
-                #[allow(clippy::cast_precision_loss)]
-                let gap_s = (at - prev) as f64 / 1000.0 / options.speed;
-                sleep(Duration::from_secs_f64(gap_s));
+                sleep(scaled_gap(gap_ms, options.speed));
             }
             if at.is_some() {
                 last = at;
@@ -72,6 +75,14 @@ pub fn replay_with<'a>(
         sent += 1;
     }
     Ok(sent)
+}
+
+/// A recorded gap in milliseconds divided by `speed`, as a pause of at most [`MAX_REPLAY_GAP`]
+/// (a scaled gap that is not representable counts as the cap).
+fn scaled_gap(gap_ms: i64, speed: f64) -> Duration {
+    #[allow(clippy::cast_precision_loss)]
+    let seconds = gap_ms as f64 / 1000.0 / speed;
+    Duration::try_from_secs_f64(seconds).map_or(MAX_REPLAY_GAP, |gap| gap.min(MAX_REPLAY_GAP))
 }
 
 /// [`replay_with`] sleeping on the current thread.
@@ -114,6 +125,24 @@ mod tests {
     use crate::sinks::MemorySink;
     use serde_json::json;
     use std::cell::RefCell;
+
+    #[test]
+    fn gaps_are_capped_and_never_panic() {
+        let sink = MemorySink::new();
+        let slept = RefCell::new(Vec::new());
+        let messages = [
+            msg("@xstate.actor", "0"),
+            msg("@xstate.event", &i64::MAX.to_string()),
+            msg("@xstate.snapshot", &i64::MIN.to_string()),
+            msg("@xstate.snapshot", "5"),
+        ];
+        let fast = ReplayOptions { speed: 1e-300 };
+        let sent = replay_with(&messages, &sink, fast, |d| slept.borrow_mut().push(d))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(sent, 4);
+        // `i64::MAX - 0` is capped; `MIN - MAX` overflows and is skipped; `5 - MIN` overflows.
+        assert_eq!(*slept.borrow(), [MAX_REPLAY_GAP]);
+    }
 
     fn msg(kind: &str, at: &str) -> Value {
         json!({"type": kind, "createdAt": at, "sessionId": "s"})

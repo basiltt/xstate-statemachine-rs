@@ -140,7 +140,8 @@
         "history": {},
         "actors": {},
         "system": {}
-      }
+      },
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"profile\",\n  \"machine_hash\": \"357d0a40c0f8002f\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"done\",\n  \"context\": {\n    \"user\": null\n  },\n  \"state_ids\": [\n    \"profile.ready\"\n  ],\n  \"value\": \"ready\",\n  \"configuration\": [\n    \"profile\",\n    \"profile.ready\"\n  ],\n  \"output\": null,\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
     }
   }
 }

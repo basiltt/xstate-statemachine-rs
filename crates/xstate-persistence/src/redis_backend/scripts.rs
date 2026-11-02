@@ -93,6 +93,22 @@ end
 return gone
 ";
 
+/// KEYS: keys set. ARGV: (key, snapshot hash) pairs. Drops set members whose snapshot hash is gone
+/// (it expired) and returns them. Atomic with `SAVE`, so a key saved meanwhile is never dropped.
+/// Rust-only: not one of the scripts shared with Python, which lets expired members linger.
+const PRUNE_KEYS_SRC: &str = r"
+local gone = {}
+local i = 1
+while i <= #ARGV do
+  if redis.call('EXISTS', ARGV[i+1]) == 0 then
+    redis.call('SREM', KEYS[1], ARGV[i])
+    gone[#gone + 1] = ARGV[i]
+  end
+  i = i + 2
+end
+return gone
+";
+
 /// KEYS: lock. ARGV: token. Compare-and-delete: only the owner releases.
 const UNLOCK_SRC: &str = r"
 if redis.call('GET', KEYS[1]) == ARGV[1] then
@@ -116,5 +132,6 @@ pub(crate) static SAVE: LazyLock<Script> = LazyLock::new(|| Script::new(SAVE_SRC
 pub(crate) static FORGET: LazyLock<Script> = LazyLock::new(|| Script::new(FORGET_SRC));
 pub(crate) static DELETE: LazyLock<Script> = LazyLock::new(|| Script::new(DELETE_SRC));
 pub(crate) static PRUNE: LazyLock<Script> = LazyLock::new(|| Script::new(PRUNE_SRC));
+pub(crate) static PRUNE_KEYS: LazyLock<Script> = LazyLock::new(|| Script::new(PRUNE_KEYS_SRC));
 pub(crate) static UNLOCK: LazyLock<Script> = LazyLock::new(|| Script::new(UNLOCK_SRC));
 pub(crate) static SCHEMA: LazyLock<Script> = LazyLock::new(|| Script::new(SCHEMA_SRC));

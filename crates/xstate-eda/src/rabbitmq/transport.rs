@@ -31,7 +31,7 @@ use lapin::types::{AMQPValue, FieldTable, LongString, ShortString};
 use lapin::{BasicProperties, Channel, Connection, ExchangeKind};
 
 use super::ConnectFactory;
-use crate::async_core::{CE_CONTENT_TYPE, Raw, Transport};
+use crate::async_core::{CE_CONTENT_TYPE, Raw, Transport, into_publish};
 use crate::envelope::Envelope;
 use crate::error::BrokerError;
 
@@ -58,6 +58,9 @@ pub(super) struct Settings {
     pub(super) prefetch: usize,
     pub(super) batch: usize,
     pub(super) max_bytes: usize,
+    pub(super) io_timeout: Duration,
+    /// Declare the queues as quorum queues, whose `x-delivery-count` the broker maintains.
+    pub(super) quorum_queues: bool,
 }
 
 /// Where the channel comes from.
@@ -84,6 +87,9 @@ pub(super) struct RabbitTransport {
     source: Source,
     pub(super) settings: Settings,
     cache: Mutex<Cache>,
+    /// Held while a (re)connection is made, so concurrent callers share one connection instead
+    /// of each opening their own.
+    connecting: tokio::sync::Mutex<()>,
     /// Messages fetched and not yet acked or rejected. `basic.qos` only bounds `basic.consume`,
     /// not `basic.get`, so the adapter enforces `prefetch` itself.
     unacked: AtomicUsize,
@@ -91,14 +97,6 @@ pub(super) struct RabbitTransport {
 
 fn failed(error: impl Display) -> BrokerError {
     BrokerError::Other(format!("rabbitmq: {error}"))
-}
-
-/// A failure while preparing a publish is a publish failure.
-fn into_publish(error: BrokerError) -> BrokerError {
-    match error {
-        BrokerError::Other(why) => BrokerError::Publish(why),
-        other => other,
-    }
 }
 
 fn short_string(what: &str, value: &str) -> Result<ShortString, BrokerError> {
@@ -110,51 +108,72 @@ fn short_string(what: &str, value: &str) -> Result<ShortString, BrokerError> {
     Ok(ShortString::from(value))
 }
 
-/// Deliveries the broker made before this one: quorum queues stamp `x-delivery-count`; classic
-/// queues only say `redelivered` (counted as 1).
-fn attempts_of(properties: &BasicProperties, redelivered: bool) -> u64 {
-    let count = properties
-        .headers()
-        .as_ref()
-        .and_then(|table| table.inner().get("x-delivery-count"))
-        .and_then(|value| match value {
-            AMQPValue::ShortShortInt(n) => u64::try_from(*n).ok(),
-            AMQPValue::ShortShortUInt(n) => Some(u64::from(*n)),
-            AMQPValue::ShortInt(n) => u64::try_from(*n).ok(),
-            AMQPValue::ShortUInt(n) => Some(u64::from(*n)),
-            AMQPValue::LongInt(n) => u64::try_from(*n).ok(),
-            AMQPValue::LongUInt(n) => Some(u64::from(*n)),
-            AMQPValue::LongLongInt(n) => u64::try_from(*n).ok(),
-            _ => None,
-        });
+/// Deliveries the broker made before this one. Only a quorum queue (`trust_count`) stamps
+/// `x-delivery-count`; on any other queue the header is whatever the publisher put there, so it
+/// is ignored and the `redelivered` flag counts as 1.
+fn attempts_of(properties: &BasicProperties, redelivered: bool, trust_count: bool) -> u64 {
+    let count = trust_count
+        .then(|| {
+            properties
+                .headers()
+                .as_ref()
+                .and_then(|table| table.inner().get("x-delivery-count"))
+                .and_then(delivery_count)
+        })
+        .flatten();
     count.unwrap_or_else(|| u64::from(redelivered))
+}
+
+fn delivery_count(value: &AMQPValue) -> Option<u64> {
+    match value {
+        AMQPValue::ShortShortInt(n) => u64::try_from(*n).ok(),
+        AMQPValue::ShortShortUInt(n) => Some(u64::from(*n)),
+        AMQPValue::ShortInt(n) => u64::try_from(*n).ok(),
+        AMQPValue::ShortUInt(n) => Some(u64::from(*n)),
+        AMQPValue::LongInt(n) => u64::try_from(*n).ok(),
+        AMQPValue::LongUInt(n) => Some(u64::from(*n)),
+        AMQPValue::LongLongInt(n) => u64::try_from(*n).ok(),
+        _ => None,
+    }
 }
 
 impl RabbitTransport {
     pub(super) fn new(source: Source, settings: Settings, channel: Option<Channel>) -> Self {
         let cache = Cache { channel, ..Cache::default() };
-        Self { source, settings, cache: Mutex::new(cache), unacked: AtomicUsize::new(0) }
+        Self {
+            source,
+            settings,
+            cache: Mutex::new(cache),
+            connecting: tokio::sync::Mutex::new(()),
+            unacked: AtomicUsize::new(0),
+        }
     }
 
     fn cache(&self) -> MutexGuard<'_, Cache> {
         self.cache.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// The cached channel when it is still connected.
+    fn live_channel(&self) -> Option<Channel> {
+        self.cache().channel.clone().filter(|channel| channel.status().connected())
+    }
+
     /// A connected channel: the cached one, else a new channel on the live connection, else a new
-    /// connection (after a failure).
+    /// connection (after a failure). Reconnecting is serialised: of several callers that find the
+    /// channel dead, one connects and the others reuse what it made.
     async fn channel(&self) -> Result<Channel, BrokerError> {
-        let (channel, connection) = {
-            let cache = self.cache();
-            (cache.channel.clone(), cache.connection.clone())
-        };
-        if let Some(channel) = channel
-            && channel.status().connected()
-        {
+        if let Some(channel) = self.live_channel() {
             return Ok(channel);
         }
         let Source::Url { url, connect_with } = &self.source else {
             return Err(failed("the channel is closed"));
         };
+        let _connecting = self.connecting.lock().await;
+        // another caller may have reconnected while this one waited
+        if let Some(channel) = self.live_channel() {
+            return Ok(channel);
+        }
+        let connection = self.cache().connection.clone();
         let connection = match connection {
             Some(live) if live.status().connected() => live,
             _ => {
@@ -182,13 +201,21 @@ impl RabbitTransport {
         Ok(channel)
     }
 
-    /// Declare the durable queue of `topic` once per channel (a publish to no queue is lost).
+    /// Declare the durable queue of `topic` once per channel (a publish to no queue is lost); a
+    /// quorum queue when so configured.
     async fn queue(&self, channel: &Channel, topic: &str) -> Result<(), BrokerError> {
         if self.cache().queues.contains(topic) {
             return Ok(());
         }
         let options = QueueDeclareOptions { durable: true, ..QueueDeclareOptions::default() };
-        channel.queue_declare(topic, options, FieldTable::default()).await.map_err(failed)?;
+        let mut arguments = FieldTable::default();
+        if self.settings.quorum_queues {
+            arguments.insert(
+                ShortString::from("x-queue-type"),
+                AMQPValue::LongString(LongString::from("quorum")),
+            );
+        }
+        channel.queue_declare(topic, options, arguments).await.map_err(failed)?;
         self.cache().queues.insert(topic.to_owned());
         Ok(())
     }
@@ -256,15 +283,22 @@ impl RabbitTransport {
                 (exchange.as_str(), envelope.subject.as_deref().unwrap_or_default())
             }
         };
+        // `mandatory`: a message no queue accepted is returned by the broker instead of being
+        // silently dropped (the default exchange routes by queue name, an operator-bound exchange
+        // by its bindings, and a missing binding is a lost event)
+        let options = BasicPublishOptions { mandatory: true, ..BasicPublishOptions::default() };
         let confirm = channel
-            .basic_publish(exchange, routing_key, BasicPublishOptions::default(), body, properties)
+            .basic_publish(exchange, routing_key, options, body, properties)
             .await
             .map_err(failed)?
             .await
             .map_err(failed)?;
         match confirm {
-            Confirmation::Nack(_) => Err(failed("the broker refused the message (nack)")),
-            Confirmation::Ack(_) | Confirmation::NotRequested => Ok(()),
+            Confirmation::Ack(Some(_)) | Confirmation::Nack(Some(_)) => Err(BrokerError::Publish(
+                "rabbitmq: unroutable: no queue is bound for the routing key".to_owned(),
+            )),
+            Confirmation::Nack(None) => Err(failed("the broker refused the message (nack)")),
+            Confirmation::Ack(None) | Confirmation::NotRequested => Ok(()),
         }
     }
 }
@@ -282,6 +316,10 @@ impl Transport for RabbitTransport {
 
     fn max_bytes(&self) -> usize {
         self.settings.max_bytes
+    }
+
+    fn io_timeout(&self) -> Duration {
+        self.settings.io_timeout
     }
 
     /// Publish persistently with publisher confirms.
@@ -309,7 +347,11 @@ impl Transport for RabbitTransport {
             };
             let delivery = message.delivery;
             out.push(Raw {
-                attempts: attempts_of(&delivery.properties, delivery.redelivered),
+                attempts: attempts_of(
+                    &delivery.properties,
+                    delivery.redelivered,
+                    self.settings.quorum_queues,
+                ),
                 native: delivery.acker,
                 body: delivery.data,
             });
@@ -372,14 +414,22 @@ mod tests {
     }
 
     #[test]
-    fn attempts_follow_the_delivery_count_then_the_redelivered_flag() {
+    fn attempts_follow_the_delivery_count_of_a_quorum_queue_then_the_redelivered_flag() {
         let plain = BasicProperties::default();
-        assert_eq!(attempts_of(&plain, false), 0);
-        assert_eq!(attempts_of(&plain, true), 1);
-        assert_eq!(attempts_of(&with_count(AMQPValue::LongLongInt(4)), false), 4);
-        assert_eq!(attempts_of(&with_count(AMQPValue::LongInt(2)), true), 2);
-        assert_eq!(attempts_of(&with_count(AMQPValue::LongInt(-1)), true), 1, "negative: ignored");
-        assert_eq!(attempts_of(&with_count(AMQPValue::Boolean(true)), false), 0);
+        assert_eq!(attempts_of(&plain, false, true), 0);
+        assert_eq!(attempts_of(&plain, true, true), 1);
+        assert_eq!(attempts_of(&with_count(AMQPValue::LongLongInt(4)), false, true), 4);
+        assert_eq!(attempts_of(&with_count(AMQPValue::LongInt(2)), true, true), 2);
+        let negative = with_count(AMQPValue::LongInt(-1));
+        assert_eq!(attempts_of(&negative, true, true), 1, "negative: ignored");
+        assert_eq!(attempts_of(&with_count(AMQPValue::Boolean(true)), false, true), 0);
+    }
+
+    #[test]
+    fn a_classic_queue_never_trusts_a_publisher_supplied_delivery_count() {
+        let forged = with_count(AMQPValue::LongLongInt(1_000));
+        assert_eq!(attempts_of(&forged, false, false), 0);
+        assert_eq!(attempts_of(&forged, true, false), 1);
     }
 
     #[test]

@@ -5,23 +5,28 @@ use serde_json::Value;
 use xstate_core::engine::StepReport;
 use xstate_core::{ActiveState, Event, Machine, Observer};
 
+use std::sync::Arc;
+
+use crate::callable::CallableSlot;
 use crate::convert;
 
 /// Forwards the start and every processed event to `callback(event, state_ids, changed)`.
 /// Observers must never stop the machine, so an exception the callback raises is reported
 /// through `sys.unraisablehook` instead of propagating.
 pub(crate) struct PyObserver {
-    callback: Py<PyAny>,
+    callback: Arc<CallableSlot>,
 }
 
 impl PyObserver {
-    pub(crate) fn new(callback: Py<PyAny>) -> Self {
+    pub(crate) fn new(callback: Arc<CallableSlot>) -> Self {
         Self { callback }
     }
 
     fn notify(&self, event: &Event, state_ids: Vec<String>, changed: bool) {
         Python::attach(|py| {
-            let callback = self.callback.bind(py);
+            // Cleared by the garbage collector: the interpreter is being torn down.
+            let Some(callback) = self.callback.get(py) else { return };
+            let callback = callback.bind(py);
             let call = || -> PyResult<()> {
                 callback.call1((convert::event_to_py(py, event)?, state_ids, changed)).map(drop)
             };

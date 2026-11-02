@@ -53,7 +53,7 @@ impl Ns {
     fn new(test: &str) -> Option<Self> {
         let url = redis_url();
         if raw_connection(&url).is_none() {
-            eprintln!("skipping `{test}`: no Redis at {url} (set XSM_REDIS_URL)");
+            common::service_unavailable(test, &format!("no Redis at {url} (set XSM_REDIS_URL)"));
             return None;
         }
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
@@ -408,6 +408,41 @@ fn options_and_urls_are_validated() {
 fn an_unreachable_redis_is_unavailable_and_health_reports_it() {
     let refused = RedisStore::open("redis://127.0.0.1:1/", &RedisStoreOptions::new("p"));
     assert!(matches!(refused, Err(StoreError::Unavailable(_))), "{refused:?}");
+}
+
+#[test]
+fn list_keys_filters_before_it_applies_the_limit() {
+    let ns = ns!("listlimit");
+    let store = ns.store();
+    ok(store.save("real", "{}", &SaveOptions::default()));
+    // a member another writer planted that `load()` would refuse; NUL sorts before everything
+    let _: i64 = ns.command(redis::cmd("SADD").arg(ns.key("keys")).arg("\u{0}planted"));
+    assert_eq!(ok(store.list_keys("", 1)), ["real"], "the planted key does not use up the limit");
+}
+
+#[test]
+fn list_keys_prunes_the_members_of_expired_snapshots() {
+    let ns = ns!("listprune");
+    let short =
+        ok(RedisStore::open(&ns.url, &RedisStoreOptions::new(ns.prefix.clone()).ttl_s(0.05)));
+    let store = ns.store();
+    ok(short.save("gone", "{}", &SaveOptions::default()));
+    ok(store.save("stays", "{}", &SaveOptions::default()));
+    thread::sleep(Duration::from_millis(250));
+    let member =
+        |key: &str| -> i64 { ns.command(redis::cmd("SISMEMBER").arg(ns.key("keys")).arg(key)) };
+    assert_eq!(member("gone"), 1, "Redis cannot expire one member of a set");
+    assert_eq!(ok(store.list_keys("", 10)), ["stays"], "an expired key is never advertised");
+    assert_eq!(member("gone"), 0, "and the member is gone from the set after the listing");
+    assert_eq!(member("stays"), 1);
+}
+
+#[test]
+fn driver_errors_never_carry_the_address() {
+    let refused = RedisStore::open("redis://127.0.0.1:1/", &RedisStoreOptions::new("p"));
+    let Err(StoreError::Unavailable(message)) = refused else { panic!("{refused:?}") };
+    assert!(message.contains("backend unavailable"), "{message}");
+    assert!(!message.contains("127.0.0.1"), "{message}");
 }
 
 #[test]

@@ -144,7 +144,7 @@ fn agents_feature_exposes_the_tool_loop_chart() {
 #[test]
 fn axum_feature_exposes_the_registry() {
     use std::sync::Arc;
-    use xstate_statemachine::axum::{RegisterOptions, StatechartRegistry};
+    use xstate_statemachine::axum::{RegisterOptions, StatechartRegistry, allow_all};
     use xstate_statemachine::persistence::MemoryStore;
 
     let registry = StatechartRegistry::builder(Arc::new(MemoryStore::new()))
@@ -152,7 +152,8 @@ fn axum_feature_exposes_the_registry() {
             "toggle",
             Machine::from_json(TOGGLE).unwrap(),
             MachineLogic::dynamic(),
-            RegisterOptions::default(),
+            // Authorization is explicit: `allow_all()` opts out of access control on purpose.
+            RegisterOptions::new(allow_all()),
         )
         .unwrap()
         .build();

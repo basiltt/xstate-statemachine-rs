@@ -8,13 +8,14 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Path, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use futures_util::future::{AbortHandle, Abortable};
 use serde_json::Value;
 use xstate_core::pyjson::dumps_compact;
 
 use super::RouteCtx;
 use crate::fanout::{FanoutItem, Subscription};
 use crate::problem::problem;
-use crate::registry::{ConnectionSlot, StatechartRegistry};
+use crate::registry::{ConnectionRefused, ConnectionSlot, StatechartRegistry};
 
 const HEARTBEAT: &[u8] = b": heartbeat\n\n";
 
@@ -45,13 +46,28 @@ async fn next_frame(mut st: SseState) -> Option<(Result<Bytes, Infallible>, SseS
     }
 }
 
+/// The problem answering a refused stream slot.
+fn refusal(refused: ConnectionRefused) -> Response {
+    let (status, title) = match refused {
+        ConnectionRefused::Draining => (503, "Shutting down"),
+        ConnectionRefused::PerKey => (429, "Too many connections for this instance"),
+        ConnectionRefused::Global => (429, "Too many connections"),
+    };
+    problem(status, title).into_response()
+}
+
 /// `text/event-stream` of one instance: `event: snapshot` on connect, then
 /// `event: transition` once per changed receipt committed in **this** process (`id:` = the
 /// per-instance sequence), and a `: heartbeat` comment every heartbeat interval.
 ///
 /// Refusals are problems: 403 (origin / authorizer), 503 (draining), 429
-/// (`max_connections_per_key`). The subscription and the connection slot are released when
-/// the client disconnects (the response body is dropped).
+/// (`max_connections_per_key` or `max_connections`). The subscription and the connection slot
+/// are released when the client disconnects (the response body is dropped);
+/// [`StatechartRegistry::shutdown`] ends the stream, aborting it after the drain timeout.
+///
+/// Ordering rule: the subscription is taken **before** the snapshot is read. A transition
+/// committed in between then shows up in the snapshot and again as a `transition` frame (a
+/// harmless duplicate); reading first would lose it.
 pub async fn transition_stream(
     registry: &Arc<StatechartRegistry>,
     name: &str,
@@ -65,26 +81,26 @@ pub async fn transition_stream(
     if let Err(error) = registry.authorize(principal, name, key, None) {
         return error.into_response();
     }
+    let slot = match registry.try_open_connection(name, key) {
+        Ok(slot) => slot,
+        Err(refused) => return refusal(refused),
+    };
+    let subscription = registry.subscribers().subscribe(name, key);
+    let seq0 = registry.subscribers().seq(name, key);
     let snapshot = match registry.peek(name, key).await {
         Ok(snapshot) => snapshot,
         Err(error) => return error.into_response(),
     };
-    if registry.is_draining() {
-        return problem(503, "Shutting down").into_response();
-    }
-    let Some(slot) = registry.try_open_connection(name, key) else {
-        return problem(429, "Too many connections for this instance").into_response();
-    };
-    let subscription = registry.subscribers().subscribe(name, key);
-    let seq0 = registry.subscribers().seq(name, key);
+    let (handle, registration) = AbortHandle::new_pair();
+    slot.attach(handle);
     let state = SseState {
         pending: Some(sse_frame("snapshot", &snapshot, Some(seq0))),
         subscription,
         heartbeat: registry.settings.heartbeat,
         _slot: slot,
     };
-    let body = Body::from_stream(futures_util::stream::unfold(state, next_frame));
-    let mut response = (StatusCode::OK, body).into_response();
+    let frames = Abortable::new(futures_util::stream::unfold(state, next_frame), registration);
+    let mut response = (StatusCode::OK, Body::from_stream(frames)).into_response();
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));

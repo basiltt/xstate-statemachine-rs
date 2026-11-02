@@ -32,6 +32,7 @@
 //! the local queue and the next `poll` delivers them.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::envelope::DEFAULT_MAX_SNAPSHOT_BYTES;
 use crate::error::{EdaError, EnvelopeError, Result};
@@ -56,6 +57,11 @@ pub const DEFAULT_MIN_IDLE_MS: u64 = 60_000;
 /// Default entries fetched per read: small, because fetched entries wait locally while the
 /// broker's redelivery clock runs.
 pub const DEFAULT_BATCH: usize = 10;
+/// Largest accepted `batch` (entries per read): a bigger one only ties up memory and the
+/// broker's redelivery clock while the entries wait locally.
+pub const MAX_BATCH: usize = 10_000;
+/// Default bound on connecting and on every socket read / write.
+pub const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Options of a [`RedisStreamsBroker`].
 #[derive(Clone)]
@@ -72,10 +78,13 @@ pub struct RedisStreamsOptions {
     pub min_idle_ms: u64,
     /// Approximate stream cap on publish (`XADD MAXLEN ~`); `None` = unbounded.
     pub maxlen: Option<u64>,
-    /// Entries fetched per read, at least 1.
+    /// Entries fetched per read, 1 to [`MAX_BATCH`].
     pub batch: usize,
     /// Size cap of an envelope on the wire, checked on publish and before parsing on receive.
     pub max_bytes: usize,
+    /// Bound on connecting and on every socket read / write (a blocking read may additionally
+    /// wait as long as the poll asked). A call that exceeds it fails.
+    pub io_timeout: Duration,
     /// Called for every undecodable inbound message.
     pub on_undecodable: Option<UndecodableHook>,
 }
@@ -91,6 +100,7 @@ impl std::fmt::Debug for RedisStreamsOptions {
             .field("maxlen", &self.maxlen)
             .field("batch", &self.batch)
             .field("max_bytes", &self.max_bytes)
+            .field("io_timeout", &self.io_timeout)
             .finish_non_exhaustive()
     }
 }
@@ -109,6 +119,7 @@ impl RedisStreamsOptions {
             maxlen: None,
             batch: DEFAULT_BATCH,
             max_bytes: DEFAULT_MAX_SNAPSHOT_BYTES,
+            io_timeout: DEFAULT_IO_TIMEOUT,
             on_undecodable: None,
         }
     }
@@ -162,6 +173,13 @@ impl RedisStreamsOptions {
         self
     }
 
+    /// Bound connecting and every socket read / write by `io_timeout` (default 30 s).
+    #[must_use]
+    pub fn io_timeout(mut self, io_timeout: Duration) -> Self {
+        self.io_timeout = io_timeout;
+        self
+    }
+
     /// Be told about every undecodable inbound message.
     #[must_use]
     pub fn on_undecodable(
@@ -190,8 +208,11 @@ impl RedisStreamsOptions {
         if self.shards < 1 {
             return invalid("shards must be >= 1");
         }
-        if self.batch < 1 {
-            return invalid("batch must be >= 1");
+        if !(1..=MAX_BATCH).contains(&self.batch) {
+            return invalid(&format!("batch must be between 1 and {MAX_BATCH}"));
+        }
+        if self.io_timeout.is_zero() {
+            return invalid("io_timeout must be > 0");
         }
         if self.maxlen == Some(0) {
             return invalid("maxlen must be >= 1");
@@ -205,6 +226,7 @@ impl RedisStreamsOptions {
             maxlen: self.maxlen,
             batch: self.batch,
             max_bytes: self.max_bytes,
+            io_timeout: self.io_timeout,
         })
     }
 }
@@ -237,7 +259,7 @@ impl RedisStreamsBroker {
     /// [`EdaError::InvalidArgument`] for an invalid URL or option.
     pub fn open(url: &str, options: &RedisStreamsOptions) -> Result<Self> {
         let settings = options.settings()?;
-        let pool = Pool::open(url).map_err(EdaError::InvalidArgument)?;
+        let pool = Pool::open(url, settings.io_timeout).map_err(EdaError::InvalidArgument)?;
         let transport = Transport::new(pool, settings);
         Ok(Self { core: Arc::new(Core::new(transport, options.on_undecodable.clone())) })
     }

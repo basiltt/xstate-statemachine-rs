@@ -9,6 +9,8 @@
 // `#[test]` functions).
 #![allow(clippy::print_stderr, clippy::expect_used)]
 
+mod common;
+
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Display;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -44,7 +46,7 @@ impl Ns {
     fn new(test: &str) -> Option<Self> {
         let url = redis_url();
         if raw_connection(&url).is_none() {
-            eprintln!("skipping `{test}`: no Redis at {url} (set XSM_REDIS_URL)");
+            common::service_unavailable(test, &format!("no Redis at {url} (set XSM_REDIS_URL)"));
             return None;
         }
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
@@ -123,6 +125,29 @@ fn options_and_urls_are_validated() {
         RedisStreamsBroker::open("not a url", &RedisStreamsOptions::new("p")),
         Err(EdaError::InvalidArgument(_))
     ));
+}
+
+#[test]
+fn a_server_that_never_answers_fails_within_the_io_timeout() {
+    use xstate_eda::SyncBrokerAdapter;
+    let port = common::silent_server();
+    let options = RedisStreamsOptions::new("p").io_timeout(Duration::from_millis(300));
+    let broker = ok(RedisStreamsBroker::open(&format!("redis://127.0.0.1:{port}/0"), &options));
+    let started = Instant::now();
+    let result = SyncBrokerAdapter::publish(&broker, "orders", &envelope("s", 1));
+    assert!(matches!(result, Err(BrokerError::Publish(_))), "{result:?}");
+    assert!(started.elapsed() < Duration::from_secs(10), "bounded by io_timeout");
+    assert!(!broker.healthy());
+}
+
+#[test]
+fn the_read_size_and_the_timeout_are_bounded() {
+    let bad = |o: RedisStreamsOptions| {
+        matches!(RedisStreamsBroker::open(&redis_url(), &o), Err(EdaError::InvalidArgument(_)))
+    };
+    assert!(bad(RedisStreamsOptions::new("p").batch(10_001)));
+    assert!(!bad(RedisStreamsOptions::new("p").batch(10_000)));
+    assert!(bad(RedisStreamsOptions::new("p").io_timeout(Duration::ZERO)));
 }
 
 mod sync_api {
@@ -398,6 +423,33 @@ mod sync_api {
         assert_eq!(reports.len(), 3);
         assert!(reports.iter().all(|(topic, _)| topic == TOPIC));
         assert_eq!(reports[0].1, "EnvelopeTooLargeError");
+    }
+
+    #[test]
+    fn an_entry_with_unreadable_fields_is_reported_and_acked() {
+        let ns = ns!("malformed");
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let hook_seen = std::sync::Arc::clone(&seen);
+        let options = ns.options().on_undecodable(move |_, error: &EnvelopeError| {
+            hook_seen
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(error.type_name());
+        });
+        let broker = ns.broker(&options);
+        let stream = ns.stream(TOPIC);
+        // a field name that is not text: the entry exists, it just cannot be read (it is not a
+        // deleted entry, and must not be left pending forever)
+        let mut cmd = redis::cmd("XADD");
+        cmd.arg(&stream).arg("*").arg(&b"\xff\xfe"[..]).arg("v");
+        ns.query::<String>(&mut cmd);
+        let good = envelope("s", 1);
+        ok(broker.publish(TOPIC, &good));
+        assert_eq!(take(&broker, TOPIC, 1).remove(0).envelope, good);
+        assert!(idle(&broker, TOPIC));
+        assert_eq!(ns.pending(&stream, "xsm"), 1, "the unreadable entry was acked");
+        let reports = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        assert_eq!(reports, ["EnvelopeCorruptError"]);
     }
 
     #[test]

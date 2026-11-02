@@ -38,7 +38,8 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
             return Err(syn::Error::new_spanned(v.ident, msg));
         }
     }
-    Ok(expand(input, &variants))
+    let krate = crate::krate::resolve(crate::krate::from_attrs(&input.attrs)?.as_ref());
+    Ok(expand(input, &variants, &krate))
 }
 
 fn enum_case(input: &DeriveInput) -> syn::Result<Option<Case>> {
@@ -88,7 +89,7 @@ fn parse_variant(variant: &Variant, rename_all: Option<Case>) -> syn::Result<Eve
     Ok(EventVariant { ident: &variant.ident, ty, shape })
 }
 
-fn expand(input: &DeriveInput, variants: &[EventVariant<'_>]) -> TokenStream {
+fn expand(input: &DeriveInput, variants: &[EventVariant<'_>], krate: &TokenStream) -> TokenStream {
     let (name, vis) = (&input.ident, &input.vis);
     let mut sorted: Vec<&str> = variants.iter().map(|v| v.ty.as_str()).collect();
     sorted.sort_unstable();
@@ -96,7 +97,7 @@ fn expand(input: &DeriveInput, variants: &[EventVariant<'_>]) -> TokenStream {
         let (ident, ty) = (v.ident, &v.ty);
         quote!(Self::#ident { .. } => #ty)
     });
-    let conversions = conversions(name, variants);
+    let conversions = conversions(name, variants, krate);
     quote! {
         #[automatically_derived]
         impl #name {
@@ -118,14 +119,14 @@ fn expand(input: &DeriveInput, variants: &[EventVariant<'_>]) -> TokenStream {
             /// Describes the events the enum declares that the chart does not handle and the
             /// events the chart handles that the enum does not declare.
             #vis fn check(
-                machine: &::xstate_core::Machine,
+                machine: &#krate::Machine,
             ) -> ::core::result::Result<(), ::std::string::String> {
-                <Self as ::xstate_core::TypedEvent>::check(machine)
+                <Self as #krate::TypedEvent>::check(machine)
             }
         }
 
         #[automatically_derived]
-        impl ::xstate_core::TypedEvent for #name {
+        impl #krate::TypedEvent for #name {
             fn event_type(&self) -> &'static str {
                 #name::event_type(self)
             }
@@ -140,27 +141,27 @@ fn expand(input: &DeriveInput, variants: &[EventVariant<'_>]) -> TokenStream {
 }
 
 /// `From<Enum> for Event` and `TryFrom<Event> for Enum`.
-fn conversions(name: &Ident, variants: &[EventVariant<'_>]) -> TokenStream {
-    let into_arms = variants.iter().map(|v| into_arm(name, v));
-    let from_arms = variants.iter().map(from_arm);
+fn conversions(name: &Ident, variants: &[EventVariant<'_>], krate: &TokenStream) -> TokenStream {
+    let into_arms = variants.iter().map(|v| into_arm(name, v, krate));
+    let from_arms = variants.iter().map(|v| from_arm(v, krate));
     quote! {
         #[automatically_derived]
-        impl ::core::convert::From<#name> for ::xstate_core::Event {
+        impl ::core::convert::From<#name> for #krate::Event {
             fn from(event: #name) -> Self {
                 match event { #(#into_arms,)* }
             }
         }
 
         #[automatically_derived]
-        impl ::core::convert::TryFrom<::xstate_core::Event> for #name {
-            type Error = ::xstate_core::Error;
+        impl ::core::convert::TryFrom<#krate::Event> for #name {
+            type Error = #krate::Error;
 
             fn try_from(
-                event: ::xstate_core::Event,
-            ) -> ::core::result::Result<Self, ::xstate_core::Error> {
+                event: #krate::Event,
+            ) -> ::core::result::Result<Self, #krate::Error> {
                 match event.ty.as_str() {
                     #(#from_arms,)*
-                    other => ::core::result::Result::Err(::xstate_core::Error::InvalidEvent(
+                    other => ::core::result::Result::Err(#krate::Error::InvalidEvent(
                         ::std::format!(
                             "unknown event `{other}`; expected one of {:?}",
                             #name::declared_events(),
@@ -173,22 +174,22 @@ fn conversions(name: &Ident, variants: &[EventVariant<'_>]) -> TokenStream {
 }
 
 /// `Enum::Variant.. => Event` arm of `From<Enum> for Event`.
-fn into_arm(name: &Ident, v: &EventVariant<'_>) -> TokenStream {
+fn into_arm(name: &Ident, v: &EventVariant<'_>, krate: &TokenStream) -> TokenStream {
     let (ident, ty) = (v.ident, &v.ty);
     match &v.shape {
-        Shape::Unit => quote!(#name::#ident { .. } => ::xstate_core::Event::new(#ty)),
+        Shape::Unit => quote!(#name::#ident { .. } => #krate::Event::new(#ty)),
         Shape::Newtype => quote! {
-            #name::#ident(payload) => ::xstate_core::Event::with_payload(
-                #ty, ::xstate_core::typed::encode(#ty, &payload),
+            #name::#ident(payload) => #krate::Event::with_payload(
+                #ty, #krate::typed::encode(#ty, &payload),
             )
         },
         Shape::Named(fields) => {
             let keys = fields.iter().map(|f| crate::unraw(f));
             quote! {
-                #name::#ident { #(#fields),* } => ::xstate_core::Event::with_payload(
+                #name::#ident { #(#fields),* } => #krate::Event::with_payload(
                     #ty,
-                    ::xstate_core::typed::object([
-                        #((#keys, ::xstate_core::typed::encode(#ty, &#fields))),*
+                    #krate::typed::object([
+                        #((#keys, #krate::typed::encode(#ty, &#fields))),*
                     ]),
                 )
             }
@@ -197,9 +198,9 @@ fn into_arm(name: &Ident, v: &EventVariant<'_>) -> TokenStream {
 }
 
 /// `"TYPE" => Ok(Variant..)` arm of `TryFrom<Event> for Enum`.
-fn from_arm(v: &EventVariant<'_>) -> TokenStream {
+fn from_arm(v: &EventVariant<'_>, krate: &TokenStream) -> TokenStream {
     let (ident, ty) = (v.ident, &v.ty);
-    let decode = quote!(::xstate_core::typed::decode);
+    let decode = quote!(#krate::typed::decode);
     let value = match &v.shape {
         Shape::Unit => quote!(Self::#ident {}),
         Shape::Newtype => {

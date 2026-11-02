@@ -94,8 +94,9 @@ impl Ns {
     fn new(test: &str) -> Option<Self> {
         let url = postgres_url();
         let Some(raw) = Raw::connect(&url) else {
-            eprintln!(
-                "skipping `{test}`: no PostgreSQL reachable (XSM_POSTGRES_URL, default {DEFAULT_URL})"
+            common::service_unavailable(
+                test,
+                &format!("no PostgreSQL reachable (XSM_POSTGRES_URL, default {DEFAULT_URL})"),
             );
             return None;
         };
@@ -641,4 +642,60 @@ fn from_pool_works_inside_tokio_through_spawn_blocking() {
     assert_eq!((version, snapshot.as_deref()), (1, Some(r#"{"from":"pool"}"#)));
     // The caller's pool is still open: the store never closes a pool it did not create.
     assert!(!probe.is_closed());
+}
+
+// ------------------------------------------------------------- lease drop, clock, keys, errors
+
+#[test]
+fn dropping_a_lock_guard_inside_a_runtime_releases_it_without_panicking() {
+    let ns = ns!("lockdropasync");
+    let store = ns.store();
+    let guard = ok(store.lock("k", Duration::ZERO));
+    let rt = Builder::new_current_thread().enable_all().build().expect("a runtime");
+    // `Handle::block_on` inside a runtime panics: the release is handed to the store's runtime
+    rt.block_on(async move { drop(guard) });
+    let again = ok(store.lock("k", Duration::from_secs(5)));
+    assert_eq!(again.key(), "k", "the lease was released in the background");
+}
+
+#[test]
+fn the_lease_expiry_is_measured_on_the_servers_clock() {
+    let ns = ns!("lockclock");
+    let options = ns.options().lock_ttl(Duration::from_secs(60));
+    let store = ok(PostgresStore::connect(&ns.url, &options));
+    let _guard = ok(store.lock("k", Duration::ZERO));
+    let ahead = ns.raw.int(&format!(
+        "SELECT round(expires_at - extract(epoch from clock_timestamp())::float8)::bigint FROM {}",
+        ns.t("xsm_locks")
+    ));
+    assert!((59..=60).contains(&ahead), "the lease ends {ahead} s after the server's now");
+}
+
+#[test]
+fn list_keys_matches_the_prefix_literally() {
+    let ns = ns!("likeprefix");
+    let store = ns.store();
+    for key in ["100%_a", "100xxa", r"100\b", "100%", "10", "a_b", "axb"] {
+        ok(store.save(key, "{}", &SaveOptions::default()));
+    }
+    // `%`, `_` and `\` are not wildcards or escapes in a prefix
+    assert_eq!(ok(store.list_keys("100%_", 10)), ["100%_a"]);
+    assert_eq!(ok(store.list_keys(r"100\", 10)), [r"100\b"]);
+    assert_eq!(ok(store.list_keys("a_", 10)), ["a_b"]);
+    assert_eq!(ok(store.list_keys("100%", 10)), ["100%", "100%_a"]);
+    assert_eq!(ok(store.list_keys("", 3)).len(), 3);
+}
+
+#[test]
+fn driver_errors_never_carry_the_host_or_the_password() {
+    let url = "postgres://xsm:sekrit@127.0.0.1:1/xsm";
+    let Err(StoreError::Unavailable(message)) =
+        PostgresStore::connect(url, &PostgresStoreOptions::default())
+    else {
+        panic!("an unreachable server is Unavailable")
+    };
+    assert!(message.starts_with("PostgresStore: "), "{message}");
+    for secret in ["127.0.0.1", "sekrit", ":1/"] {
+        assert!(!message.contains(secret), "{message}");
+    }
 }

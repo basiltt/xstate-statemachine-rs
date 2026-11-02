@@ -3,10 +3,11 @@
 //! The chart skeleton is built from `serde_json::Value` constructors (a `json!` call per
 //! document would hit the macro recursion limit on large charts); every user-written JSON
 //! fragment (`context`, `meta`, `output`, `input`, parameters) goes through
-//! `::serde_json::json!` verbatim.
+//! `serde_json::json!` verbatim. Both `serde_json` and `xstate_core` are reached through the
+//! path [`crate::krate`] resolves, so the calling crate needs neither as a direct dependency.
 
 use proc_macro2::TokenStream;
-use quote::{ToTokens, quote};
+use quote::quote;
 
 use super::ast::{Action, Body, Chart, Guard, Invoke, Kind, Name, Transition};
 
@@ -21,43 +22,49 @@ enum J {
     Raw(TokenStream),
 }
 
-impl ToTokens for J {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        let value = quote!(::serde_json::Value);
-        tokens.extend(match self {
+impl J {
+    /// The tokens building this document; `sj` is the path of the `serde_json` crate.
+    fn render(&self, sj: &TokenStream) -> TokenStream {
+        let value = quote!(#sj::Value);
+        match self {
             Self::Str(s) => quote!(#value::String(::std::string::String::from(#s))),
             Self::Bool(b) => quote!(#value::Bool(#b)),
             Self::Null => quote!(#value::Null),
-            Self::Arr(items) => quote!(#value::Array(::std::vec![#(#items),*])),
+            Self::Arr(items) => {
+                let items = items.iter().map(|item| item.render(sj));
+                quote!(#value::Array(::std::vec![#(#items),*]))
+            }
             Self::Obj(entries) if entries.is_empty() => {
-                quote!(#value::Object(::serde_json::Map::new()))
+                quote!(#value::Object(#sj::Map::new()))
             }
             Self::Obj(entries) => {
-                let (keys, values): (Vec<&String>, Vec<&J>) =
-                    entries.iter().map(|(k, v)| (k, v)).unzip();
+                let keys = entries.iter().map(|(k, _)| k);
+                let values = entries.iter().map(|(_, v)| v.render(sj));
                 quote! {
                     #value::Object(::core::iter::Iterator::collect::<
-                        ::serde_json::Map<::std::string::String, #value>,
+                        #sj::Map<::std::string::String, #value>,
                     >(::core::iter::IntoIterator::into_iter([
                         #((::std::string::String::from(#keys), #values)),*
                     ])))
                 }
             }
-            Self::Raw(json) => quote!(::serde_json::json!(#json)),
-        });
+            Self::Raw(json) => quote!(#sj::json!(#json)),
+        }
     }
 }
 
 /// `{ let value = <document>; Machine::from_value(&value) }`.
 pub(crate) fn expand(chart: &Chart) -> TokenStream {
+    let krate = crate::krate::resolve(chart.krate.as_ref());
+    let sj = quote!(#krate::__private::serde_json);
     let mut root = vec![("id".to_owned(), J::Str(chart.id.value.clone()))];
     root.extend(chart.root.root_keys.iter().map(|(k, v)| (k.clone(), J::Raw(v.clone()))));
     root.extend(body(&chart.root));
-    let document = J::Obj(root);
+    let document = J::Obj(root).render(&sj);
     quote! {
         {
-            let value: ::serde_json::Value = #document;
-            ::xstate_core::Machine::from_value(&value)
+            let value: #sj::Value = #document;
+            #krate::Machine::from_value(&value)
         }
     }
 }

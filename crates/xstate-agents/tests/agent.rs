@@ -294,3 +294,19 @@ fn spawned_tasks_start_without_start_and_bad_charts_are_refused() {
         run_agent(&logic(&m), RunOptions { chart: Some(typo), ..RunOptions::default() }).err();
     assert!(err.is_some_and(|e| e.to_string().contains("'lokup'")));
 }
+
+#[test]
+fn invalid_timeouts_and_retry_policies_are_refused_at_build() {
+    let m = model(vec![json!({"text": "hi"})]);
+    let machine = tool_loop();
+    let refused = |agent: AgentLogic| agent.build(&machine).is_err();
+    assert!(!refused(logic(&m)));
+    for bad in [f64::NAN, f64::INFINITY, 0.0, -1.0, 1e308] {
+        assert!(refused(logic(&m).timeouts(bad, 10.0)), "model {bad}");
+        assert!(refused(logic(&m).timeouts(10.0, bad)), "human {bad}");
+    }
+    let retry = AgentRetry { base_ms: f64::NAN, ..AgentRetry::default() };
+    assert!(refused(logic(&m).retry(retry)));
+    let retry = AgentRetry { max_attempts: 0, ..AgentRetry::default() };
+    assert!(refused(logic(&m).retry(retry)));
+}

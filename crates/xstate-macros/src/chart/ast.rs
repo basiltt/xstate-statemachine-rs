@@ -25,6 +25,8 @@ impl Name {
 /// The whole chart: the root state's body (which also holds the machine id and the root-only
 /// keys).
 pub(crate) struct Chart {
+    /// The `crate: path,` override of where `xstate_core` lives.
+    pub(crate) krate: Option<syn::Path>,
     pub(crate) id: Name,
     pub(crate) root: Body,
 }

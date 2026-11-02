@@ -14,6 +14,12 @@
 //! guarded `PROBE` transition inside the lock, so exactly `half_open_max_calls` probes get
 //! through per half-open window however many threads hammer it.
 //!
+//! Observers attached with [`CircuitBreakerBuilder::observer`] are notified **after** the lock is
+//! released (their callbacks are recorded under it and replayed), so an observer may call
+//! back into the breaker. The probe slot of a half-open call that ends without counting
+//! ([`Permit::ignore`], a non-counting error in [`CircuitBreaker::call_filtered`]) is given
+//! back.
+//!
 //! The lock also wraps `tick`: the cooldown is an `after`, which fires only when someone pumps
 //! the clock, so [`CircuitBreaker::state`] ticks first (otherwise it would report a stale
 //! `open` after the cooldown elapsed) and that tick must not race a concurrent call.
@@ -44,8 +50,10 @@
 //! ```
 
 mod config;
+mod notify;
 
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use serde_json::Value;
@@ -53,12 +61,14 @@ use xstate_core::SyncInterpreter;
 use xstate_core::{Clock, DynContext, Machine, MachineLogic, Observer, RealClock, Status};
 
 pub use config::{CIRCUIT_BREAKER_CONFIG, circuit_breaker_config, circuit_breaker_logic};
+use notify::{Collector, Queue};
 
 use crate::ctx::counter;
 
 /// The three breaker states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum CircuitState {
     /// Calls pass through; consecutive failures are counted.
     Closed,
@@ -97,6 +107,7 @@ impl fmt::Display for CircuitState {
 /// The circuit is open (or half-open with no probe slot left); the target was **not** invoked.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("Circuit '{breaker}' is {state}; call rejected without invoking the target.")]
+#[non_exhaustive]
 pub struct CircuitOpenError {
     /// The breaker's name.
     pub breaker: String,
@@ -122,6 +133,7 @@ pub enum AdmitError {
 
 /// Outcome of [`CircuitBreaker::call`] when the call did not succeed.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum CallError<E> {
     /// The breaker refused the call; the closure was not run.
     #[error(transparent)]
@@ -262,6 +274,11 @@ impl CircuitBreakerBuilder {
     }
 
     /// Attach an observer to the internal interpreter (it sees every trip).
+    ///
+    /// The breaker records the observer's callbacks while it holds its lock and replays them
+    /// right after releasing it, on the thread that caused them, so an observer may call back
+    /// into the breaker. Callbacks caused by different threads at once may interleave, and
+    /// `on_error` receives an `Error::Logic` carrying the original message.
     #[must_use]
     pub fn observer(mut self, observer: Arc<dyn Observer<DynContext>>) -> Self {
         self.observers.push(observer);
@@ -292,16 +309,25 @@ impl CircuitBreakerBuilder {
         }
         let machine = Machine::from_value(&config)?;
         let clock = self.clock.unwrap_or_else(|| Arc::new(RealClock::new()));
-        let logic = circuit_breaker_logic(self.cooldown_ms);
-        let interp = start_interpreter(&machine, &logic, &clock, &self.observers)?;
-        Ok(CircuitBreaker {
+        let released = Arc::new(AtomicU64::new(0));
+        let logic = config::breaker_logic(self.cooldown_ms, &released);
+        let queue = Queue::default();
+        let collector =
+            (!self.observers.is_empty()).then(|| Arc::new(Collector::new(Arc::clone(&queue))));
+        let interp = start_interpreter(&machine, &logic, &clock, collector.as_ref())?;
+        let breaker = CircuitBreaker {
             name: machine.id().to_owned(),
             machine,
             logic,
             clock,
             observers: self.observers,
+            collector,
+            queue,
+            released,
             inner: Mutex::new(Inner { interp, generation: 0, base_opened: 0 }),
-        })
+        };
+        breaker.flush();
+        Ok(breaker)
     }
 }
 
@@ -309,11 +335,11 @@ fn start_interpreter(
     machine: &Machine,
     logic: &MachineLogic<DynContext>,
     clock: &Arc<dyn Clock>,
-    observers: &[Arc<dyn Observer<DynContext>>],
+    collector: Option<&Arc<Collector>>,
 ) -> xstate_core::Result<SyncInterpreter<DynContext>> {
     let mut interp = SyncInterpreter::with_clock(machine.clone(), logic.clone(), Arc::clone(clock));
-    for observer in observers {
-        interp.observe(Arc::clone(observer));
+    if let Some(collector) = collector {
+        interp.observe(Arc::clone(collector) as Arc<dyn Observer<DynContext>>);
     }
     interp.start()?;
     Ok(interp)
@@ -330,6 +356,12 @@ pub struct CircuitBreaker {
     logic: MachineLogic<DynContext>,
     clock: Arc<dyn Clock>,
     observers: Vec<Arc<dyn Observer<DynContext>>>,
+    /// Records the interpreter's observer callbacks under the lock (`None` without observers).
+    collector: Option<Arc<Collector>>,
+    queue: Queue,
+    /// Probe slots given back in the current half-open window; read by the `probeAvailable`
+    /// guard (see `config::breaker_logic`).
+    released: Arc<AtomicU64>,
     inner: Mutex<Inner>,
 }
 
@@ -350,6 +382,22 @@ impl CircuitBreaker {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Run `f` under the lock, then (lock released) replay the observer callbacks it caused.
+    fn locked<R>(&self, f: impl FnOnce(&mut Inner) -> R) -> R {
+        let result = f(&mut self.lock());
+        self.flush();
+        result
+    }
+
+    /// Deliver the recorded observer callbacks. Never call with the lock held.
+    fn flush(&self) {
+        if self.collector.is_none() {
+            return;
+        }
+        let notices = notify::drain(&self.queue);
+        notify::deliver(&self.machine, &self.observers, &notices);
+    }
+
     /// The breaker's name (the machine id).
     #[must_use]
     pub fn name(&self) -> &str {
@@ -359,9 +407,10 @@ impl CircuitBreaker {
     /// The current state. Ticks the clock first so an elapsed cooldown is reflected.
     #[must_use]
     pub fn state(&self) -> CircuitState {
-        let mut inner = self.lock();
-        inner.tick();
-        inner.state()
+        self.locked(|inner| {
+            inner.tick();
+            inner.state()
+        })
     }
 
     /// Consecutive failures counted in the current closed window.
@@ -378,7 +427,8 @@ impl CircuitBreaker {
     }
 
     /// Run `f` with read access to the underlying interpreter (snapshots, diagnostics). The
-    /// breaker's lock is held for the duration.
+    /// breaker's lock is held for the duration, so `f` must not call back into this breaker
+    /// (that would deadlock).
     pub fn with_interpreter<R>(&self, f: impl FnOnce(&SyncInterpreter<DynContext>) -> R) -> R {
         f(&self.lock().interp)
     }
@@ -391,7 +441,11 @@ impl CircuitBreaker {
     /// [`AdmitError::Open`] when open or out of probe slots, [`AdmitError::Stopped`] after
     /// [`close`](Self::close).
     pub fn admit(&self) -> Result<Permit<'_>, AdmitError> {
-        let mut inner = self.lock();
+        let window = self.locked(|inner| self.admit_locked(inner))?;
+        Ok(Permit { breaker: self, window, settled: false })
+    }
+
+    fn admit_locked(&self, inner: &mut Inner) -> Result<Window, AdmitError> {
         if inner.interp.status() != Status::Running {
             return Err(AdmitError::Stopped { breaker: self.name.clone() });
         }
@@ -399,15 +453,13 @@ impl CircuitBreaker {
         let state = inner.state();
         let admitted = match state {
             CircuitState::Closed => true,
-            CircuitState::HalfOpen => took_probe_slot(&mut inner),
+            CircuitState::HalfOpen => took_probe_slot(inner),
             CircuitState::Open => false,
         };
         if !admitted {
             return Err(CircuitOpenError { breaker: self.name.clone(), state }.into());
         }
-        let window = inner.window();
-        drop(inner);
-        Ok(Permit { breaker: self, window, settled: false })
+        Ok(inner.window())
     }
 
     /// An outcome only counts in the window that admitted it. A slow call admitted while
@@ -415,15 +467,29 @@ impl CircuitBreaker {
     /// circuit without any probe (nor a late failure re-open it): late results from an earlier
     /// window -- or from before [`reset`](Self::reset) -- are ignored.
     fn record(&self, ok: bool, window: Window) {
-        let mut inner = self.lock();
-        if window == inner.window() {
-            inner.send(if ok { "SUCCESS" } else { "FAILURE" });
-        }
+        self.locked(|inner| {
+            if window == inner.window() {
+                inner.send(if ok { "SUCCESS" } else { "FAILURE" });
+            }
+        });
+    }
+
+    /// Give back the half-open probe slot of an outcome that does not count. Only a permit
+    /// admitted in the *current* half-open window owns a slot; anything else is a no-op.
+    fn release_probe(&self, window: Window) {
+        self.locked(|inner| {
+            if window.2 == CircuitState::HalfOpen && window == inner.window() {
+                self.released.fetch_add(1, Ordering::Relaxed);
+            }
+        });
     }
 
     /// Force the circuit closed (operator override). In-flight outcomes become stale.
     pub fn reset(&self) {
-        let mut inner = self.lock();
+        self.locked(|inner| self.reset_locked(inner));
+    }
+
+    fn reset_locked(&self, inner: &mut Inner) {
         inner.generation += 1;
         if inner.state() != CircuitState::Open {
             // A SUCCESS closes half_open and re-zeroes the closed window.
@@ -433,7 +499,7 @@ impl CircuitBreaker {
         // From `open` the only way out is the cooldown, so start a fresh interpreter.
         let opened = inner.context_counter("opened_count");
         inner.interp.stop();
-        match start_interpreter(&self.machine, &self.logic, &self.clock, &self.observers) {
+        match start_interpreter(&self.machine, &self.logic, &self.clock, self.collector.as_ref()) {
             Ok(fresh) => {
                 inner.base_opened += opened;
                 inner.interp = fresh;
@@ -483,7 +549,7 @@ impl CircuitBreaker {
 
     /// Stop the internal interpreter; later calls are rejected with [`AdmitError::Stopped`].
     pub fn close(&self) {
-        self.lock().interp.stop();
+        self.locked(|inner| inner.interp.stop());
     }
 }
 
@@ -514,9 +580,12 @@ impl Permit<'_> {
     }
 
     /// Settle without recording anything (the call failed in a way the breaker should not
-    /// count). A half-open probe slot stays consumed, as in the Python library.
+    /// count). A half-open probe slot is given back so another probe can run; otherwise the
+    /// circuit would stay half-open forever once the slots are used up. (The Python library
+    /// keeps the slot consumed.)
     pub fn ignore(mut self) {
         self.settled = true;
+        self.breaker.release_probe(self.window);
     }
 
     fn settle(&mut self, ok: bool) {

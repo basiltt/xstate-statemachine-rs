@@ -115,6 +115,10 @@ fn camel(name: &str) -> String {
 }
 
 /// One step: invoke `invoke`; undo with `compensate` on a later failure.
+///
+/// The fields are public so a step can be written as a struct literal, which means a field
+/// added in a later release is a breaking change (the struct is deliberately not
+/// `#[non_exhaustive]`). Prefer [`SagaStep::new`] and the builder methods, which keep working.
 #[derive(Debug, Clone)]
 pub struct SagaStep {
     /// Step identifier; also the `invoke` id and the middle of its event types.
@@ -217,7 +221,9 @@ impl SagaBuilder {
     ///
     /// # Errors
     /// [`SagaError::Invalid`] for a non-identifier or duplicate name, a name that collides with
-    /// a generated `<step>Retrying` state, an empty service key, or a zero `timeout_ms`.
+    /// a generated `<step>Retrying` state, a retrying step whose camel-cased name
+    /// (`reserve_stock` and `reserveStock` both give `reserveStockRetry`) shares the retry logic
+    /// prefix of an earlier retrying step, an empty service key, or a zero `timeout_ms`.
     pub fn step(mut self, step: SagaStep) -> Result<Self, SagaError> {
         self.check_step_name(&step.name)?;
         if step.retry.is_some()
@@ -226,6 +232,19 @@ impl SagaBuilder {
             return Err(invalid(format!(
                 "step {:?} with retry collides with step '{}Retrying' (its generated waiting state)",
                 step.name, step.name
+            )));
+        }
+        if step.retry.is_some()
+            && let Some(other) = self
+                .steps
+                .iter()
+                .find(|s| s.retry.is_some() && s.retry_prefix() == step.retry_prefix())
+        {
+            return Err(invalid(format!(
+                "step {:?} with retry collides with step {:?}: both generate the retry logic                  prefix '{}'",
+                step.name,
+                other.name,
+                step.retry_prefix()
             )));
         }
         check_key("invoke", &step.invoke)?;

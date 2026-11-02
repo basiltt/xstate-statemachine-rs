@@ -18,6 +18,7 @@ use xstate_core::{
     SyncInterpreter,
 };
 
+use crate::callable::CallableSlot;
 use crate::clock::PySimulatedClock;
 use crate::convert;
 use crate::errors;
@@ -44,8 +45,10 @@ pub(crate) struct PySyncInterpreter {
     detachable: bool,
     /// Restored from a snapshot and not yet `start()`ed: `start()` resumes instead.
     restored: bool,
-    /// Every Python callable the engine holds (logic and observers), for the GC.
-    callables: Vec<Py<PyAny>>,
+    /// The owners of every Python callable the engine calls (logic and observers): the engine
+    /// closures hold only these slots, so reporting them in `__traverse__` and emptying them in
+    /// `__clear__` lets the garbage collector free a cycle through a callback.
+    callables: Vec<Arc<CallableSlot>>,
     types: TypeCache,
 }
 
@@ -56,19 +59,21 @@ struct Parts {
     clock: Option<Py<PySimulatedClock>>,
     clock_arc: Arc<dyn Clock>,
     detachable: bool,
-    callables: Vec<Py<PyAny>>,
+    callables: Vec<Arc<CallableSlot>>,
 }
 
 impl Parts {
     fn new(
         py: Python<'_>,
-        logic: Option<&PyMachineLogic>,
+        logic: Option<&Bound<'_, PyMachineLogic>>,
         clock: Option<Bound<'_, PySimulatedClock>>,
     ) -> Self {
         let slot = Arc::new(ErrorSlot::default());
         let (core, detachable, callables) = match logic {
             Some(l) => {
-                (l.build(py, &slot), l.is_empty(), l.callables().map(|f| f.clone_ref(py)).collect())
+                let l = l.borrow();
+                let (core, callables) = l.build(py, &slot);
+                (core, l.is_empty(), callables)
             }
             None => (MachineLogic::dynamic(), true, Vec::new()),
         };
@@ -112,7 +117,7 @@ impl PySyncInterpreter {
         input: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let input = input.map(convert::from_py).transpose()?.unwrap_or(Value::Null);
-        let mut parts = Parts::new(py, logic.map(Bound::get), clock);
+        let mut parts = Parts::new(py, logic, clock);
         let core = std::mem::take(&mut parts.logic);
         let inner = SyncInterpreter::with_clock(
             machine.get().inner.clone(),
@@ -143,7 +148,7 @@ impl PySyncInterpreter {
         };
         let snapshot =
             Snapshot::from_json(&json_text.to_cow()?).map_err(|e| errors::to_py_err(py, &e))?;
-        let mut parts = Parts::new(py, logic.map(Bound::get), clock);
+        let mut parts = Parts::new(py, logic, clock);
         let restored = SyncInterpreter::from_snapshot(
             machine.get().inner.clone(),
             std::mem::take(&mut parts.logic),
@@ -225,8 +230,9 @@ impl PySyncInterpreter {
             return Err(PyTypeError::new_err("observe() needs a callable"));
         }
         let mut this = Self::borrow(slf)?;
-        this.callables.push(callback.clone().unbind());
-        this.inner.observe(Arc::new(PyObserver::new(callback.clone().unbind())));
+        let owner = CallableSlot::new(callback.clone().unbind());
+        this.callables.push(Arc::clone(&owner));
+        this.inner.observe(Arc::new(PyObserver::new(owner)));
         this.detachable = false;
         Ok(())
     }
@@ -345,13 +351,22 @@ impl PySyncInterpreter {
     }
 
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
-        for f in &self.callables {
-            visit.call(f)?;
+        for owner in &self.callables {
+            owner.visit(&visit)?;
         }
         if let Some(clock) = &self.clock {
             visit.call(clock)?;
         }
         Ok(())
+    }
+
+    /// Break reference cycles through the interpreter: drop every callable the engine calls
+    /// and the clock. Only the garbage collector calls this, on an unreachable interpreter.
+    fn __clear__(&mut self) {
+        for owner in self.callables.drain(..) {
+            owner.clear();
+        }
+        self.clock = None;
     }
 }
 

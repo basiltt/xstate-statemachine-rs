@@ -1,10 +1,12 @@
 //! Circuit breaker: golden config, the closed / open / half-open lifecycle, and concurrency.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, Mutex};
 
 use serde_json::Value;
-use xstate_core::{Machine, MachineLogic, SimulatedClock};
+use xstate_core::{
+    ActiveState, DynContext, Event, Machine, MachineLogic, Observer, SimulatedClock, StepReport,
+};
 use xstate_patterns::{
     AdmitError, CIRCUIT_BREAKER_CONFIG, CallError, CircuitBreaker, CircuitBreakerError,
     CircuitState, circuit_breaker_config, circuit_breaker_logic, wrap,
@@ -154,13 +156,18 @@ fn concurrent_callers_cannot_all_become_the_probe() {
     clock.increment(COOLDOWN_MS);
     let barrier = Barrier::new(THREADS);
     let admitted = AtomicUsize::new(0);
+    // Probes stay in flight until every thread has tried: an ignored probe gives its slot back.
+    let in_flight = Mutex::new(Vec::new());
     std::thread::scope(|scope| {
         for _ in 0..THREADS {
             scope.spawn(|| {
                 barrier.wait();
                 if let Ok(permit) = b.admit() {
                     admitted.fetch_add(1, Ordering::SeqCst);
-                    permit.ignore();
+                    in_flight
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(permit);
                 }
             });
         }
@@ -283,4 +290,86 @@ fn interpreter_snapshot_is_reachable_for_diagnostics() {
     fail(&b);
     let ids = b.with_interpreter(xstate_core::SyncInterpreter::state_ids);
     assert_eq!(ids, ["payments.closed"]);
+}
+
+#[test]
+fn an_ignored_probe_gives_its_slot_back() {
+    let (b, clock) = breaker(1, 1);
+    open_it(&b, 1);
+    clock.increment(COOLDOWN_MS);
+    let probe = b.admit().unwrap_or_else(|e| panic!("{e}"));
+    assert!(matches!(b.admit(), Err(AdmitError::Open(_))), "the only slot is taken");
+    probe.ignore();
+    // Without the release the breaker would stay half-open and reject every call forever.
+    let probe = b.admit().unwrap_or_else(|e| panic!("slot not released: {e}"));
+    assert!(matches!(b.admit(), Err(AdmitError::Open(_))));
+    probe.record_success();
+    assert_eq!(b.state(), CircuitState::Closed);
+}
+
+#[test]
+fn a_filtered_error_in_half_open_does_not_wedge_the_breaker() {
+    let (b, clock) = breaker(1, 1);
+    open_it(&b, 1);
+    clock.increment(COOLDOWN_MS);
+    let r = b.call_filtered(|| Err::<(), _>(404), |code| *code >= 500);
+    assert!(matches!(r, Err(CallError::Failed(404))));
+    assert_eq!(b.state(), CircuitState::HalfOpen, "an uncounted error leaves the state alone");
+    succeed(&b);
+    assert_eq!(b.state(), CircuitState::Closed);
+}
+
+#[test]
+fn a_stale_ignored_permit_releases_nothing() {
+    let (b, clock) = breaker(1, 1);
+    let early = b.admit().unwrap_or_else(|e| panic!("{e}"));
+    open_it(&b, 1);
+    clock.increment(COOLDOWN_MS);
+    let probe = b.admit().unwrap_or_else(|e| panic!("{e}"));
+    early.ignore();
+    assert!(matches!(b.admit(), Err(AdmitError::Open(_))), "the closed-window permit owns no slot");
+    probe.record_success();
+}
+
+/// Calls back into the breaker from every callback: a deadlock if run under the lock.
+struct Reentrant {
+    breaker: Mutex<Option<Arc<CircuitBreaker>>>,
+    seen: AtomicUsize,
+}
+
+impl Reentrant {
+    fn poke(&self) {
+        self.seen.fetch_add(1, Ordering::SeqCst);
+        let breaker =
+            self.breaker.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        if let Some(breaker) = breaker {
+            let _ = breaker.failures();
+        }
+    }
+}
+
+impl Observer<DynContext> for Reentrant {
+    fn on_event(&self, _m: &Machine, _e: &Event, _r: &StepReport, _s: &ActiveState<DynContext>) {
+        self.poke();
+    }
+}
+
+#[test]
+fn observers_run_after_the_lock_is_released() {
+    let observer = Arc::new(Reentrant { breaker: Mutex::new(None), seen: AtomicUsize::new(0) });
+    let clock = SimulatedClock::new();
+    let breaker = Arc::new(
+        CircuitBreaker::builder()
+            .failure_threshold(2)
+            .cooldown_ms(COOLDOWN_MS)
+            .clock(Arc::new(clock.clone()))
+            .observer(Arc::clone(&observer) as Arc<dyn Observer<DynContext>>)
+            .build()
+            .unwrap_or_else(|e| panic!("{e}")),
+    );
+    *observer.breaker.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Some(Arc::clone(&breaker));
+    open_it(&breaker, 2);
+    assert!(observer.seen.load(Ordering::SeqCst) >= 2, "the observer saw the failures");
+    // Reaching here at all proves the observer called `failures()` without deadlocking.
 }

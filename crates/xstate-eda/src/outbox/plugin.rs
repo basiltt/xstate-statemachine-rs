@@ -1,6 +1,7 @@
 //! [`OutboxPlugin`]: turn chart-declared transitions and `publish`-tagged states into outbound
 //! envelopes (Python `OutboxPlugin`).
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde_json::{Map, Value};
@@ -9,11 +10,32 @@ use xstate_core::{
     ActiveState, Context, Event, Machine, Observer, StateId, StepReport, TransitionId,
 };
 
-use super::specs::{state_type, transition_spec};
+use super::specs::{publish_specs, state_type, transition_spec};
 use super::{OutboxStore, PUBLISH_TAG};
-use crate::chart::{active_sorted, entered_per_transition, has_tag};
+use crate::chart::{LazyContext, active_sorted, entered_per_transition, has_tag};
 use crate::envelope::{Envelope, TransitionOrigin};
-use crate::error::Result;
+use crate::error::{EdaError, Result};
+
+/// Envelopes the plugin buffers before it starts dropping new ones (see
+/// [`OutboxPlugin::max_buffered`]).
+pub const DEFAULT_MAX_BUFFERED: usize = 10_000;
+
+/// Failures the plugin remembers; the oldest are forgotten beyond this.
+const MAX_FAILURES: usize = 1_000;
+
+/// One envelope the plugin could not produce (see [`OutboxPlugin::failures`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutboxFailure {
+    /// The machine that was observed.
+    pub machine: String,
+    /// The envelope type that was meant to be published (`""` when it is not known).
+    pub ty: String,
+    /// Why nothing was published.
+    pub reason: String,
+}
+
+/// A parsed `meta.publish`: the type and the context fields copied into `data`.
+type Spec = (String, Option<Vec<String>>);
 
 /// Collects the envelopes a machine's chart declares, as an [`Observer`].
 ///
@@ -25,6 +47,16 @@ use crate::error::Result;
 /// Envelopes carry `causationid` / `correlationid` / `traceparent` from the inbound cause set
 /// with [`set_cause`](Self::set_cause) (the dispatcher's envelope), and the subject defaults
 /// to the cause's subject, then [`instance_key`](Self::instance_key), then the machine id.
+///
+/// # Failures are never silent
+///
+/// An observer cannot return an error, so whatever goes wrong is logged (`tracing::error!`)
+/// and kept for the caller: [`failures`](Self::failures) lists the envelopes that were
+/// refused, whose context could not be serialised (nothing is published with `data: null` in
+/// its place) or whose chart declares a malformed `meta.publish`, and
+/// [`try_drain`](Self::try_drain) returns the malformed-chart error instead of an empty batch.
+/// The buffer is bounded ([`max_buffered`](Self::max_buffered)): envelopes over the bound are
+/// dropped and counted ([`dropped`](Self::dropped)).
 ///
 /// # Delivering the envelopes
 ///
@@ -66,8 +98,13 @@ pub struct OutboxPlugin {
     topic: String,
     redact_keys: RedactKeys,
     instance_key: Option<String>,
+    max_buffered: usize,
     cause: Mutex<Option<Envelope>>,
     buffer: Mutex<Vec<Envelope>>,
+    failures: Mutex<Vec<OutboxFailure>>,
+    spec_error: Mutex<Option<String>>,
+    specs_checked: AtomicBool,
+    dropped: AtomicU64,
 }
 
 impl std::fmt::Debug for OutboxPlugin {
@@ -76,6 +113,7 @@ impl std::fmt::Debug for OutboxPlugin {
             .field("topic", &self.topic)
             .field("instance_key", &self.instance_key)
             .field("buffered", &lock(&self.buffer).len())
+            .field("failures", &lock(&self.failures).len())
             .finish_non_exhaustive()
     }
 }
@@ -91,15 +129,21 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl OutboxPlugin {
-    /// A plugin for topic `events` with the default redaction keys.
+    /// A plugin for topic `events` with the default redaction keys and a buffer of
+    /// [`DEFAULT_MAX_BUFFERED`] envelopes.
     #[must_use]
     pub fn new() -> Self {
         Self {
             topic: "events".into(),
             redact_keys: RedactKeys::default(),
             instance_key: None,
+            max_buffered: DEFAULT_MAX_BUFFERED,
             cause: Mutex::new(None),
             buffer: Mutex::new(Vec::new()),
+            failures: Mutex::new(Vec::new()),
+            spec_error: Mutex::new(None),
+            specs_checked: AtomicBool::new(false),
+            dropped: AtomicU64::new(0),
         }
     }
 
@@ -124,6 +168,20 @@ impl OutboxPlugin {
         self
     }
 
+    /// Buffer at most `n` envelopes (default [`DEFAULT_MAX_BUFFERED`]); what arrives while the
+    /// buffer is full is dropped, logged and counted in [`dropped`](Self::dropped), so a caller
+    /// that never drains cannot grow the process without bound.
+    ///
+    /// # Errors
+    /// [`EdaError::InvalidArgument`] for 0.
+    pub fn max_buffered(mut self, n: usize) -> Result<Self> {
+        if n < 1 {
+            return Err(EdaError::InvalidArgument("max_buffered must be >= 1".into()));
+        }
+        self.max_buffered = n;
+        Ok(self)
+    }
+
     /// The configured topic.
     #[must_use]
     pub fn topic_name(&self) -> &str {
@@ -136,8 +194,24 @@ impl OutboxPlugin {
     }
 
     /// Take every buffered envelope, oldest first.
+    ///
+    /// This cannot fail: a chart whose `meta.publish` is malformed simply yields nothing for
+    /// the malformed part. Use [`try_drain`](Self::try_drain) to be told.
     pub fn drain(&self) -> Vec<Envelope> {
         std::mem::take(&mut *lock(&self.buffer))
+    }
+
+    /// [`drain`](Self::drain), but a malformed `meta.publish` (found once, when the plugin
+    /// first observed the machine) is returned instead of an incomplete batch; the buffer is
+    /// left untouched then.
+    ///
+    /// # Errors
+    /// [`EdaError::InvalidSpec`] when the chart's `meta.publish` is malformed.
+    pub fn try_drain(&self) -> Result<Vec<Envelope>> {
+        if let Some(why) = lock(&self.spec_error).clone() {
+            return Err(EdaError::InvalidSpec(why));
+        }
+        Ok(self.drain())
     }
 
     /// Drop buffered envelopes (the save failed); returns how many.
@@ -149,6 +223,24 @@ impl OutboxPlugin {
     #[must_use]
     pub fn buffered(&self) -> usize {
         lock(&self.buffer).len()
+    }
+
+    /// Envelopes dropped because the buffer was full, over the plugin's life.
+    #[must_use]
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    /// The envelopes that could not be produced, oldest first (at most the newest 1000 are
+    /// kept). Each is also logged with `tracing::error!`.
+    #[must_use]
+    pub fn failures(&self) -> Vec<OutboxFailure> {
+        lock(&self.failures).clone()
+    }
+
+    /// Take the recorded [`failures`](Self::failures), leaving the list empty.
+    pub fn take_failures(&self) -> Vec<OutboxFailure> {
+        std::mem::take(&mut *lock(&self.failures))
     }
 
     /// Drain into `store` under this plugin's topic; returns how many rows were added. On a
@@ -169,7 +261,54 @@ impl OutboxPlugin {
         Ok(batch.len())
     }
 
-    fn envelope(&self, machine: &Machine, ty: String, data: Value) -> Option<Envelope> {
+    /// Log and remember an envelope that was not produced.
+    fn fail(&self, machine: &Machine, ty: &str, reason: String) {
+        tracing::error!(
+            target: "xstate::eda",
+            machine = machine.id(),
+            ty,
+            reason = %reason,
+            "outbox: nothing was published"
+        );
+        let mut failures = lock(&self.failures);
+        if failures.len() >= MAX_FAILURES {
+            failures.remove(0);
+        }
+        failures.push(OutboxFailure {
+            machine: machine.id().to_owned(),
+            ty: ty.to_owned(),
+            reason,
+        });
+    }
+
+    /// Validate the chart's `meta.publish` declarations once; the error stays for
+    /// [`try_drain`](Self::try_drain).
+    fn check_specs(&self, machine: &Machine) {
+        if self.specs_checked.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        if let Err(e) = publish_specs(machine) {
+            let why = e.to_string();
+            self.fail(machine, "", format!("invalid meta.publish: {why}"));
+            *lock(&self.spec_error) = Some(why);
+        }
+    }
+
+    /// The `meta.publish` of a transition; a malformed one was already reported by
+    /// [`check_specs`](Self::check_specs).
+    fn transition_spec_of(&self, machine: &Machine, tid: TransitionId) -> Option<Spec> {
+        match transition_spec(machine, machine.transition(tid)) {
+            Ok(spec) => spec,
+            Err(e) => {
+                if lock(&self.spec_error).is_none() {
+                    self.fail(machine, "", format!("invalid meta.publish: {e}"));
+                }
+                None
+            }
+        }
+    }
+
+    fn envelope(&self, machine: &Machine, ty: &str, data: Value) -> Option<Envelope> {
         let cause = lock(&self.cause).clone();
         let origin = TransitionOrigin {
             machine,
@@ -177,66 +316,103 @@ impl OutboxPlugin {
             subject: None,
             source: None,
         };
-        Envelope::from_transition(&origin, ty, data, cause.as_ref())
-            .inspect_err(|e| tracing::error!(target: "xstate::eda", machine = machine.id(), error = %e, "outbox envelope refused"))
-            .ok()
+        match Envelope::from_transition(&origin, ty.to_owned(), data, cause.as_ref()) {
+            Ok(envelope) => Some(envelope),
+            Err(e) => {
+                self.fail(machine, ty, format!("the envelope was refused: {e}"));
+                None
+            }
+        }
     }
 
-    fn transition_envelope(
+    /// The envelopes of one transition's `spec` and of the `states` it entered. The context is
+    /// serialised only when there is something to publish; if it cannot be, nothing is
+    /// published (never `data: null`) and the failure is recorded.
+    fn build<C: Context>(
         &self,
         machine: &Machine,
-        tid: TransitionId,
-        ctx: &Value,
-    ) -> Option<Envelope> {
-        let (ty, fields) = match transition_spec(machine, machine.transition(tid)) {
-            Ok(Some(spec)) => spec,
-            Ok(None) => return None,
-            Err(e) => {
-                tracing::error!(target: "xstate::eda", machine = machine.id(), error = %e, "invalid meta.publish");
-                return None;
+        ctx: &LazyContext<'_, C>,
+        spec: Option<Spec>,
+        states: &[StateId],
+    ) -> Vec<Envelope> {
+        if spec.is_none() && states.is_empty() {
+            return Vec::new();
+        }
+        let ctx = match ctx.get() {
+            Ok(ctx) => ctx,
+            Err(why) => {
+                let ty = spec.as_ref().map_or("", |(ty, _)| ty.as_str());
+                self.fail(machine, ty, format!("the context could not be serialised: {why}"));
+                return Vec::new();
             }
         };
-        let data = fields.map_or(Value::Null, |fields| {
-            Value::Object(
-                fields
-                    .into_iter()
-                    .map(|f| {
-                        let v = ctx.get(&f).cloned().unwrap_or(Value::Null);
-                        (f, v)
-                    })
-                    .collect::<Map<_, _>>(),
-            )
-        });
-        self.envelope(machine, ty, data)
+        let mut out = Vec::new();
+        if let Some((ty, fields)) = spec {
+            out.extend(self.envelope(machine, &ty, spec_data(fields, ctx)));
+        }
+        for &sid in states {
+            let data = if ctx.is_object() { self.redact_keys.redact(ctx) } else { Value::Null };
+            let ty = state_type(machine.id(), &machine.node(sid).id);
+            out.extend(self.envelope(machine, &ty, data));
+        }
+        out
     }
 
-    fn state_envelope(&self, machine: &Machine, sid: StateId, ctx: &Value) -> Option<Envelope> {
-        let data = if ctx.is_object() { self.redact_keys.redact(ctx) } else { Value::Null };
-        self.envelope(machine, state_type(machine.id(), &machine.node(sid).id), data)
-    }
-
+    /// Buffer `out`, dropping (and counting) what does not fit.
     fn push(&self, out: Vec<Envelope>) {
-        if !out.is_empty() {
-            lock(&self.buffer).extend(out);
+        if out.is_empty() {
+            return;
+        }
+        let mut buffer = lock(&self.buffer);
+        let room = self.max_buffered.saturating_sub(buffer.len());
+        let lost = out.len().saturating_sub(room);
+        buffer.extend(out.into_iter().take(room));
+        drop(buffer);
+        if lost > 0 {
+            let lost = u64::try_from(lost).unwrap_or(u64::MAX);
+            self.dropped.fetch_add(lost, Ordering::Relaxed);
+            tracing::error!(
+                target: "xstate::eda",
+                lost,
+                max_buffered = self.max_buffered,
+                "outbox buffer full: envelopes were dropped (drain it, or raise max_buffered)"
+            );
         }
     }
 }
 
-fn context_value<C: Context>(state: &ActiveState<C>) -> Value {
-    serde_json::to_value(state.context()).unwrap_or(Value::Null)
+/// `data` of a transition envelope: the listed context fields, or absent.
+fn spec_data(fields: Option<Vec<String>>, ctx: &Value) -> Value {
+    fields.map_or(Value::Null, |fields| {
+        Value::Object(
+            fields
+                .into_iter()
+                .map(|f| {
+                    let v = ctx.get(&f).cloned().unwrap_or(Value::Null);
+                    (f, v)
+                })
+                .collect::<Map<_, _>>(),
+        )
+    })
 }
 
 impl<C: Context> Observer<C> for OutboxPlugin {
     fn on_start(&self, machine: &Machine, state: &ActiveState<C>, report: &StepReport) {
-        let ctx = context_value(state);
-        let mut out: Vec<Envelope> = active_sorted(machine, state)
+        self.check_specs(machine);
+        let tagged: Vec<StateId> = active_sorted(machine, state)
             .into_iter()
             .filter(|&s| has_tag(machine, s, PUBLISH_TAG))
-            .filter_map(|s| self.state_envelope(machine, s, &ctx))
             .collect();
-        out.extend(
-            report.transitions.iter().filter_map(|&t| self.transition_envelope(machine, t, &ctx)),
-        );
+        let specs: Vec<Spec> = report
+            .transitions
+            .iter()
+            .filter_map(|&t| self.transition_spec_of(machine, t))
+            .collect();
+        let ctx = LazyContext::new(state);
+        let mut out = self.build(machine, &ctx, None, &tagged);
+        for spec in specs {
+            out.extend(self.build(machine, &ctx, Some(spec), &[]));
+        }
         self.push(out);
     }
 
@@ -247,16 +423,14 @@ impl<C: Context> Observer<C> for OutboxPlugin {
         report: &StepReport,
         state: &ActiveState<C>,
     ) {
-        let ctx = context_value(state);
+        self.check_specs(machine);
+        let ctx = LazyContext::new(state);
         let mut out = Vec::new();
         for (tid, entered) in entered_per_transition(machine, &report.transitions, state) {
-            out.extend(self.transition_envelope(machine, tid, &ctx));
-            out.extend(
-                entered
-                    .into_iter()
-                    .filter(|&s| has_tag(machine, s, PUBLISH_TAG))
-                    .filter_map(|s| self.state_envelope(machine, s, &ctx)),
-            );
+            let tagged: Vec<StateId> =
+                entered.into_iter().filter(|&s| has_tag(machine, s, PUBLISH_TAG)).collect();
+            let spec = self.transition_spec_of(machine, tid);
+            out.extend(self.build(machine, &ctx, spec, &tagged));
         }
         self.push(out);
     }

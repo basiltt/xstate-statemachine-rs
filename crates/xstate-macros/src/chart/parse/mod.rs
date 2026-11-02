@@ -1,7 +1,7 @@
 //! Parser of the `statechart!` DSL. One module per construct; this one holds the shared
 //! token helpers and the [`Chart`] entry point.
 
-use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
+use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::ToTokens;
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
@@ -17,6 +17,7 @@ mod transition;
 
 impl Parse for Chart {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let krate = parse_crate_override(input)?;
         let mut root = body::parse_body(input, body::Level::Root)?;
         let Some(id) = root.id.take() else {
             return Err(syn::Error::new(
@@ -27,8 +28,20 @@ impl Parse for Chart {
         if root.states.is_none() {
             return Err(id.error("statechart! needs a `states: { ... }` block"));
         }
-        Ok(Self { id, root })
+        Ok(Self { krate, id, root })
     }
+}
+
+/// The optional leading `crate: path,` item.
+fn parse_crate_override(input: ParseStream<'_>) -> syn::Result<Option<syn::Path>> {
+    if !input.peek(Token![crate]) {
+        return Ok(None);
+    }
+    input.parse::<Token![crate]>()?;
+    input.parse::<Token![:]>()?;
+    let path: syn::Path = input.parse()?;
+    separator(input, false)?;
+    Ok(Some(path))
 }
 
 /// An identifier (keywords allowed) or a non-empty string literal.
@@ -76,9 +89,16 @@ pub(super) fn parse_path(
 }
 
 /// Raw `serde_json::json!` input: every token up to the next top-level `,`.
+///
+/// A top-level `ident :` or `ident =>` after the first token can only be the next item of the
+/// enclosing block, so it is reported as a missing comma instead of being swallowed into the
+/// JSON.
 pub(super) fn parse_json(input: ParseStream<'_>) -> syn::Result<TokenStream> {
     let mut tokens = TokenStream::new();
     while !input.is_empty() && !input.peek(Token![,]) {
+        if !tokens.is_empty() && starts_next_item(input) {
+            return Err(input.error("expected `,` after JSON value"));
+        }
         tokens.extend([input.parse::<TokenTree>()?]);
     }
     if tokens.is_empty() {
@@ -87,10 +107,10 @@ pub(super) fn parse_json(input: ParseStream<'_>) -> syn::Result<TokenStream> {
     Ok(tokens)
 }
 
-/// `true` when `tokens` ends with a `{ ... }` group (so the next `,` is optional).
-pub(super) fn ends_with_brace(tokens: &TokenStream) -> bool {
-    matches!(tokens.clone().into_iter().last(),
-        Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace)
+/// `true` when the next tokens look like `key:` or `key =>` (and not a `a::b` path).
+fn starts_next_item(input: ParseStream<'_>) -> bool {
+    input.peek(Ident::peek_any)
+        && ((input.peek2(Token![:]) && !input.peek2(Token![::])) || input.peek2(Token![=>]))
 }
 
 /// A string literal value.

@@ -59,13 +59,18 @@ fn mask_values(value: Value) -> Value {
 }
 
 /// Replace every secret-looking substring of `text` with `***`.
+///
+/// Linear in the length of `text`: the end of the character run starting at every position is
+/// computed once up front, so a hostile string such as `-eyJ-eyJ-eyJ...` (every `eyJ` opens a
+/// run that reaches the end of the text) cannot make the scan quadratic.
 #[must_use]
 pub fn mask_secrets(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
+    let scan = Scan::new(text);
+    let chars = &scan.chars;
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
     while i < chars.len() {
-        let hit = bearer_at(&chars, i).or_else(|| key_at(&chars, i)).or_else(|| jwt_at(&chars, i));
+        let hit = bearer_at(&scan, i).or_else(|| key_at(&scan, i)).or_else(|| jwt_at(&scan, i));
         if let Some(end) = hit {
             out.push_str(MASK);
             i = end;
@@ -75,6 +80,39 @@ pub fn mask_secrets(text: &str) -> String {
         }
     }
     out
+}
+
+/// The text as chars plus, per character class, where the run starting at each index ends.
+struct Scan {
+    chars: Vec<char>,
+    /// `key_end[i]`: end of the maximal [`key_class`] run starting at `i` (`i` if none).
+    key_end: Vec<usize>,
+    /// Same for [`bearer_class`].
+    bearer_end: Vec<usize>,
+}
+
+impl Scan {
+    fn new(text: &str) -> Self {
+        let chars: Vec<char> = text.chars().collect();
+        let key_end = run_ends(&chars, key_class);
+        let bearer_end = run_ends(&chars, bearer_class);
+        Self { chars, key_end, bearer_end }
+    }
+}
+
+/// End of the run at `i` in `ends` when it has at least [`MIN_RUN`] characters.
+fn run(i: usize, ends: &[usize]) -> Option<usize> {
+    let end = *ends.get(i)?;
+    (end - i >= MIN_RUN).then_some(end)
+}
+
+/// For every index, where the maximal run of `class` characters starting there ends.
+fn run_ends(chars: &[char], class: fn(char) -> bool) -> Vec<usize> {
+    let mut ends = vec![chars.len(); chars.len() + 1];
+    for i in (0..chars.len()).rev() {
+        ends[i] = if class(chars[i]) { ends[i + 1] } else { i };
+    }
+    ends
 }
 
 fn is_word(c: char) -> bool {
@@ -98,12 +136,6 @@ fn literal(chars: &[char], i: usize, lit: &str) -> Option<usize> {
     Some(j)
 }
 
-/// Greedy run of `class` chars at `i` of at least [`MIN_RUN`]; returns its end.
-fn run(chars: &[char], i: usize, class: fn(char) -> bool) -> Option<usize> {
-    let len = chars[i.min(chars.len())..].iter().take_while(|c| class(**c)).count();
-    (len >= MIN_RUN).then_some(i + len)
-}
-
 fn bearer_class(c: char) -> bool {
     c.is_ascii_alphanumeric() || "._~+/=-".contains(c)
 }
@@ -112,16 +144,18 @@ fn key_class(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '-'
 }
 
-fn bearer_at(chars: &[char], i: usize) -> Option<usize> {
+fn bearer_at(scan: &Scan, i: usize) -> Option<usize> {
+    let chars = &scan.chars;
     let j = literal(chars, i, "bearer")?;
     let spaces = chars[j..].iter().take_while(|c| c.is_whitespace()).count();
     if spaces == 0 {
         return None;
     }
-    run(chars, j + spaces, bearer_class)
+    run(j + spaces, &scan.bearer_end)
 }
 
-fn key_at(chars: &[char], i: usize) -> Option<usize> {
+fn key_at(scan: &Scan, i: usize) -> Option<usize> {
+    let chars = &scan.chars;
     if !at_boundary(chars, i) {
         return None;
     }
@@ -134,19 +168,20 @@ fn key_at(chars: &[char], i: usize) -> Option<usize> {
     if *sep != '-' && *sep != '_' {
         return None;
     }
-    run(chars, after_prefix + 1, key_class)
+    run(after_prefix + 1, &scan.key_end)
 }
 
-fn jwt_at(chars: &[char], i: usize) -> Option<usize> {
+fn jwt_at(scan: &Scan, i: usize) -> Option<usize> {
+    let chars = &scan.chars;
     if !at_boundary(chars, i) {
         return None;
     }
-    let mut j = run(chars, literal(chars, i, "eyj")?, key_class)?;
+    let mut j = run(literal(chars, i, "eyj")?, &scan.key_end)?;
     for _ in 0..2 {
         if chars.get(j) != Some(&'.') {
             return None;
         }
-        j = run(chars, j + 1, key_class)?;
+        j = run(j + 1, &scan.key_end)?;
     }
     Some(j)
 }
@@ -168,6 +203,19 @@ mod tests {
         assert_eq!(mask_secrets("t eyJabcdefgh.abcdefgh.abcdefgh!"), "t ***!");
         assert_eq!(mask_secrets("eyJabcdefgh.abcdefgh"), "eyJabcdefgh.abcdefgh");
         assert_eq!(mask_secrets("héllo"), "héllo");
+    }
+
+    #[test]
+    fn adversarial_runs_are_scanned_in_linear_time() {
+        // Every `eyJ` opens a key-class run that reaches the end of the text and never finds
+        // its `.`: quadratic when each attempt rescans the run.
+        let hostile = "-eyJ".repeat(50_000);
+        assert_eq!(hostile.len(), 200_000);
+        let started = std::time::Instant::now();
+        assert_eq!(mask_secrets(&hostile), hostile);
+        let bearer = "bearer abcdefgh ".repeat(12_000);
+        assert_eq!(mask_secrets(&bearer), "*** ".repeat(12_000));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "{:?}", started.elapsed());
     }
 
     #[test]

@@ -60,6 +60,8 @@ pub const DEFAULT_ACK_WAIT: Duration = Duration::from_secs(30);
 /// Default messages fetched per request: small, because fetched messages wait locally while the
 /// server's redelivery clock runs.
 pub const DEFAULT_BATCH: usize = 10;
+/// Default bound on one broker call (connect, publish and its acknowledgement, fetch, settle).
+pub const DEFAULT_IO_TIMEOUT: Duration = crate::async_core::DEFAULT_IO_TIMEOUT;
 
 /// Builds the options of a (re)connection: TLS, credentials, name. Called on every connect, so
 /// secrets stay in the closure and are never echoed.
@@ -76,6 +78,10 @@ pub struct NatsOptions {
     pub batch: usize,
     /// Size cap of an envelope on the wire, checked on publish and before parsing on receive.
     pub max_bytes: usize,
+    /// Bound on one broker call (connecting, publishing and awaiting the stream's
+    /// acknowledgement, fetching, settling); a fetch may additionally wait as long as the poll
+    /// asked. A call that exceeds it fails as `timed out`.
+    pub io_timeout: Duration,
     /// Called for every undecodable inbound message.
     pub on_undecodable: Option<UndecodableHook>,
     connect_with: Option<ConnectFactory>,
@@ -88,6 +94,7 @@ impl std::fmt::Debug for NatsOptions {
             .field("ack_wait", &self.ack_wait)
             .field("batch", &self.batch)
             .field("max_bytes", &self.max_bytes)
+            .field("io_timeout", &self.io_timeout)
             .finish_non_exhaustive()
     }
 }
@@ -107,6 +114,7 @@ impl NatsOptions {
             ack_wait: DEFAULT_ACK_WAIT,
             batch: DEFAULT_BATCH,
             max_bytes: DEFAULT_MAX_SNAPSHOT_BYTES,
+            io_timeout: DEFAULT_IO_TIMEOUT,
             on_undecodable: None,
             connect_with: None,
         }
@@ -137,6 +145,13 @@ impl NatsOptions {
     #[must_use]
     pub fn max_bytes(mut self, max_bytes: usize) -> Self {
         self.max_bytes = max_bytes;
+        self
+    }
+
+    /// Bound every broker call by `io_timeout` (default 30 s).
+    #[must_use]
+    pub fn io_timeout(mut self, io_timeout: Duration) -> Self {
+        self.io_timeout = io_timeout;
         self
     }
 
@@ -176,11 +191,15 @@ impl NatsOptions {
         if self.batch < 1 {
             return invalid("batch must be >= 1");
         }
+        if self.io_timeout.is_zero() {
+            return invalid("io_timeout must be > 0");
+        }
         Ok(Settings {
             durable: self.durable.clone(),
             ack_wait: self.ack_wait,
             batch: self.batch,
             max_bytes: self.max_bytes,
+            io_timeout: self.io_timeout,
         })
     }
 }

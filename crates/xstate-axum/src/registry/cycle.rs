@@ -366,7 +366,7 @@ impl StatechartRegistry {
                 return Ok(None);
             }
             Ok(Admission::Duplicate(receipt)) => receipt,
-            Ok(refused) => {
+            Ok(refused @ (Admission::InFlight | Admission::Mismatch)) => {
                 let key = default_key(&p.event).unwrap_or_default();
                 refused.refusal_receipt(&key, &state_ids).unwrap_or_default()
             }

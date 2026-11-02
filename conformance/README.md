@@ -54,8 +54,9 @@ An **observation** is taken after `start()` (`initial`) and after every step:
 ```
 
 Built-in actions (`assign`, `raise`, `log`, `sendTo`, ...) are not recorded; only named user
-actions are. The Python expectation additionally carries `machine_hash` and `snapshot`, in which
-the volatile fields `taken_at` and `deadlines[].due_at_wall` are zeroed.
+actions are. The Python expectation additionally carries `machine_hash`, `snapshot` and `snapshot_text` (the exact text of Python's
+`get_snapshot()`), in which the volatile fields `taken_at` and `deadlines[].due_at_wall` are
+zeroed.
 
 ## JSON dialect notes
 
@@ -75,6 +76,11 @@ python conformance/tools/generate_expected.py --check  # CI: fail when stale or 
 ```
 
 Add a case by writing the file without `expected` and running the generator.
+
+`tools/export_golden.py` generates the other Python-derived fixtures of the suite: the Mermaid and
+PlantUML goldens in `crates/xstate-core/tests/fixtures/export/` (one `.mmd` and one `.puml` per
+case the Python library can render). Run it after adding a case; `--check` fails on a stale,
+missing or stray file, and `crates/xstate-core/tests/export.rs` asserts the exact file count.
 
 ## Rust side
 

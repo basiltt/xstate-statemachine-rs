@@ -7,7 +7,10 @@ inbox, the transition / audit log, snapshot migrations and adoption of existing 
 
 All layouts are byte-compatible with the Python library (ADR-0003): a SQLite file, a directory of
 `.xsm.json` records, a Redis keyspace or a PostgreSQL schema can be shared between the two
-runtimes, and a Rust worker can resume an instance a Python worker saved.
+runtimes, and a Rust worker can resume an instance a Python worker saved. Snapshot documents have
+the same fields, order and values as Python's; Rust writes them as compact JSON where Python's
+`get_snapshot()` indents, and a conformance test pins that the two texts are equal once whitespace
+is removed.
 
 Status: 0.1.0. Stores are blocking; the Postgres backend drives sqlx on an owned runtime.
 

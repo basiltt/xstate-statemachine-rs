@@ -1,4 +1,4 @@
-#![allow(dead_code, clippy::print_stderr)] // shared by several test crates; each uses a subset
+#![allow(dead_code, clippy::print_stderr, clippy::expect_used)] // shared by several test crates; each uses a subset
 
 //! Helpers shared by the integration tests: a minimal executor, the Python interpreter of the
 //! sibling checkout, and small machines.
@@ -94,4 +94,29 @@ pub(crate) fn counter() -> Machine {
         "states": {"on": {"on": {"ADD": {"actions": "record"}}}}
     }))
     .unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// A test that needs a docker-backed service (Redis, NATS, RabbitMQ, SQS) found it down: skip it
+/// with a note, or fail it when `XSM_REQUIRE_SERVICES=1` is set (CI), so an unreachable service
+/// cannot turn into silently missing coverage.
+pub(crate) fn service_unavailable(test: &str, why: &str) {
+    assert!(
+        std::env::var("XSM_REQUIRE_SERVICES").as_deref() != Ok("1"),
+        "`{test}`: {why}; XSM_REQUIRE_SERVICES=1 forbids skipping the test"
+    );
+    eprintln!("skipping `{test}`: {why}");
+}
+
+/// A TCP server on the loopback that accepts connections and never says a word: what a hung
+/// broker looks like. Returns its port; it runs until the test process ends.
+pub(crate) fn silent_server() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a loopback port");
+    let port = listener.local_addr().expect("the bound address").port();
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept() {
+            held.push(stream);
+        }
+    });
+    port
 }

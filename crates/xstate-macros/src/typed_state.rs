@@ -32,7 +32,8 @@ pub(crate) fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
         }
         states.push((&variant.ident, id));
     }
-    Ok(expand(input, &states))
+    let krate = crate::krate::resolve(crate::krate::from_attrs(&input.attrs)?.as_ref());
+    Ok(expand(input, &states, &krate))
 }
 
 fn enum_options(input: &DeriveInput) -> syn::Result<EnumOptions> {
@@ -90,11 +91,11 @@ fn variant_id(variant: &Variant, options: &EnumOptions) -> syn::Result<String> {
     Ok(format!("{machine}.{key}"))
 }
 
-fn expand(input: &DeriveInput, states: &[(&Ident, String)]) -> TokenStream {
+fn expand(input: &DeriveInput, states: &[(&Ident, String)], krate: &TokenStream) -> TokenStream {
     let (name, vis) = (&input.ident, &input.vis);
     let idents: Vec<&Ident> = states.iter().map(|(ident, _)| *ident).collect();
     let ids: Vec<&str> = states.iter().map(|(_, id)| id.as_str()).collect();
-    let (queries, trait_impl) = (queries(vis), trait_impl(name));
+    let (queries, trait_impl) = (queries(vis, krate), trait_impl(name, krate));
     quote! {
         #[automatically_derived]
         impl #name {
@@ -128,10 +129,10 @@ fn expand(input: &DeriveInput, states: &[(&Ident, String)]) -> TokenStream {
 }
 
 /// `impl TypedState`, delegating to the inherent items.
-fn trait_impl(name: &Ident) -> TokenStream {
+fn trait_impl(name: &Ident, krate: &TokenStream) -> TokenStream {
     quote! {
         #[automatically_derived]
-        impl ::xstate_core::TypedState for #name {
+        impl #krate::TypedState for #name {
             fn id(&self) -> &'static str {
                 #name::id(self)
             }
@@ -148,13 +149,13 @@ fn trait_impl(name: &Ident) -> TokenStream {
 }
 
 /// The inherent `is_active` and `check`.
-fn queries(vis: &syn::Visibility) -> TokenStream {
+fn queries(vis: &syn::Visibility, krate: &TokenStream) -> TokenStream {
     quote! {
         /// `true` when this state is active in `interp`.
         #[must_use]
-        #vis fn is_active<C: ::xstate_core::Context>(
+        #vis fn is_active<C: #krate::Context>(
             &self,
-            interp: &::xstate_core::SyncInterpreter<C>,
+            interp: &#krate::SyncInterpreter<C>,
         ) -> bool {
             interp.matches(self.id())
         }
@@ -165,9 +166,9 @@ fn queries(vis: &syn::Visibility) -> TokenStream {
         /// Describes ids that are not states of the chart, ids of non-leaf states and leaf
         /// states the enum does not cover.
         #vis fn check(
-            machine: &::xstate_core::Machine,
+            machine: &#krate::Machine,
         ) -> ::core::result::Result<(), ::std::string::String> {
-            <Self as ::xstate_core::TypedState>::check(machine)
+            <Self as #krate::TypedState>::check(machine)
         }
     }
 }

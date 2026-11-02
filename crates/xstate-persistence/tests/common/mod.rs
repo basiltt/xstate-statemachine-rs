@@ -1,5 +1,5 @@
 //! Shared fixtures for the persistence integration tests.
-#![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
+#![allow(dead_code, clippy::print_stderr, clippy::unwrap_used, clippy::expect_used)]
 
 use serde_json::{Value, json};
 use xstate_core::{Machine, MachineLogic, Snapshot};
@@ -41,4 +41,15 @@ pub(crate) fn count_of(store: &dyn StateStore, key: &str) -> i64 {
 /// Record version of `key` (`0` when absent).
 pub(crate) fn version_of(store: &dyn StateStore, key: &str) -> u64 {
     store.load(key).unwrap().map_or(0, |r| r.version)
+}
+
+/// A test that needs a docker-backed service (Redis, PostgreSQL) found it down: skip it with a
+/// note, or fail it when `XSM_REQUIRE_SERVICES=1` is set (CI), so an unreachable service cannot
+/// turn into silently missing coverage.
+pub(crate) fn service_unavailable(test: &str, why: &str) {
+    assert!(
+        std::env::var("XSM_REQUIRE_SERVICES").as_deref() != Ok("1"),
+        "`{test}`: {why}; XSM_REQUIRE_SERVICES=1 forbids skipping the test"
+    );
+    eprintln!("skipping `{test}`: {why}");
 }

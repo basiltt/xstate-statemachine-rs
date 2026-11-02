@@ -140,7 +140,8 @@
         "history": {},
         "actors": {},
         "system": {}
-      }
+      },
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"toggle\",\n  \"machine_hash\": \"acf7c272d0d9f9b5\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"running\",\n  \"context\": {},\n  \"state_ids\": [\n    \"toggle.inactive\"\n  ],\n  \"value\": \"inactive\",\n  \"configuration\": [\n    \"toggle\",\n    \"toggle.inactive\"\n  ],\n  \"output\": null,\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
     }
   }
 }

@@ -24,6 +24,7 @@
 
 #![forbid(unsafe_code)]
 
+mod callable;
 mod clock;
 mod convert;
 mod errors;

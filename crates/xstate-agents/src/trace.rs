@@ -4,6 +4,11 @@
 //! `agent_id` and `parent_id`, so a supervisor and the sub-agents it spawned land in one
 //! file and [`AgentTrace::totals`] rolls cost up per agent and overall.
 //!
+//! Memory: [`TraceSink::Memory`] keeps the records for [`AgentTrace::records`], the newest
+//! [`max_records`](AgentTrace::max_records) of them (default [`DEFAULT_MAX_RECORDS`]); every
+//! other sink streams and retains nothing. [`AgentTrace::totals`] is kept as a running rollup,
+//! so it stays exact whatever the sink and however many records were dropped.
+//!
 //! X0.13 hygiene: `record_content(false)` (the default) writes NO prompt, completion, tool
 //! arguments or tool output -- only names, states, token counts and cost. With
 //! `record_content(true)` the content is passed through key-based redaction first.
@@ -17,6 +22,7 @@
 //! are all leaves) and the last one is the configuration after the step. `agent_error`'s
 //! `reason` is the engine error kind, not an exception class.
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::io::Write;
 use std::path::PathBuf;
@@ -57,6 +63,9 @@ impl TraceIdentity {
     }
 }
 
+/// Default bound on the records [`TraceSink::Memory`] retains.
+pub const DEFAULT_MAX_RECORDS: usize = 10_000;
+
 /// Callback receiving each record.
 pub type RecordFn = Arc<dyn Fn(&Value) + Send + Sync>;
 /// `() -> epoch seconds` for the `ts` field.
@@ -66,11 +75,12 @@ pub type TraceClock = Arc<dyn Fn() -> f64 + Send + Sync>;
 pub enum TraceSink {
     /// Memory only.
     Memory,
-    /// A JSONL file, appended to.
+    /// A JSONL file, appended to (created with mode `0o600` on Unix: records can hold prompts
+    /// and tool output).
     File(PathBuf),
     /// Any writer (one JSON line per record).
     Writer(Mutex<Box<dyn Write + Send>>),
-    /// A callback.
+    /// A callback, invoked with no internal lock held (it may call back into the trace).
     Callback(RecordFn),
 }
 
@@ -92,7 +102,13 @@ pub struct AgentTrace {
     on_span: Option<RecordFn>,
     clock: TraceClock,
     identity: Option<TraceIdentity>,
-    records: Mutex<Vec<Value>>,
+    max_records: usize,
+    /// The newest records; only filled for [`TraceSink::Memory`].
+    records: Mutex<VecDeque<Value>>,
+    /// Per-agent usage rolled up from `model_call` records (see [`AgentTrace::totals`]).
+    rollup: Mutex<Map<String, Value>>,
+    /// Serialises file appends so lines of concurrent records never interleave.
+    file_lock: Mutex<()>,
 }
 
 impl fmt::Debug for AgentTrace {
@@ -134,8 +150,19 @@ impl AgentTrace {
             on_span: None,
             clock: Arc::new(epoch_seconds),
             identity: None,
-            records: Mutex::new(Vec::new()),
+            max_records: DEFAULT_MAX_RECORDS,
+            records: Mutex::new(VecDeque::new()),
+            rollup: Mutex::new(Map::new()),
+            file_lock: Mutex::new(()),
         }
+    }
+
+    /// Bound on the records a [`TraceSink::Memory`] trace retains (oldest dropped first;
+    /// default [`DEFAULT_MAX_RECORDS`]). Other sinks retain nothing.
+    #[must_use]
+    pub const fn max_records(mut self, n: usize) -> Self {
+        self.max_records = n;
+        self
     }
 
     /// Include prompts / completions / tool I/O (redacted).
@@ -166,9 +193,10 @@ impl AgentTrace {
         self
     }
 
-    /// Every record so far.
+    /// The retained records, oldest first: the newest `max_records` of a
+    /// [`TraceSink::Memory`] trace, always empty for any other sink.
     pub fn records(&self) -> Vec<Value> {
-        self.records.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        self.records.lock().unwrap_or_else(PoisonError::into_inner).iter().cloned().collect()
     }
 
     /// Append one record. Called by the agent logic and the observer hooks; `fields` are the
@@ -193,11 +221,19 @@ impl AgentTrace {
         rec.insert("state".into(), json!(sorted));
         self.add_fields(&mut rec, fields);
         let rec = Value::Object(rec);
-        {
-            let mut records = self.records.lock().unwrap_or_else(PoisonError::into_inner);
-            records.push(rec.clone());
-            self.write(&rec);
+        if rec["kind"] == "model_call" {
+            let mut rollup = self.rollup.lock().unwrap_or_else(PoisonError::into_inner);
+            add_to_rollup(&mut rollup, &rec);
         }
+        if matches!(self.sink, TraceSink::Memory) {
+            let mut records = self.records.lock().unwrap_or_else(PoisonError::into_inner);
+            records.push_back(rec.clone());
+            while records.len() > self.max_records {
+                records.pop_front();
+            }
+        }
+        // No lock is held from here on: sinks and the span hook may call back into the trace.
+        self.write(&rec);
         if let Some(f) = &self.on_span {
             f(&rec);
         }
@@ -265,11 +301,10 @@ impl AgentTrace {
                 f(rec);
                 Ok(())
             }
-            TraceSink::File(path) => std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .and_then(|mut fh| fh.write_all(line().as_bytes())),
+            TraceSink::File(path) => {
+                let _serial = self.file_lock.lock().unwrap_or_else(PoisonError::into_inner);
+                open_private(path).and_then(|mut fh| fh.write_all(line().as_bytes()))
+            }
             TraceSink::Writer(w) => {
                 w.lock().unwrap_or_else(PoisonError::into_inner).write_all(line().as_bytes())
             }
@@ -279,27 +314,10 @@ impl AgentTrace {
         }
     }
 
-    /// `{"agents": {agent_id: usage}, "total": usage}` from the `model_call` records.
+    /// `{"agents": {agent_id: usage}, "total": usage}` from every `model_call` record seen
+    /// (a running rollup: independent of the sink and of [`max_records`](Self::max_records)).
     pub fn totals(&self) -> Value {
-        let mut agents = Map::new();
-        for r in self.records().iter().filter(|r| r["kind"] == "model_call") {
-            let id = crate::pyfmt::py_str(&r["agent_id"]);
-            let entry = agents.entry(id).or_insert_with(
-                || json!({"turns": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}),
-            );
-            entry["turns"] = json!(crate::budgets::ctx_int(entry, "turns") + 1);
-            for (k, src) in [
-                ("input_tokens", "gen_ai.usage.input_tokens"),
-                ("output_tokens", "gen_ai.usage.output_tokens"),
-            ] {
-                entry[k] =
-                    json!(crate::budgets::ctx_int(entry, k) + crate::budgets::ctx_int(r, src));
-            }
-            entry["cost_usd"] = json!(
-                crate::budgets::ctx_float(entry, "cost_usd")
-                    + crate::budgets::ctx_float(r, "cost_usd")
-            );
-        }
+        let agents = self.rollup.lock().unwrap_or_else(PoisonError::into_inner).clone();
         let sum = |k: &str| agents.values().map(|a| crate::budgets::ctx_int(a, k)).sum::<i64>();
         let cost: Value = if agents.is_empty() {
             json!(0)
@@ -347,6 +365,36 @@ impl AgentTrace {
             self.record(&who, "transition", &state, &Map::new());
         }
     }
+}
+
+/// Fold one `model_call` record into the per-agent usage map.
+fn add_to_rollup(agents: &mut Map<String, Value>, r: &Value) {
+    let id = crate::pyfmt::py_str(&r["agent_id"]);
+    let entry = agents.entry(id).or_insert_with(
+        || json!({"turns": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}),
+    );
+    entry["turns"] = json!(crate::budgets::ctx_int(entry, "turns") + 1);
+    for (k, src) in [
+        ("input_tokens", "gen_ai.usage.input_tokens"),
+        ("output_tokens", "gen_ai.usage.output_tokens"),
+    ] {
+        entry[k] = json!(crate::budgets::ctx_int(entry, k) + crate::budgets::ctx_int(r, src));
+    }
+    entry["cost_usd"] = json!(
+        crate::budgets::ctx_float(entry, "cost_usd") + crate::budgets::ctx_float(r, "cost_usd")
+    );
+}
+
+/// Open `path` for appending, creating it readable and writable by its owner only on Unix.
+fn open_private(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
 }
 
 impl Observer<DynContext> for AgentTrace {
@@ -431,12 +479,55 @@ mod tests {
                 && text.contains("\"gen_ai.tool.name\": \"x\"")
         );
         assert!(!text.contains("gen_ai.tool.arguments"));
+        assert!(trace.records().is_empty(), "a file trace retains nothing in memory");
         let w = AgentTrace::new(TraceSink::Writer(Mutex::new(Box::new(Vec::new()))));
         w.record(&TraceIdentity::root("a"), "x", &[], &Map::new());
-        assert_eq!(w.records().len(), 1);
+        assert_eq!(w.records().len(), 0);
         assert!(format!("{w:?}").contains("Writer"));
         let bad = AgentTrace::new(TraceSink::File(dir.path().join("missing").join("t.jsonl")));
         bad.record(&TraceIdentity::root("a"), "x", &[], &Map::new());
-        assert_eq!(bad.records().len(), 1);
+        assert_eq!(bad.records().len(), 0);
+    }
+
+    #[test]
+    fn memory_sink_is_bounded_and_totals_survive_the_bound() {
+        let trace = AgentTrace::default().max_records(3).clock(Arc::new(|| 0.0));
+        let who = TraceIdentity::root("a");
+        let mut f = Map::new();
+        f.insert("response".into(), json!({"text": "t", "usage": {"input_tokens": 2}}));
+        for _ in 0..5 {
+            trace.record(&who, "model_call", &[], &f);
+        }
+        trace.record(&who, "tool_call", &[], &Map::new());
+        let kinds: Vec<Value> = trace.records().iter().map(|r| r["kind"].clone()).collect();
+        assert_eq!(kinds, ["model_call", "model_call", "tool_call"]);
+        assert_eq!(trace.totals()["total"]["turns"], 5);
+        assert_eq!(trace.totals()["total"]["input_tokens"], 10);
+    }
+
+    #[test]
+    fn callbacks_run_without_the_trace_locks_held() {
+        let trace = Arc::new_cyclic(|weak: &std::sync::Weak<AgentTrace>| {
+            let weak = weak.clone();
+            let reenter: RecordFn = Arc::new(move |_| {
+                if let Some(trace) = weak.upgrade() {
+                    let _ = (trace.records(), trace.totals());
+                }
+            });
+            AgentTrace::new(TraceSink::Callback(Arc::clone(&reenter))).on_span(reenter)
+        });
+        trace.record(&TraceIdentity::root("a"), "x", &[], &Map::new());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trace_files_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let path = dir.path().join("t.jsonl");
+        let trace = AgentTrace::new(TraceSink::File(path.clone()));
+        trace.record(&TraceIdentity::root("a"), "x", &[], &Map::new());
+        let mode = std::fs::metadata(&path).unwrap_or_else(|e| panic!("{e}")).permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }

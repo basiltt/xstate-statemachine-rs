@@ -98,6 +98,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 syn = { version = "2.0", features = ["full", "extra-traits"] }
 quote = "1.0"
 proc-macro2 = "1.0"
+proc-macro-crate = "3.5"
 
 # observability
 metrics = "0.24"
@@ -132,6 +133,11 @@ missing_panics_doc = "warn"
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
+
+# Line tables are enough for backtraces and keep `target/` an order of magnitude smaller than
+# full debuginfo across this many crates and feature combinations.
+[profile.dev]
+debug = "line-tables-only"
 
 [profile.release]
 lto = "fat"

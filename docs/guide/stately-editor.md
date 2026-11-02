@@ -111,7 +111,8 @@ The editor exports data; JavaScript functions never appear in it, and neither ca
 - **Not supported:** the callback-style built-ins `enqueueActions` and `pure`, and any config
   value that is a function in the JavaScript source (computed `input`, `output` factories,
   function delays): move them into named logic. Unknown keys are warnings by default; set
-  `"strictConfig": true` to make them errors.
+  `"strictConfig": true` to make them errors. `xsm validate` is stricter: it treats unknown keys as
+  errors unless you pass `--lenient`.
 
 Where the Python library and XState v5 disagree, the Rust engine follows XState; the list is in
 [`conformance/divergences.generated.md`](../../conformance/divergences.generated.md) and

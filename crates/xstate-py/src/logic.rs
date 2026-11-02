@@ -19,6 +19,7 @@ use pyo3::{PyTraverseError, PyVisit};
 use serde_json::Value;
 use xstate_core::{ActionScope, Context as _, Event, MachineLogic};
 
+use crate::callable::CallableSlot;
 use crate::convert::{self, type_name};
 
 type CoreResult<T> = xstate_core::Result<T>;
@@ -72,7 +73,7 @@ enum DelaySpec {
 }
 
 /// Registry of Python implementations, mirroring the Python library's `MachineLogic`.
-#[pyclass(name = "MachineLogic", module = "xstate_rs", frozen)]
+#[pyclass(name = "MachineLogic", module = "xstate_rs")]
 pub(crate) struct PyMachineLogic {
     actions: Vec<(String, Py<PyAny>)>,
     guards: Vec<(String, Py<PyAny>)>,
@@ -149,6 +150,14 @@ impl PyMachineLogic {
         }
         Ok(())
     }
+
+    /// Drop every registered callable so a reference cycle through one of them is collectable.
+    fn __clear__(&mut self) {
+        self.actions.clear();
+        self.guards.clear();
+        self.services.clear();
+        self.delays.clear();
+    }
 }
 
 impl PyMachineLogic {
@@ -169,27 +178,40 @@ impl PyMachineLogic {
         self.actions.iter().chain(&self.guards).chain(&self.services).map(|(_, f)| f).chain(delays)
     }
 
-    /// Build the engine registry; callback failures are parked in `slot`.
-    pub(crate) fn build(&self, py: Python<'_>, slot: &Arc<ErrorSlot>) -> MachineLogic<Value> {
+    /// Build the engine registry; callback failures are parked in `slot`. Returns the
+    /// registry and the slots owning the callables it calls: the caller (the interpreter) must
+    /// report them to the garbage collector and empty them in `__clear__`, because the
+    /// registry's closures hold nothing but the slots.
+    pub(crate) fn build(
+        &self,
+        py: Python<'_>,
+        slot: &Arc<ErrorSlot>,
+    ) -> (MachineLogic<Value>, Vec<Arc<CallableSlot>>) {
+        let mut owned = Vec::new();
+        let mut own = |f: &Py<PyAny>| {
+            let callable = CallableSlot::new(f.clone_ref(py));
+            owned.push(Arc::clone(&callable));
+            callable
+        };
         let mut logic = MachineLogic::dynamic();
         for (name, f) in &self.actions {
-            logic = logic.action(name.clone(), action_fn(f.clone_ref(py), Arc::clone(slot)));
+            logic = logic.action(name.clone(), action_fn(own(f), Arc::clone(slot)));
         }
         for (name, f) in &self.guards {
-            logic = logic.guard(name.clone(), guard_fn(f.clone_ref(py), Arc::clone(slot)));
+            logic = logic.guard(name.clone(), guard_fn(own(f), Arc::clone(slot)));
         }
         for (name, f) in &self.services {
-            logic = logic.service(name.clone(), service_fn(f.clone_ref(py), Arc::clone(slot)));
+            logic = logic.service(name.clone(), service_fn(own(f), Arc::clone(slot)));
         }
         for (name, spec) in &self.delays {
             logic = match spec {
                 DelaySpec::Fixed(ms) => logic.delay(name.clone(), *ms),
                 DelaySpec::Callable(f) => {
-                    logic.delay_fn(name.clone(), delay_fn(f.clone_ref(py), Arc::clone(slot)))
+                    logic.delay_fn(name.clone(), delay_fn(own(f), Arc::clone(slot)))
                 }
             };
         }
-        logic
+        (logic, owned)
     }
 }
 
@@ -255,11 +277,12 @@ fn delay_spec(value: &Bound<'_, PyAny>) -> PyResult<DelaySpec> {
 }
 
 fn action_fn(
-    f: Py<PyAny>,
+    f: Arc<CallableSlot>,
     slot: Arc<ErrorSlot>,
 ) -> impl Fn(&mut ActionScope<'_, Value>) -> CoreResult<()> + Send + Sync + 'static {
     move |scope| {
         Python::attach(|py| {
+            let f = f.get_or_err(py)?;
             call_action(py, f.bind(py), scope).map_err(|e| fail(py, &slot, e, true))
         })
     }
@@ -292,11 +315,12 @@ fn call_action(
 }
 
 fn guard_fn(
-    f: Py<PyAny>,
+    f: Arc<CallableSlot>,
     slot: Arc<ErrorSlot>,
 ) -> impl Fn(&Value, &Event, &Value) -> CoreResult<bool> + Send + Sync + 'static {
     move |ctx, event, params| {
         Python::attach(|py| {
+            let f = f.get_or_err(py)?;
             let call = || -> PyResult<bool> {
                 let args = (
                     convert::to_py(py, ctx)?,
@@ -313,11 +337,12 @@ fn guard_fn(
 /// Services complete synchronously. A raised `Exception` is the service's failure (it becomes
 /// `xstate.error.actor.<id>`), so it is not reported on the receipt.
 fn service_fn(
-    f: Py<PyAny>,
+    f: Arc<CallableSlot>,
     slot: Arc<ErrorSlot>,
 ) -> impl Fn(&Value, &Value) -> CoreResult<Value> + Send + Sync + 'static {
     move |ctx, input| {
         Python::attach(|py| {
+            let f = f.get_or_err(py)?;
             let call = || -> PyResult<Value> {
                 let out =
                     f.bind(py).call1((convert::to_py(py, ctx)?, convert::to_py(py, input)?))?;
@@ -329,11 +354,12 @@ fn service_fn(
 }
 
 fn delay_fn(
-    f: Py<PyAny>,
+    f: Arc<CallableSlot>,
     slot: Arc<ErrorSlot>,
 ) -> impl Fn(&Value, &Event) -> CoreResult<f64> + Send + Sync + 'static {
     move |ctx, event| {
         Python::attach(|py| {
+            let f = f.get_or_err(py)?;
             let call = || -> PyResult<f64> {
                 let out = f
                     .bind(py)

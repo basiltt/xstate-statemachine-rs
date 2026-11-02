@@ -12,6 +12,17 @@ use crate::store::{Result, StoreError};
 /// `(size, mtime)` of the log file; `(0, None)` when absent.
 type Signature = (u64, Option<SystemTime>);
 
+/// Open options for a file this log creates: mode `0600` on Unix (an audit trail holds event
+/// payloads and must not be world-readable under a permissive umask), like the database files
+/// of the SQLite stores. Other platforms have no such mode and use their defaults.
+fn private_options() -> std::fs::OpenOptions {
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut options = std::fs::OpenOptions::new();
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options
+}
+
 #[derive(Debug, Default)]
 struct Cache {
     /// Last seq per machine id, valid while the file's signature equals `signature`.
@@ -29,6 +40,9 @@ struct Cache {
 /// can mint the same `seq`. Use [`SqliteLog`](super::SqliteLog) for multi-process writers.
 ///
 /// A torn or corrupt line is a [`StoreError::Corrupt`] naming `path:line`, never skipped.
+///
+/// On Unix the file (and the temporary file of a purge) is created with mode `0600`; the mode of
+/// a file that already exists is left as it is.
 #[derive(Debug)]
 pub struct JsonLinesLog {
     path: PathBuf,
@@ -116,7 +130,7 @@ impl JsonLinesLog {
     fn write_line(&self, cache: &mut Cache, record: &TransitionRecord) -> Result<()> {
         let mut line = record.to_json();
         line.push('\n');
-        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&self.path)?;
+        let mut file = private_options().create(true).append(true).open(&self.path)?;
         file.write_all(line.as_bytes())?;
         file.flush()?;
         drop(file);
@@ -134,7 +148,7 @@ impl JsonLinesLog {
         let kept: Vec<&TransitionRecord> = records.iter().filter(|r| keep(r)).collect();
         let tmp = self.path.with_extension("jsonl.tmp");
         let written = (|| -> std::io::Result<()> {
-            let mut file = std::fs::File::create(&tmp)?;
+            let mut file = private_options().write(true).create(true).truncate(true).open(&tmp)?;
             for record in &kept {
                 file.write_all(record.to_json().as_bytes())?;
                 file.write_all(b"\n")?;

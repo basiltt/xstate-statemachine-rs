@@ -156,7 +156,8 @@
         "history": {},
         "actors": {},
         "system": {}
-      }
+      },
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"triage\",\n  \"machine_hash\": \"939c95b5bd0e56d3\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"done\",\n  \"context\": {},\n  \"state_ids\": [\n    \"triage.approved\"\n  ],\n  \"value\": \"approved\",\n  \"configuration\": [\n    \"triage\",\n    \"triage.approved\"\n  ],\n  \"output\": null,\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
     }
   }
 }

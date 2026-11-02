@@ -1,6 +1,6 @@
 //! Graph tests: reachability, shortest / simple paths and coverage targets over hand-written
 //! machines and the shared conformance corpus.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stderr)]
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -13,12 +13,21 @@ use xstate_core::graph::{
 };
 use xstate_core::{DynContext, Event, Machine, MachineLogic, Status};
 
-fn conformance_machine(case: &str) -> Machine {
-    let path: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../conformance/cases")
-        .join(format!("{case}.json"));
+/// The conformance cases live outside the crate, so the crates.io package does not contain them;
+/// the tests that read them skip (with a note) instead of failing there.
+fn conformance_dir() -> Option<PathBuf> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/cases");
+    if dir.is_dir() {
+        return Some(dir);
+    }
+    eprintln!("skipping: {} is absent (a crates.io package ships only this crate)", dir.display());
+    None
+}
+
+fn conformance_machine(case: &str) -> Option<Machine> {
+    let path = conformance_dir()?.join(format!("{case}.json"));
     let doc: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-    Machine::from_value(&doc["machine"]).unwrap()
+    Some(Machine::from_value(&doc["machine"]).unwrap())
 }
 
 fn machine(json: &str) -> Machine {
@@ -35,7 +44,7 @@ fn options(guards: GuardPolicy) -> GraphOptions {
 
 #[test]
 fn toggle_has_two_configurations_with_shortest_paths_of_length_zero_and_one() {
-    let toggle = conformance_machine("001_toggle_basic");
+    let Some(toggle) = conformance_machine("001_toggle_basic") else { return };
     let logic = stub(&toggle);
     let opts = GraphOptions::default();
 
@@ -53,7 +62,7 @@ fn toggle_has_two_configurations_with_shortest_paths_of_length_zero_and_one() {
 
 #[test]
 fn nested_machine_reaches_every_state() {
-    let nested = conformance_machine("004_nested_entry_exit_order");
+    let Some(nested) = conformance_machine("004_nested_entry_exit_order") else { return };
     let report = reachable_states(&nested, &stub(&nested), &GraphOptions::default()).unwrap();
     assert!(report.unreachable.is_empty(), "unreachable: {:?}", report.unreachable);
     let everything: BTreeSet<String> = nested.states().iter().map(|n| n.id.to_string()).collect();
@@ -62,7 +71,7 @@ fn nested_machine_reaches_every_state() {
 
 #[test]
 fn always_transitions_depend_on_the_guard_assumption() {
-    let triage = conformance_machine("012_always_transitions");
+    let Some(triage) = conformance_machine("012_always_transitions") else { return };
     let logic = stub(&triage);
 
     let all_true = reachable_states(&triage, &logic, &options(GuardPolicy::True)).unwrap();
@@ -85,7 +94,7 @@ fn always_transitions_depend_on_the_guard_assumption() {
 
 #[test]
 fn guard_assumption_is_recorded_on_each_step() {
-    let triage = conformance_machine("012_always_transitions");
+    let Some(triage) = conformance_machine("012_always_transitions") else { return };
     let paths = shortest_paths(&triage, &stub(&triage), &options(GuardPolicy::Both)).unwrap();
     let to_rejected = paths.iter().find(|p| p.state_ids == ["triage.rejected"]).unwrap();
     let to_review = paths.iter().find(|p| p.state_ids == ["triage.review"]).unwrap();
@@ -109,7 +118,7 @@ fn orphan_state_is_reported_unreachable_in_document_order() {
 
 #[test]
 fn after_timers_are_driven_as_events() {
-    let login = conformance_machine("009_after_fixed_delay");
+    let Some(login) = conformance_machine("009_after_fixed_delay") else { return };
     let stubs = stub(&login);
     let report = reachable_states(&login, &stubs, &GraphOptions::default()).unwrap();
     assert!(report.reachable.contains("login.expired"));
@@ -128,7 +137,7 @@ fn after_timers_are_driven_as_events() {
 
 #[test]
 fn named_delays_use_the_supplied_duration() {
-    let m = conformance_machine("011_after_named_delay");
+    let Some(m) = conformance_machine("011_after_named_delay") else { return };
     let logic = stub(&m);
     let unknown = shortest_paths(&m, &logic, &GraphOptions::default()).unwrap();
     let timed = unknown.iter().find(|p| p.total_delay_ms() > 0.0).unwrap();
@@ -235,14 +244,14 @@ fn explicit_events_replace_the_derived_set() {
 
 #[test]
 fn wildcard_handlers_are_exercised() {
-    let m = conformance_machine("013_wildcard_and_partial");
+    let Some(m) = conformance_machine("013_wildcard_and_partial") else { return };
     let report = reachable_states(&m, &stub(&m), &GraphOptions::default()).unwrap();
     assert!(report.unreachable.is_empty(), "unreachable: {:?}", report.unreachable);
 }
 
 #[test]
 fn invoked_services_complete_or_fail_by_policy() {
-    let ok_only = conformance_machine("019_invoke_onerror");
+    let Some(ok_only) = conformance_machine("019_invoke_onerror") else { return };
     let logic = stub(&ok_only);
     let done = reachable_states(&ok_only, &logic, &options(GuardPolicy::True)).unwrap();
     let both = reachable_states(&ok_only, &logic, &options(GuardPolicy::Both)).unwrap();
@@ -252,7 +261,7 @@ fn invoked_services_complete_or_fail_by_policy() {
 
 #[test]
 fn history_pseudo_states_are_never_reported_unreachable() {
-    let m = conformance_machine("006_history_shallow");
+    let Some(m) = conformance_machine("006_history_shallow") else { return };
     let report = reachable_states(&m, &stub(&m), &GraphOptions::default()).unwrap();
     for id in &report.unreachable {
         assert!(!m.node(m.state_by_id(id).unwrap()).is_history());
@@ -272,11 +281,11 @@ fn exceeding_max_configs_is_an_error() {
 
 #[test]
 fn missing_implementations_propagate() {
-    let triage = conformance_machine("012_always_transitions");
+    let Some(triage) = conformance_machine("012_always_transitions") else { return };
     let err = reachable_states(&triage, &MachineLogic::dynamic(), &GraphOptions::default());
     // Guards are overridden by the policy, so the bare logic suffices for this machine.
     assert!(err.is_ok());
-    let delayed = conformance_machine("011_after_named_delay");
+    let Some(delayed) = conformance_machine("011_after_named_delay") else { return };
     let err =
         reachable_states(&delayed, &MachineLogic::dynamic(), &GraphOptions::default()).unwrap_err();
     assert_eq!(err.kind(), xstate_core::ErrorKind::ImplementationMissing);
@@ -284,7 +293,7 @@ fn missing_implementations_propagate() {
 
 #[test]
 fn coverage_targets_list_every_transition_and_state() {
-    let toggle = conformance_machine("001_toggle_basic");
+    let Some(toggle) = conformance_machine("001_toggle_basic") else { return };
     let targets = transition_coverage_targets(&toggle);
     assert_eq!(targets.len(), 2);
     let edges: BTreeSet<(String, String, Vec<String>)> =
@@ -296,7 +305,7 @@ fn coverage_targets_list_every_transition_and_state() {
     )));
     assert_eq!(state_coverage_targets(&toggle), ["toggle.inactive", "toggle.active"]);
 
-    let triage = conformance_machine("012_always_transitions");
+    let Some(triage) = conformance_machine("012_always_transitions") else { return };
     let always =
         transition_coverage_targets(&triage).into_iter().filter(|t| t.event == "always").count();
     assert_eq!(always, 3);
@@ -304,7 +313,7 @@ fn coverage_targets_list_every_transition_and_state() {
 
 #[test]
 fn stub_logic_satisfies_every_conformance_machine() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/cases");
+    let Some(dir) = conformance_dir() else { return };
     let mut checked = 0;
     for entry in fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();

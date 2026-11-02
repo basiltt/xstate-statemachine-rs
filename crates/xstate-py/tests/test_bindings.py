@@ -559,6 +559,64 @@ def test_clock_holds_interpreters_weakly() -> None:
     clock.increment(10)  # dead interpreters are pruned silently
 
 
+def _observer_cycle() -> "weakref.ReferenceType[Any]":
+    """An interpreter reachable from its own observer: interp -> observer -> cell -> interp.
+
+    (The callback only touches ``holder``: calling back into a busy interpreter is an error.)
+    """
+    holder: List[Any] = []
+    interp = x.SyncInterpreter(x.Machine.from_dict(TOGGLE))
+    interp.observe(lambda event, state_ids, changed: len(holder))
+    holder.append(interp)
+    interp.start()
+    interp.send("TOGGLE")  # the observer runs
+    return weakref.ref(interp)
+
+
+def _logic_cycle() -> "weakref.ReferenceType[Any]":
+    """The same through a registered action and a guard."""
+    holder: List[Any] = []
+    logic = x.MachineLogic(
+        actions={"touch": lambda ctx, event, params: None if holder else None},
+        guards={"always": lambda ctx, event, params: len(holder) == 1},
+    )
+    machine = x.Machine.from_dict(
+        {
+            "id": "g",
+            "initial": "a",
+            "states": {
+                "a": {"on": {"GO": {"target": "b", "guard": "always", "actions": "touch"}}},
+                "b": {},
+            },
+        }
+    )
+    interp = x.SyncInterpreter(machine, logic)
+    holder.append(interp)
+    interp.start()
+    interp.send("GO")
+    assert interp.state_ids == ["g.b"]
+    return weakref.ref(interp)
+
+
+@pytest.mark.parametrize("make_cycle", [_observer_cycle, _logic_cycle])
+def test_interpreter_cycles_through_callbacks_are_collected(make_cycle: Any) -> None:
+    gc.collect()
+    ref = make_cycle()
+    gc.collect()
+    assert ref() is None, "the cycle through a Python callback was never collected"
+
+
+def test_clear_leaves_a_working_interpreter_until_collected() -> None:
+    # A live interpreter keeps its callbacks: collection must not touch reachable objects.
+    seen: List[Any] = []
+    interp = x.SyncInterpreter(x.Machine.from_dict(TOGGLE))
+    interp.observe(lambda event, state_ids, changed: seen.append(state_ids))
+    interp.start()
+    gc.collect()
+    interp.send("TOGGLE")
+    assert seen[-1] == ["toggle.active"]
+
+
 # --------------------------------------------------------------------------- Python parity
 
 

@@ -161,7 +161,8 @@
         "history": {},
         "actors": {},
         "system": {}
-      }
+      },
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"job\",\n  \"machine_hash\": \"7871007af1abc64d\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"done\",\n  \"context\": {\n    \"attempts\": 1\n  },\n  \"state_ids\": [\n    \"job.done\"\n  ],\n  \"value\": \"done\",\n  \"configuration\": [\n    \"job\",\n    \"job.done\"\n  ],\n  \"output\": {\n    \"ok\": true\n  },\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
     }
   }
 }

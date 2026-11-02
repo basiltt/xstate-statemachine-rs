@@ -1,9 +1,11 @@
 //! Chart helpers shared by the outbox, the dead-letter plugin and the AsyncAPI generator:
 //! states entered by a step, and a walk over the chart's JSON document in Python's order.
 
+use std::cell::OnceCell;
+
 use serde_json::{Map, Value};
 use xstate_core::machine::{NodeKind, Transition};
-use xstate_core::{ActiveState, Machine, StateId, TransitionId};
+use xstate_core::{ActiveState, Context, Machine, StateId, TransitionId};
 
 // ----------------------------------------------------------------------- entered states
 
@@ -76,6 +78,27 @@ pub(crate) fn active_sorted<C>(machine: &Machine, state: &ActiveState<C>) -> Vec
 /// `true` when the compiled state carries `tag`.
 pub(crate) fn has_tag(machine: &Machine, sid: StateId, tag: &str) -> bool {
     machine.node(sid).tags.iter().any(|t| t == tag)
+}
+
+/// The context of a step as JSON: serialised at most once, and only when something needs it, so
+/// a step that publishes nothing never pays for (or fails on) the serialisation.
+pub(crate) struct LazyContext<'a, C> {
+    state: &'a ActiveState<C>,
+    value: OnceCell<Result<Value, String>>,
+}
+
+impl<'a, C: Context> LazyContext<'a, C> {
+    pub(crate) fn new(state: &'a ActiveState<C>) -> Self {
+        Self { state, value: OnceCell::new() }
+    }
+
+    /// The context as JSON, or why it could not be serialised.
+    pub(crate) fn get(&self) -> Result<&Value, &str> {
+        self.value
+            .get_or_init(|| serde_json::to_value(self.state.context()).map_err(|e| e.to_string()))
+            .as_ref()
+            .map_err(String::as_str)
+    }
 }
 
 /// The state key without the `<machine id>.` prefix.

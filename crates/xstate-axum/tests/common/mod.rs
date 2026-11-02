@@ -14,7 +14,9 @@ use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tower::ServiceExt;
-use xstate_axum::{RegisterOptions, RegistryBuilder, RouterOptions, StatechartRegistry, router};
+use xstate_axum::{
+    RegisterOptions, RegistryBuilder, RouterOptions, StatechartRegistry, allow_all, router,
+};
 use xstate_core::{Machine, MachineLogic};
 use xstate_persistence::{MemoryStore, StateStore};
 
@@ -40,13 +42,14 @@ pub(crate) fn store() -> Arc<dyn StateStore> {
     Arc::new(MemoryStore::new())
 }
 
-/// A registry over `store` with `order` registered (default options), customised by `f`.
+/// A registry over `store` with `order` registered (no authorization), customised by `f`.
 pub(crate) fn registry_over(
     store: Arc<dyn StateStore>,
     f: impl FnOnce(RegistryBuilder) -> RegistryBuilder,
 ) -> Arc<StatechartRegistry> {
     f(StatechartRegistry::builder(store))
-        .register("order", order_machine(), order_logic(), RegisterOptions::default())
+        // allow_all: tests drive every instance without an authorizer.
+        .register("order", order_machine(), order_logic(), RegisterOptions::new(allow_all()))
         .and_then(RegistryBuilder::build)
         .unwrap_or_else(|e| panic!("{e}"))
 }

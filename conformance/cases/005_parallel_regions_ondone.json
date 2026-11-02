@@ -174,7 +174,8 @@
         "history": {},
         "actors": {},
         "system": {}
-      }
+      },
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"release\",\n  \"machine_hash\": \"3139060de7a14b0a\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"done\",\n  \"context\": {},\n  \"state_ids\": [\n    \"release.deployed\"\n  ],\n  \"value\": \"deployed\",\n  \"configuration\": [\n    \"release\",\n    \"release.deployed\"\n  ],\n  \"output\": null,\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
     }
   }
 }

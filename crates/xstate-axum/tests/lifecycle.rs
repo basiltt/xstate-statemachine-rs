@@ -9,7 +9,8 @@ use common::{
 };
 use serde_json::json;
 use xstate_axum::{
-    InspectorOptions, RegisterOptions, RegistryError, StatechartRegistry, inspector_router,
+    InspectorOptions, RegisterOptions, RegistryError, StatechartRegistry, allow_all,
+    inspector_router,
 };
 use xstate_core::{Machine, MachineLogic};
 
@@ -42,7 +43,8 @@ async fn timer_scanner_wakes_persisted_deadlines() {
     .unwrap_or_else(|e| panic!("{e}"));
     let reg = StatechartRegistry::builder(common::store())
         .run_timers(Duration::from_millis(20))
-        .register("t", machine, MachineLogic::dynamic(), RegisterOptions::default())
+        // allow_all: the test drives the instance without an authorizer.
+        .register("t", machine, MachineLogic::dynamic(), RegisterOptions::new(allow_all()))
         .and_then(xstate_axum::RegistryBuilder::build)
         .unwrap_or_else(|e| panic!("{e}"));
     reg.start().unwrap_or_else(|e| panic!("{e}"));
@@ -81,6 +83,33 @@ async fn inspector_refuses_to_mount_without_debug() {
 }
 
 #[tokio::test]
+async fn inspector_token_charset_and_remote_secure_cookie() {
+    let reg = registry(|b| b);
+    for bad in ["a;b", "a b", "tok\r\nSet-Cookie: x=1", "é"] {
+        let options = InspectorOptions {
+            debug: true,
+            token: Some(bad.to_owned()),
+            ..InspectorOptions::default()
+        };
+        assert!(
+            matches!(inspector_router(&reg, options), Err(RegistryError::InvalidSetting(_))),
+            "{bad:?}"
+        );
+    }
+    let remote = InspectorOptions {
+        debug: true,
+        token: Some("tok-1._~".to_owned()),
+        allow_remote: true,
+        ..InspectorOptions::default()
+    };
+    let (inspector, _) = inspector_router(&reg, remote).unwrap_or_else(|e| panic!("{e}"));
+    let redeemed = get(&inspector, "/_xsm/inspect?token=tok-1._~").await;
+    assert_eq!(redeemed.status, 303);
+    let cookie = redeemed.headers["set-cookie"].to_str().unwrap_or_default().to_owned();
+    assert!(cookie.ends_with("; Secure"), "remote inspector cookie must be Secure: {cookie}");
+}
+
+#[tokio::test]
 async fn inspector_token_host_and_origin_rules() {
     let (_reg, app) = inspected("s3cret");
     let path = "/_xsm/inspect";
@@ -102,6 +131,7 @@ async fn inspector_token_host_and_origin_rules() {
     assert_eq!(redeemed.headers["location"], path);
     let cookie = redeemed.headers["set-cookie"].to_str().unwrap_or_default().to_owned();
     assert!(cookie.starts_with("xsm_inspect=s3cret;") && cookie.contains("HttpOnly"), "{cookie}");
+    assert!(!cookie.contains("Secure"), "loopback-only inspector: {cookie}");
     assert_eq!(redeemed.headers["cache-control"], "no-store");
 
     assert_eq!(post(&app, "/order/i1/events/PAY", r#"{"amount":1}"#).await.status, 200);

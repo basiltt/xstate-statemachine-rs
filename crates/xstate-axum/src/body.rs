@@ -155,8 +155,10 @@ pub fn validation_problem(issues: &[ValidationIssue]) -> Problem {
     problem
 }
 
-/// A body read the way the `FastAPI` router's route class does: size and time bounded, and
-/// `application/json` required only when the body is non-empty. `Ok(None)` for an empty body.
+/// A body read the way the `FastAPI` router's route class does, size and time bounded, with
+/// one hardening: `Content-Type: application/json` is required **even for an empty body**
+/// (415 otherwise). An empty-bodied POST would otherwise be a CORS "simple request" that a
+/// cross-site form can send (X0.7, CSRF). `Ok(None)` for an empty body.
 pub(crate) async fn bounded_json(
     headers: &HeaderMap,
     body: Body,
@@ -166,13 +168,13 @@ pub(crate) async fn bounded_json(
     if declared_length(headers).is_some_and(|n| n > max_body_bytes as u64) {
         return Err(ApiError::PayloadTooLarge.to_problem());
     }
-    let raw = read_body(body, max_body_bytes, timeout).await.map_err(|e| e.to_problem())?;
-    if raw.trim_ascii().is_empty() {
-        return Ok(None);
-    }
     if !is_json(headers) {
         return Err(ApiError::UnsupportedMediaType("Request body must be application/json".into())
             .to_problem());
+    }
+    let raw = read_body(body, max_body_bytes, timeout).await.map_err(|e| e.to_problem())?;
+    if raw.trim_ascii().is_empty() {
+        return Ok(None);
     }
     serde_json::from_slice(&raw)
         .map(Some)

@@ -187,3 +187,29 @@ fn a_misbehaving_rng_surfaces_as_a_logic_error() {
     let result = interp.start();
     assert!(result.is_err(), "entering `retrying` evaluates the delay: {result:?}");
 }
+
+#[test]
+fn decorrelated_bump_publishes_the_previous_delay_in_the_context() {
+    let policy = policy(6, 100.0, 1_000.0, JitterMode::Decorrelated).with_rng(|| 1.0);
+    let (mut interp, clock, _calls) = run_chart(&policy, usize::MAX, json!({ "attempt": 0 }));
+    let key = |interp: &SyncInterpreter| {
+        interp.context().and_then(|c| c.get("attempt_delay_ms")).cloned()
+    };
+    assert_eq!(key(&interp), None, "the first delay has not been bumped into the context yet");
+    advance(&mut interp, &clock, 300.0);
+    assert_eq!(key(&interp), Some(json!(300.0)), "the second failure publishes delay one");
+    advance(&mut interp, &clock, 900.0);
+    assert_eq!(key(&interp), Some(json!(900.0)));
+}
+
+#[test]
+fn a_context_delay_wins_over_the_logic_memory() {
+    // A restored (or Python-written) value is the previous delay: 200 * 3 = 600 -> capped 600.
+    let policy = policy(6, 100.0, 1_000.0, JitterMode::Decorrelated).with_rng(|| 1.0);
+    let ctx = json!({ "attempt": 0, "attempt_delay_ms": 200.0 });
+    let (mut interp, clock, calls) = run_chart(&policy, usize::MAX, ctx);
+    advance(&mut interp, &clock, 599.0);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    advance(&mut interp, &clock, 1.0);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}

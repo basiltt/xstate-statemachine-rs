@@ -9,7 +9,8 @@ an allowed slowdown factor. It plays the role of the Python library's
 estimated from the median ratio across all rows, then every row must stay within its budget
 after that adjustment), so it works on noisy CI runners.
 
-Phase 1 adds the gate runner (`cargo xtask perf-gate`) and the engine benchmarks:
+The engine benchmarks (the gate runner is not written yet; CI only builds the benchmarks with
+`cargo bench --no-run`):
 
 | id | what it measures | Python reference (p50) | Rust target |
 |---|---|---|---|

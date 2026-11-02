@@ -1,28 +1,70 @@
 //! [`ToolRegistry`]: name → [`Tool`], plus the enforcement `runTool` relies on.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use serde_json::Value;
 
 use super::{
-    ALL_TOOLS, DEFAULT_MAX_OUTPUT_CHARS, DEFAULT_TOOL_TIMEOUT_S, Tool, ToolSpec, check_timeout,
+    ALL_TOOLS, DEFAULT_MAX_IN_FLIGHT, DEFAULT_MAX_OUTPUT_CHARS, DEFAULT_TOOL_TIMEOUT_S,
+    MAX_TOOL_TIMEOUT_S, Tool, ToolSpec, check_timeout,
 };
 use crate::error::{AgentError, Result};
 use crate::messages::ToolCall;
 use crate::pyfmt::{py_dumps, py_repr_str};
 
 /// Name → [`Tool`], with output truncation and the X0.13 checks.
+///
+/// Clones share one in-flight counter, so [`max_in_flight`](ToolRegistryBuilder::max_in_flight)
+/// bounds the tool threads of every clone together.
 #[derive(Debug, Clone)]
 pub struct ToolRegistry {
     tools: BTreeMap<String, Tool>,
     max_output_chars: usize,
+    max_in_flight: usize,
+    in_flight: Arc<AtomicUsize>,
 }
 
 impl Default for ToolRegistry {
     fn default() -> Self {
-        Self { tools: BTreeMap::new(), max_output_chars: DEFAULT_MAX_OUTPUT_CHARS }
+        Self {
+            tools: BTreeMap::new(),
+            max_output_chars: DEFAULT_MAX_OUTPUT_CHARS,
+            max_in_flight: DEFAULT_MAX_IN_FLIGHT,
+            in_flight: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+/// One running tool thread; the slot is returned when the thread ends (also by panic), not
+/// when the caller stops waiting, because an overrunning tool keeps its thread.
+struct InFlightSlot(Arc<AtomicUsize>);
+
+impl InFlightSlot {
+    fn acquire(counter: &Arc<AtomicUsize>, max: usize) -> Option<Self> {
+        let mut current = counter.load(Ordering::Acquire);
+        loop {
+            if current >= max {
+                return None;
+            }
+            match counter.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Some(Self(Arc::clone(counter))),
+                Err(actual) => current = actual,
+            }
+        }
+    }
+}
+
+impl Drop for InFlightSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -34,6 +76,7 @@ pub struct ToolRegistryBuilder {
     timeout_s: f64,
     side_effect: bool,
     max_output_chars: usize,
+    max_in_flight: usize,
 }
 
 impl Default for ToolRegistryBuilder {
@@ -43,6 +86,7 @@ impl Default for ToolRegistryBuilder {
             timeout_s: DEFAULT_TOOL_TIMEOUT_S,
             side_effect: false,
             max_output_chars: DEFAULT_MAX_OUTPUT_CHARS,
+            max_in_flight: DEFAULT_MAX_IN_FLIGHT,
         }
     }
 }
@@ -76,15 +120,30 @@ impl ToolRegistryBuilder {
         self
     }
 
+    /// Most tool calls running at once across the registry (>= 1, default
+    /// [`DEFAULT_MAX_IN_FLIGHT`]). Every call runs on its own thread and a tool that overruns
+    /// its timeout keeps that thread, so without a cap a stuck tool plus a retrying agent
+    /// leaks threads without bound; a call over the cap fails with
+    /// `AgentError::Tool("too many tools in flight")`.
+    #[must_use]
+    pub const fn max_in_flight(mut self, n: usize) -> Self {
+        self.max_in_flight = n;
+        self
+    }
+
     /// Build the registry.
     ///
     /// # Errors
-    /// [`AgentError::Config`]: duplicate names, a non-positive timeout, `"*"` as a name or
-    /// `max_output_chars == 0`.
+    /// [`AgentError::Config`]: duplicate names, a non-finite, non-positive or over-long
+    /// timeout, `"*"` as a name, `max_output_chars == 0`, `max_in_flight == 0`, or a tool
+    /// schema outside the supported subset (see [`ToolSpec::parameters`]).
     pub fn build(self) -> Result<ToolRegistry> {
         check_timeout("<registry default>", self.timeout_s)?;
         if self.max_output_chars < 1 {
             return Err(AgentError::config("max_output_chars must be >= 1"));
+        }
+        if self.max_in_flight < 1 {
+            return Err(AgentError::config("max_in_flight must be >= 1"));
         }
         let mut tools = BTreeMap::new();
         for spec in self.specs {
@@ -97,7 +156,12 @@ impl ToolRegistryBuilder {
             }
             tools.insert(tool.name().to_owned(), tool);
         }
-        Ok(ToolRegistry { tools, max_output_chars: self.max_output_chars })
+        Ok(ToolRegistry {
+            tools,
+            max_output_chars: self.max_output_chars,
+            max_in_flight: self.max_in_flight,
+            in_flight: Arc::new(AtomicUsize::new(0)),
+        })
     }
 }
 
@@ -114,6 +178,12 @@ impl ToolRegistry {
     #[must_use]
     pub fn builder() -> ToolRegistryBuilder {
         ToolRegistryBuilder::default()
+    }
+
+    /// The in-flight cap (see [`ToolRegistryBuilder::max_in_flight`]).
+    #[must_use]
+    pub const fn max_in_flight(&self) -> usize {
+        self.max_in_flight
     }
 
     /// Registered names, sorted.
@@ -231,23 +301,34 @@ impl ToolRegistry {
     /// while the machine moves on; tools with external effects should honour their own
     /// timeouts too.
     ///
+    /// At most [`max_in_flight`](ToolRegistryBuilder::max_in_flight) tools run at once; the
+    /// slot of a tool that overran its timeout is only freed when its thread returns.
+    ///
     /// # Errors
     /// [`AgentError::ToolTimeout`], the tool's own error, or [`AgentError::Tool`] if it
-    /// panicked or is unknown.
+    /// panicked, is unknown, could not get a thread, or the registry already has
+    /// `max_in_flight` tools running (`"too many tools in flight"`).
     pub fn call(&self, call: &ToolCall, args: Value) -> Result<Value> {
         let tool = self
             .tools
             .get(&call.name)
             .ok_or_else(|| AgentError::denied(&call.name, "not registered"))?;
+        let slot = InFlightSlot::acquire(&self.in_flight, self.max_in_flight)
+            .ok_or_else(|| AgentError::tool("too many tools in flight"))?;
         let func = tool.func();
         let (tx, rx) = mpsc::channel();
         std::thread::Builder::new()
             .name(format!("xsm-tool-{}", tool.name()))
             .spawn(move || {
+                let _slot = slot;
                 let _ = tx.send(func(args));
             })
             .map_err(|e| AgentError::tool(format!("cannot start tool thread: {e}")))?;
-        match rx.recv_timeout(Duration::from_secs_f64(tool.timeout_s())) {
+        // `check_timeout` bounds every timeout to (0, MAX_TOOL_TIMEOUT_S], so this cannot fail;
+        // the cap is the fallback rather than a panic.
+        let wait = Duration::try_from_secs_f64(tool.timeout_s())
+            .unwrap_or_else(|_| Duration::from_secs_f64(MAX_TOOL_TIMEOUT_S));
+        match rx.recv_timeout(wait) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => Err(AgentError::ToolTimeout {
                 tool: tool.name().to_owned(),
@@ -299,6 +380,44 @@ mod tests {
         assert!(ToolRegistry::builder().max_output_chars(0).build().is_err());
         assert!(ToolRegistry::builder().timeout_s(-1.0).build().is_err());
         assert_eq!(ToolRegistry::default().max_output_chars(), DEFAULT_MAX_OUTPUT_CHARS);
+    }
+
+    #[test]
+    fn a_stuck_tool_keeps_its_slot_until_its_thread_returns() {
+        let gate = Arc::new(AtomicUsize::new(0));
+        let hold = Arc::clone(&gate);
+        let r = ToolRegistry::builder()
+            .tool(
+                ToolSpec::new("stuck", move |_| {
+                    while hold.load(Ordering::Acquire) == 0 {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Ok(Value::Null)
+                })
+                .timeout_s(0.05),
+            )
+            .tool(ToolSpec::new("echo", Ok))
+            .max_in_flight(1)
+            .build()
+            .unwrap_or_else(|e| panic!("{e}"));
+        let run = |name: &str| r.call(&ToolCall::new("1", name, json!({})), json!({}));
+        assert!(matches!(run("stuck"), Err(AgentError::ToolTimeout { .. })));
+        let refused = run("echo").err().map(|e| e.to_string());
+        assert_eq!(refused.as_deref(), Some("too many tools in flight"));
+        gate.store(1, Ordering::Release);
+        for _ in 0..200 {
+            if run("echo").is_ok() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the slot was never released");
+    }
+
+    #[test]
+    fn zero_in_flight_cap_is_a_config_error() {
+        assert!(ToolRegistry::builder().max_in_flight(0).build().is_err());
+        assert_eq!(ToolRegistry::default().max_in_flight(), DEFAULT_MAX_IN_FLIGHT);
     }
 
     #[test]

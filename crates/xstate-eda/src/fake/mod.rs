@@ -289,7 +289,7 @@ impl FakeCore {
         }
         st.nacked.push(held.envelope);
         if requeue {
-            let again = pristine.with_attempt(pristine.attempt() + 1);
+            let again = pristine.with_attempt(pristine.attempt().saturating_add(1));
             st.queues.entry(held.topic).or_default().push_front(again);
         }
     }

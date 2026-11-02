@@ -75,16 +75,20 @@ impl StatechartRegistry {
     }
 
     /// Graceful shutdown: refuse new streams and sends (503), end every SSE / WebSocket
-    /// stream, and stop the timer scanner, bounded by the drain timeout (X0.11).
+    /// stream (sessions still open when the drain timeout runs out are aborted), and stop the
+    /// timer scanner, all bounded by the drain timeout (X0.11).
     pub async fn shutdown(&self) {
         self.draining.store(true, Ordering::Release);
         self.started.store(false, Ordering::Release);
         self.subscribers().close_all();
+        let budget = self.settings.drain_timeout;
+        let deadline = tokio::time::Instant::now() + budget;
+        self.end_sessions(deadline).await;
         let Some(handle) = relock(&self.scanner).take() else { return };
         handle.stop.store(true, Ordering::Release);
-        let budget = self.settings.drain_timeout;
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         let joined = tokio::task::spawn_blocking(move || {
-            let deadline = Instant::now() + budget;
+            let deadline = Instant::now() + remaining;
             while !handle.thread.is_finished() {
                 if Instant::now() >= deadline {
                     return false;

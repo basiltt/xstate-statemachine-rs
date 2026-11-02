@@ -140,17 +140,34 @@ fn snapshots_filters_by_prefix_and_limit() {
     assert_eq!(limited["truncated"], true);
 }
 
-#[test]
-fn snapshots_detects_stale_records_by_structure_hash() {
-    let stores = stores_with_checkouts();
-    let dir = tempfile::tempdir().unwrap();
-    // The deployed machine gained a state, so its structure hash differs from the stored one.
-    let changed = dir.path().join("checkout-v3.json");
+/// The checkout machine, edited by `edit`, written to a temp file.
+fn edited_machine(dir: &Path, name: &str, edit: impl FnOnce(&mut Value)) -> std::path::PathBuf {
+    let path = dir.join(name);
     let mut doc: Value =
         serde_json::from_str(&std::fs::read_to_string(fixture("hierarchical.json")).unwrap())
             .unwrap();
-    doc["states"]["cart"]["on"]["CANCEL"] = serde_json::json!("receipt");
-    std::fs::write(&changed, doc.to_string()).unwrap();
+    edit(&mut doc);
+    std::fs::write(&path, doc.to_string()).unwrap();
+    path
+}
+
+/// The deployed machine gained a transition (new structure hash) but kept its version label.
+fn restructured(dir: &Path) -> std::path::PathBuf {
+    edited_machine(dir, "checkout-restructured.json", |doc| {
+        doc["states"]["cart"]["on"]["CANCEL"] = serde_json::json!("receipt");
+    })
+}
+
+/// The deployed machine was relabelled but its structure is unchanged.
+fn relabelled(dir: &Path) -> std::path::PathBuf {
+    edited_machine(dir, "checkout-v3.json", |doc| doc["version"] = serde_json::json!("3.0"))
+}
+
+#[test]
+fn snapshots_detects_stale_records_by_version_label_like_python() {
+    let stores = stores_with_checkouts();
+    let dir = tempfile::tempdir().unwrap();
+    let changed = relabelled(dir.path());
 
     for url in [&stores.sqlite_url, &stores.file_url] {
         xsm()
@@ -159,14 +176,15 @@ fn snapshots_detects_stale_records_by_structure_hash() {
             .assert()
             .success()
             .stdout(predicate::str::contains("stale snapshots (2)"))
-            .stdout(predicate::str::contains("STALE"));
+            .stdout(predicate::str::contains("3.0").not())
+            .stdout(predicate::str::contains("2.1"));
         xsm()
             .args(["snapshots", "--fail-if-stale", "--store", url])
             .arg(&changed)
             .assert()
             .code(1)
             .stdout(predicate::str::contains("order:1"));
-        // The unchanged machine matches every record: nothing is stale.
+        // The unchanged machine carries the same label as every record: nothing is stale.
         xsm()
             .args(["snapshots", "--fail-if-stale", "--store", url])
             .arg(fixture("hierarchical.json"))
@@ -174,6 +192,92 @@ fn snapshots_detects_stale_records_by_structure_hash() {
             .success()
             .stdout(predicate::str::contains("no stale snapshots"));
     }
+}
+
+#[test]
+fn snapshots_default_ignores_a_structure_change_that_kept_the_label() {
+    let stores = stores_with_checkouts();
+    let dir = tempfile::tempdir().unwrap();
+    let changed = restructured(dir.path());
+    // Python's rule is the label only, so a structural edit without a version bump is not stale
+    // by default ...
+    xsm()
+        .args(["snapshots", "--fail-if-stale", "--store", &stores.sqlite_url])
+        .arg(&changed)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no stale snapshots"));
+    // ... but the hash column still shows that restoring would be refused.
+    xsm()
+        .args(["snapshots", "--store", &stores.sqlite_url])
+        .arg(&changed)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Hash"))
+        .stdout(predicate::str::contains("MISMATCH"));
+}
+
+#[test]
+fn snapshots_stale_by_hash_flags_structure_changes_only() {
+    let stores = stores_with_checkouts();
+    let dir = tempfile::tempdir().unwrap();
+    let restructured = restructured(dir.path());
+    let relabelled = relabelled(dir.path());
+
+    for url in [&stores.sqlite_url, &stores.file_url] {
+        xsm()
+            .args(["snapshots", "--stale", "--stale-by", "hash", "--store", url])
+            .arg(&restructured)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("stale snapshots (2)"))
+            .stdout(predicate::str::contains("MISMATCH"));
+        xsm()
+            .args(["snapshots", "--fail-if-stale", "--stale-by", "hash", "--store", url])
+            .arg(&restructured)
+            .assert()
+            .code(1);
+        // A relabel alone does not change the structure hash.
+        xsm()
+            .args(["snapshots", "--fail-if-stale", "--stale-by", "hash", "--store", url])
+            .arg(&relabelled)
+            .assert()
+            .success();
+    }
+}
+
+#[test]
+fn snapshots_stale_by_either_flags_both_kinds_of_change() {
+    let stores = stores_with_checkouts();
+    let dir = tempfile::tempdir().unwrap();
+    for changed in [restructured(dir.path()), relabelled(dir.path())] {
+        xsm()
+            .args(["snapshots", "--fail-if-stale", "--stale-by", "either"])
+            .args(["--store", &stores.sqlite_url])
+            .arg(&changed)
+            .assert()
+            .code(1);
+    }
+    xsm()
+        .args(["snapshots", "--fail-if-stale", "--stale-by", "either"])
+        .args(["--store", &stores.sqlite_url])
+        .arg(fixture("hierarchical.json"))
+        .assert()
+        .success();
+}
+
+#[test]
+fn snapshots_never_calls_records_stale_when_the_machine_has_no_version() {
+    let stores = stores_with_checkouts();
+    let dir = tempfile::tempdir().unwrap();
+    let unversioned = edited_machine(dir.path(), "unversioned.json", |doc| {
+        doc.as_object_mut().unwrap().remove("version");
+    });
+    xsm()
+        .args(["snapshots", "--fail-if-stale", "--store", &stores.sqlite_url])
+        .arg(&unversioned)
+        .assert()
+        .success();
 }
 
 #[test]
@@ -207,7 +311,32 @@ fn snapshots_json_json_reports_stale_flags() {
             .arg(fixture("hierarchical.json")),
     );
     assert_eq!(value["machine"], "checkout");
+    assert_eq!(value["machine_version"], "2.1");
+    assert_eq!(value["stale_by"], "version");
     assert_eq!(value["snapshots"][0]["stale"], false);
+    assert_eq!(value["snapshots"][0]["version_mismatch"], false);
+    assert_eq!(value["snapshots"][0]["hash_mismatch"], false);
+}
+
+#[test]
+fn snapshots_json_reports_each_kind_of_mismatch_separately() {
+    let stores = stores_with_checkouts();
+    let dir = tempfile::tempdir().unwrap();
+    let value = run_json(
+        xsm()
+            .args(["snapshots", "--json", "--store", &stores.sqlite_url])
+            .arg(restructured(dir.path())),
+    );
+    let row = &value["snapshots"][0];
+    assert_eq!(row["stale"], false, "the default rule is the label");
+    assert_eq!(row["version_mismatch"], false);
+    assert_eq!(row["hash_mismatch"], true);
+    let value = run_json(
+        xsm()
+            .args(["snapshots", "--json", "--stale-by", "either", "--store", &stores.sqlite_url])
+            .arg(restructured(dir.path())),
+    );
+    assert_eq!(value["snapshots"][0]["stale"], true);
 }
 
 #[test]

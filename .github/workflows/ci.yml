@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Called by release.yml so that a release cannot be published past a red integration run.
+  workflow_call:
 
 permissions:
   contents: read
@@ -14,6 +16,10 @@ env:
   RUSTFLAGS: -D warnings
   RUSTDOCFLAGS: -D warnings
   CARGO_INCREMENTAL: 0
+  # The Python reference library. 0.12.0 is not on PyPI yet (PyPI has 0.11.0) and the
+  # repository carries no v0.12.0 tag, so CI installs it from the repository. Move this to a
+  # tag (`@v0.12.0`) or to `==0.12.0` once it is published.
+  XSM_PYTHON_REQ: "git+https://github.com/basiltt/xstate-statemachine.git@main"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -72,8 +78,9 @@ jobs:
     name: integration (redis, postgres, nats, rabbitmq, sqs)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # Real servers for the backend tests. Without them those tests print "skipping `...`: no ..."
-    # and pass, so the run is failed below if any of them skipped for a missing service.
+    # Real servers for the backend tests. XSM_REQUIRE_SERVICES=1 makes a backend test panic
+    # instead of skipping when its service is unreachable; the log is also scanned below for
+    # any "skipping ..." line as a second line of defence.
     services:
       redis:
         image: redis:7
@@ -105,6 +112,7 @@ jobs:
         image: softwaremill/elasticmq-native
         ports: ["9324:9324"]
     env:
+      XSM_REQUIRE_SERVICES: "1"
       XSM_REDIS_URL: redis://127.0.0.1:6379/
       XSM_POSTGRES_URL: postgres://xsm:xsm@127.0.0.1:5432/xsm
       XSM_NATS_URL: nats://127.0.0.1:4222
@@ -128,7 +136,8 @@ jobs:
           python -m venv .venv-py
           .venv-py/bin/python -m pip install --upgrade pip
           .venv-py/bin/python -m pip install \
-            "xstate-statemachine[redis,sqlalchemy,nats,rabbitmq,sqs]==0.12.0" "psycopg[binary]"
+            "xstate-statemachine[redis,sqlalchemy,nats,rabbitmq,sqs] @ ${XSM_PYTHON_REQ}" \
+            "psycopg[binary]"
       - name: Wait for the services
         run: |
           for port in 6379 5432 4222 5672 9324; do
@@ -144,8 +153,8 @@ jobs:
           cargo test --workspace --all-features --locked -- --nocapture 2>&1 | tee test.log
       - name: Fail if a backend test skipped for a missing service
         run: |
-          if grep -E 'skipping `[^`]+`: no ' test.log; then
-            echo "::error::a backend test was skipped because its service was unreachable"
+          if grep -E '^[[:space:]]*skipping' test.log; then
+            echo "::error::a test skipped itself; with XSM_REQUIRE_SERVICES=1 nothing may skip"
             exit 1
           fi
 
@@ -221,7 +230,46 @@ jobs:
         run: |
           npm ci --prefix conformance/tools/xstate_oracle
           python -m pip install --upgrade pip
-          python -m pip install "xstate-statemachine==0.12.0"
+          python -m pip install "xstate-statemachine @ ${XSM_PYTHON_REQ}"
       - name: Regenerate expectations
         run: |
           python conformance/tools/generate_expected.py --check
+      - name: Regenerate the Mermaid / PlantUML goldens
+        run: |
+          python conformance/tools/export_golden.py --check
+
+  python-bindings:
+    name: python bindings (xstate-py)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build the extension and run its tests
+        run: |
+          python -m venv .venv-bindings
+          .venv-bindings/bin/python -m pip install --upgrade pip maturin pytest
+          export VIRTUAL_ENV="$PWD/.venv-bindings" PATH="$PWD/.venv-bindings/bin:$PATH"
+          (cd crates/xstate-py && maturin develop --release)
+          python -m pytest crates/xstate-py/tests
+
+  facade-only:
+    name: macros work through the facade alone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # A project that depends on `xstate-statemachine` and nothing else must be able to use
+      # the derive macros and the `statechart!` DSL.
+      - name: cargo check the facade-only project
+        run: |
+          dir=crates/xstate-macros/tests/facade-only
+          if [ -d "$dir" ]; then
+            cargo check --manifest-path "$dir/Cargo.toml" --all-targets
+          else
+            echo "::warning::$dir does not exist; nothing to check"
+          fi

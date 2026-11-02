@@ -36,12 +36,17 @@ use crate::routes::ws::{WS_POLICY_VIOLATION, close};
 
 mod sink;
 
+use sink::SEND_TIMEOUT;
 pub use sink::{COOKIE_NAME, WebSocketSink, new_token};
 
 /// Default mount path.
 pub const DEFAULT_INSPECTOR_PATH: &str = "/_xsm/inspect";
 
 /// `Host` names accepted without `allow_remote`.
+#[cfg(not(test))]
+const LOOPBACK: [&str; 3] = ["127.0.0.1", "localhost", "::1"];
+/// `Host` names accepted without `allow_remote`; unit tests add the `testserver` placeholder.
+#[cfg(test)]
 const LOOPBACK: [&str; 4] = ["127.0.0.1", "localhost", "::1", "testserver"];
 
 /// Options of [`inspector_router`].
@@ -51,7 +56,8 @@ pub struct InspectorOptions {
     pub path: String,
     /// Must be `true`, or mounting fails with [`RegistryError::NotDebug`].
     pub debug: bool,
-    /// The token (default: 32 random bytes, URL-safe base64).
+    /// The token (default: 32 random bytes, URL-safe base64). A configured token must use
+    /// only `A-Za-z0-9-._~`.
     pub token: Option<String>,
     /// Context keys that may leave the process (default none).
     pub context_allowlist: Vec<String>,
@@ -135,20 +141,30 @@ impl InspectorCtx {
         response
     }
 
-    fn redirect_with_cookie(&self) -> Response {
-        let cookie = format!(
-            "{COOKIE_NAME}={}; HttpOnly; Path={}; SameSite=strict",
+    /// The `HttpOnly; SameSite=strict` cookie carrying the token (`Secure` too when the
+    /// inspector is reachable remotely: never send the token over plain HTTP off-host).
+    fn cookie(&self) -> String {
+        let secure = if self.allow_remote { "; Secure" } else { "" };
+        format!(
+            "{COOKIE_NAME}={}; HttpOnly; Path={}; SameSite=strict{secure}",
             self.sink.token(),
             self.path
-        );
+        )
+    }
+
+    /// 303 → `path` setting the cookie. Fails closed: a header that cannot be built is a 500
+    /// problem, never a redirect without the cookie or the `Location`.
+    fn redirect_with_cookie(&self) -> Response {
+        let (Ok(location), Ok(cookie)) =
+            (HeaderValue::from_str(&self.path), HeaderValue::from_str(&self.cookie()))
+        else {
+            tracing::error!(target: "xstate::axum", path = %self.path, "inspector redirect headers are not valid header values");
+            return problem(500, "Internal Server Error").into_response();
+        };
         let mut response = StatusCode::SEE_OTHER.into_response();
         let headers = response.headers_mut();
-        if let (Ok(location), Ok(cookie)) =
-            (HeaderValue::from_str(&self.path), HeaderValue::from_str(&cookie))
-        {
-            headers.insert(header::LOCATION, location);
-            headers.insert(header::SET_COOKIE, cookie);
-        }
+        headers.insert(header::LOCATION, location);
+        headers.insert(header::SET_COOKIE, cookie);
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
         response
@@ -169,9 +185,19 @@ async fn view(
         if admitted {
             ctx.sink.serve(socket).await;
         } else {
-            close(&mut socket, WS_POLICY_VIOLATION).await;
+            close(&mut socket, WS_POLICY_VIOLATION, SEND_TIMEOUT).await;
         }
     })
+}
+
+/// `true` when `token` can travel verbatim in a URL query, a cookie value and a header:
+/// non-empty and only RFC 3986 unreserved characters (`A-Za-z0-9-._~`), the rule of
+/// `xstate_inspect`'s SSE server.
+fn token_is_well_formed(token: &str) -> bool {
+    !token.is_empty()
+        && token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~'))
 }
 
 /// Mount the live inspector: attaches an [`InspectorObserver`] (session id = the instance's
@@ -180,7 +206,10 @@ async fn view(
 /// developer).
 ///
 /// # Errors
-/// [`RegistryError::NotDebug`] unless `options.debug` is `true`.
+/// [`RegistryError::NotDebug`] unless `options.debug` is `true`;
+/// [`RegistryError::InvalidSetting`] for a configured (non-empty) token outside
+/// `A-Za-z0-9-._~` (it must fit a URL, a cookie and a header unescaped). An empty token means
+/// "generate one", as `None` does.
 pub fn inspector_router(
     registry: &Arc<StatechartRegistry>,
     options: InspectorOptions,
@@ -198,6 +227,13 @@ pub fn inspector_router(
     } = options;
     if !debug {
         return Err(RegistryError::NotDebug);
+    }
+    if let Some(token) = token.as_deref().filter(|t| !t.is_empty())
+        && !token_is_well_formed(token)
+    {
+        return Err(RegistryError::InvalidSetting(
+            "the inspector token must use only A-Za-z0-9-._~".into(),
+        ));
     }
     let sink = Arc::new(WebSocketSink::new(token, history, max_queue));
     let shared: Arc<dyn xstate_inspect::Sink> = sink.clone();
@@ -230,5 +266,14 @@ mod tests {
         assert_eq!(host_name("[::1]:80"), "::1");
         assert_eq!(host_name("::1"), "::1");
         assert_eq!(host_name("example.com"), "example.com");
+    }
+
+    #[test]
+    fn token_charset() {
+        assert!(token_is_well_formed("Ab0-._~"));
+        assert!(token_is_well_formed(&new_token()));
+        for bad in ["", "a b", "a;b", "a=b", "a,b", "a\r\nSet-Cookie: x", "é"] {
+            assert!(!token_is_well_formed(bad), "{bad:?}");
+        }
     }
 }

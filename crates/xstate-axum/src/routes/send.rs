@@ -1,13 +1,18 @@
 //! `POST /{id}/send` and `POST /{id}/events/{EVENT}`.
+//!
+//! CSRF (X0.7): both refuse a cross-origin `Origin` (403) and require
+//! `Content-Type: application/json` even for an empty body (415), so a plain HTML form or a
+//! "simple" cross-site `fetch` cannot drive an instance.
 
 use std::sync::Arc;
 
 use axum::extract::{Path, Request, State};
+use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, post};
 use serde_json::{Map, Value};
 
-use super::RouteCtx;
+use super::{GATED_TITLE, RouteCtx, is_declared};
 use crate::body::{ValidationIssue, bounded_json, idempotency_key_from, validation_problem};
 use crate::problem::problem;
 use crate::registry::SendRequest;
@@ -30,7 +35,7 @@ fn validate_send_body(
             issues.push(ValidationIssue::new(&["body", "type"], "missing"));
             None
         }
-        Some(Value::String(t)) if events.is_empty() || events.contains(&t) => Some(t),
+        Some(Value::String(t)) if is_declared(events, &t) => Some(t),
         Some(_) => {
             issues.push(ValidationIssue::new(&["body", "type"], "literal_error"));
             None
@@ -55,7 +60,7 @@ fn validate_send_body(
 
 async fn dispatch(
     ctx: &RouteCtx,
-    parts: &axum::http::request::Parts,
+    parts: &Parts,
     key: String,
     event: String,
     payload: Map<String, Value>,
@@ -76,6 +81,12 @@ async fn dispatch(
     ctx.registry.send_event(request).await
 }
 
+/// The cross-origin refusal of a state-changing route (X0.7, CSRF).
+fn refuse_cross_origin(ctx: &RouteCtx, parts: &Parts) -> Option<Response> {
+    (!ctx.registry.origin_allowed(&parts.headers))
+        .then(|| problem(403, "Origin not allowed").into_response())
+}
+
 /// `POST /{id}/send`: send the body's event; answers the receipt.
 pub(super) async fn send_any(
     State(ctx): State<Arc<RouteCtx>>,
@@ -83,6 +94,9 @@ pub(super) async fn send_any(
     request: Request,
 ) -> Response {
     let (parts, body) = request.into_parts();
+    if let Some(refused) = refuse_cross_origin(&ctx, &parts) {
+        return refused;
+    }
     let settings = &ctx.registry.settings;
     let body =
         match bounded_json(&parts.headers, body, settings.max_body_bytes, settings.body_timeout)
@@ -96,7 +110,7 @@ pub(super) async fn send_any(
         Err(issues) => return validation_problem(&issues).into_response(),
     };
     if ctx.gated.contains_key(&event) {
-        return problem(403, "Use this event's dedicated route").into_response();
+        return problem(403, GATED_TITLE).into_response();
     }
     dispatch(&ctx, &parts, key, event, payload).await
 }
@@ -105,6 +119,9 @@ pub(super) async fn send_any(
 /// body as payload.
 async fn send_one(ctx: Arc<RouteCtx>, key: String, request: Request, event: String) -> Response {
     let (parts, body) = request.into_parts();
+    if let Some(refused) = refuse_cross_origin(&ctx, &parts) {
+        return refused;
+    }
     if let Some(gate) = ctx.gated.get(&event)
         && let Err(problem) = gate.check(&parts)
     {

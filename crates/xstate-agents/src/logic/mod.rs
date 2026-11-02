@@ -161,7 +161,8 @@ impl AgentLogic {
         self
     }
 
-    /// The `modelTimeout` / `humanTimeout` delays in seconds.
+    /// The `modelTimeout` / `humanTimeout` delays in seconds (finite and > 0, checked by
+    /// [`build`](Self::build)).
     #[must_use]
     pub const fn timeouts(mut self, model_s: f64, human_s: f64) -> Self {
         self.model_timeout_s = model_s;
@@ -169,7 +170,8 @@ impl AgentLogic {
         self
     }
 
-    /// Retry policy for `timed_out`.
+    /// Retry policy for `timed_out` (checked by [`build`](Self::build), see
+    /// [`AgentRetry::validate`]).
     #[must_use]
     pub const fn retry(mut self, retry: AgentRetry) -> Self {
         self.retry = retry;
@@ -226,8 +228,9 @@ impl AgentLogic {
     /// guards and the retry trio (`retryBump`, `retryReset`, `retryCanRetry`, `retryDelay`).
     ///
     /// # Errors
-    /// [`AgentError::Config`]: `max_messages < 2`, a bad output model, or a malformed
-    /// `meta.tools` on a state hosting `callModel` / `runTool`.
+    /// [`AgentError::Config`]: `max_messages < 2`, a non-finite or non-positive timeout, an
+    /// invalid [`AgentRetry`], a bad output model, or a malformed `meta.tools` on a state
+    /// hosting `callModel` / `runTool`.
     pub fn build(&self, machine: &Machine) -> Result<MachineLogic<DynContext>> {
         let core = Arc::new(self.core(machine)?);
         let logic = actions::register(MachineLogic::dynamic(), &core);
@@ -249,10 +252,24 @@ impl AgentLogic {
             .delay_fn("toolTimeout", move |ctx, _| Ok(delay_core.tool_timeout_ms(ctx))))
     }
 
+    /// The two delays reach the engine as milliseconds, so they must stay finite after `* 1000`.
+    fn check_timeouts(&self) -> Result<()> {
+        for (name, seconds) in [("model", self.model_timeout_s), ("human", self.human_timeout_s)] {
+            if !(seconds > 0.0 && (seconds * 1000.0).is_finite()) {
+                return Err(AgentError::config(format!(
+                    "{name} timeout must be a finite number of seconds > 0, got {seconds}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn core(&self, machine: &Machine) -> Result<Core> {
         if self.max_messages < 2 {
             return Err(AgentError::config("max_messages must be >= 2"));
         }
+        self.check_timeouts()?;
+        self.retry.validate()?;
         crate::allowlist::validate_agent_chart(machine, &self.tools)?;
         let output_model = self
             .output_model

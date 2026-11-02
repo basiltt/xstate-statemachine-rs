@@ -1,8 +1,9 @@
 name: Release
 
-# Pushing a tag `vX.Y.Z` runs every gate, then a dry-run publish of each crate in dependency
-# order (scripts/publish-order.txt). The real publish needs a human approval on the
-# `crates-io` environment and the `CARGO_REGISTRY_TOKEN` secret.
+# Pushing a tag `vX.Y.Z` runs every gate (including the full CI workflow: integration tests
+# against real services and the conformance-fixture freshness checks), then a dry-run publish
+# of each crate in dependency order (scripts/publish-order.txt). The real publish needs a human
+# approval on the `crates-io` environment and the `CARGO_REGISTRY_TOKEN` secret.
 
 on:
   push:
@@ -75,6 +76,14 @@ jobs:
         with:
           command: check
 
+  # The whole CI workflow, which includes the integration job (every backend against real
+  # services, the cross-language tests) and the conformance-fixture freshness checks. The
+  # publish job below waits for it, so nothing is published past a red integration run.
+  ci:
+    name: CI (integration, fixtures, bindings)
+    needs: tag-matches-version
+    uses: ./.github/workflows/ci.yml
+
   publish-dry-run:
     name: cargo publish --dry-run
     needs: [gates, msrv, deny]
@@ -89,7 +98,7 @@ jobs:
 
   publish:
     name: publish to crates.io
-    needs: publish-dry-run
+    needs: [publish-dry-run, ci]
     if: github.repository == 'basiltt/xstate-statemachine-rs'
     runs-on: ubuntu-latest
     environment: crates-io

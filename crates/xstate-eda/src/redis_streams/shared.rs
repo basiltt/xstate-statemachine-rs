@@ -159,7 +159,7 @@ impl Core {
         if !requeue {
             return self.call(|t| t.ack(&held.native));
         }
-        let again = held.envelope.with_attempt(held.envelope.attempt() + 1);
+        let again = held.envelope.with_attempt(held.envelope.attempt().saturating_add(1));
         self.state().local.entry(held.topic).or_default().push_front(Local {
             envelope: again,
             native: held.native,

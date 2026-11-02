@@ -21,7 +21,7 @@ pub(crate) struct SnapshotsArgs {
     /// Store to inspect: `sqlite:///path/to.db` or `file:///path/to/dir`.
     #[arg(long, value_name = "URL")]
     store: String,
-    /// Machine JSON whose structure hash is the reference for `--stale`.
+    /// Machine JSON whose `version` label (and structure hash) is the reference for `--stale`.
     #[arg(value_name = "MACHINE")]
     file: Option<PathBuf>,
     /// Only list records written by a different version of the machine.
@@ -30,6 +30,10 @@ pub(crate) struct SnapshotsArgs {
     /// Exit 1 when any stale record exists (implies `--stale`).
     #[arg(long)]
     fail_if_stale: bool,
+    /// What makes a record stale: a different `version` label (the Python CLI's rule, and the
+    /// default), a different structure `hash`, or `either`.
+    #[arg(long, value_enum, default_value_t = StaleBy::Version, value_name = "WHAT")]
+    stale_by: StaleBy,
     /// Only keys starting with this prefix.
     #[arg(long, default_value = "", value_name = "PREFIX")]
     prefix: String,
@@ -39,6 +43,18 @@ pub(crate) struct SnapshotsArgs {
     /// Emit JSON instead of a table.
     #[arg(long)]
     json: bool,
+}
+
+/// What `--stale` compares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+enum StaleBy {
+    /// The record's `machine_version` label differs from the machine's `version` (Python's rule).
+    Version,
+    /// The record's structure hash differs from the machine's (restoring would be refused).
+    Hash,
+    /// Either of the above.
+    Either,
 }
 
 /// A store location parsed from a URL.
@@ -128,22 +144,10 @@ fn open_store(spec: &StoreSpec) -> Result<Box<dyn StateStore>> {
     }
 }
 
-/// How a record relates to the reference machine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Freshness {
-    /// Same machine, same structure hash.
-    Current,
-    /// Same machine id, different structure hash: restoring would be refused.
-    Stale,
-    /// Written by a machine with another id; not this machine's concern.
-    Other,
-    /// No reference machine, or the record could not be read.
-    Unknown,
-}
-
 /// The machine a record is compared against.
 struct Reference {
     id: String,
+    version: Option<String>,
     hash: String,
 }
 
@@ -159,29 +163,46 @@ struct Row {
     deadlines: usize,
     machine_id: Option<String>,
     machine_hash: Option<String>,
+    /// Stale under the chosen `--stale-by` rule. Absent without a machine to compare against.
     #[serde(skip_serializing_if = "Option::is_none")]
     stale: Option<bool>,
+    /// The `machine_version` label differs from the machine's `version` (Python's `--stale`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version_mismatch: Option<bool>,
+    /// Same machine id, different structure hash: restoring would be refused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hash_mismatch: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
-    #[serde(skip)]
-    freshness: Option<Freshness>,
 }
 
 fn string_field(doc: &Value, name: &str) -> Option<String> {
     doc.get(name).and_then(Value::as_str).map(str::to_owned)
 }
 
-fn classify(row: &Row, reference: Option<&Reference>) -> Freshness {
-    let Some(reference) = reference else { return Freshness::Unknown };
+/// Python's `_is_stale`: a machine with no `version` never mismatches and an unlabelled record
+/// cannot be checked (restore warns, it does not refuse).
+fn label_differs(found: Option<&str>, expected: Option<&str>) -> bool {
+    matches!((found, expected), (Some(found), Some(expected)) if !found.is_empty() && found != expected)
+}
+
+/// `Some(differs)` for a record of the reference machine, `None` for another machine's record.
+fn hash_differs(row: &Row, reference: &Reference) -> Option<bool> {
     match (&row.machine_id, &row.machine_hash) {
-        (Some(id), _) if *id != reference.id => Freshness::Other,
-        (Some(_), hash) if hash.as_deref() == Some(reference.hash.as_str()) => Freshness::Current,
-        (Some(_), _) => Freshness::Stale,
-        _ => Freshness::Unknown,
+        (Some(id), hash) if *id == reference.id => {
+            Some(hash.as_deref() != Some(reference.hash.as_str()))
+        }
+        _ => None,
     }
 }
 
-fn load_row(store: &dyn StateStore, key: &str, now: f64, reference: Option<&Reference>) -> Row {
+fn load_row(
+    store: &dyn StateStore,
+    key: &str,
+    now: f64,
+    reference: Option<&Reference>,
+    stale_by: StaleBy,
+) -> Row {
     let mut row = Row {
         key: key.to_owned(),
         version: 0,
@@ -193,8 +214,9 @@ fn load_row(store: &dyn StateStore, key: &str, now: f64, reference: Option<&Refe
         machine_id: None,
         machine_hash: None,
         stale: None,
+        version_mismatch: None,
+        hash_mismatch: None,
         error: None,
-        freshness: None,
     };
     match store.load(key) {
         Ok(Some(record)) => {
@@ -220,12 +242,25 @@ fn load_row(store: &dyn StateStore, key: &str, now: f64, reference: Option<&Refe
         Ok(None) => row.error = Some("record vanished while listing".to_owned()),
         Err(e) => row.error = Some(e.to_string()),
     }
-    let freshness =
-        if row.error.is_some() { Freshness::Unknown } else { classify(&row, reference) };
-    if reference.is_some() && freshness != Freshness::Unknown {
-        row.stale = Some(freshness == Freshness::Stale);
+    if let Some(reference) = reference {
+        // The label lives in the store record (as in Python), so it is judged even when the
+        // snapshot body is unreadable; the hash needs the body.
+        //
+        // Unlike Python, which compares labels across the whole store, a record the snapshot
+        // body attributes to another machine is not judged: a store shared by several machines
+        // must not report every other machine's records as stale.
+        let other_machine = row.machine_id.as_deref().is_some_and(|id| id != reference.id);
+        let version_differs = !other_machine
+            && label_differs(row.machine_version.as_deref(), reference.version.as_deref());
+        let hash_differs = if row.error.is_some() { None } else { hash_differs(&row, reference) };
+        row.version_mismatch = Some(version_differs);
+        row.hash_mismatch = hash_differs;
+        row.stale = Some(match stale_by {
+            StaleBy::Version => version_differs,
+            StaleBy::Hash => hash_differs == Some(true),
+            StaleBy::Either => version_differs || hash_differs == Some(true),
+        });
     }
-    row.freshness = Some(freshness);
     row
 }
 
@@ -259,6 +294,7 @@ pub(crate) fn run(ui: Ui, args: &SnapshotsArgs) -> Result<u8> {
             };
             Some(Reference {
                 id: machine.id().to_owned(),
+                version: machine.version().map(str::to_owned),
                 hash: machine.structure_hash().to_owned(),
             })
         }
@@ -271,8 +307,15 @@ pub(crate) fn run(ui: Ui, args: &SnapshotsArgs) -> Result<u8> {
         .map_err(|e| output::usage(format!("cannot list {}: {e}", args.store)))?;
     ui.verbose(&format!("{} key(s) match prefix {:?}", keys.len(), args.prefix));
     let now = wall_now();
-    let (rows, total) =
-        collect_rows(store.as_ref(), &keys, args.limit, stale_only, now, reference.as_ref());
+    let (rows, total) = collect_rows(
+        store.as_ref(),
+        &keys,
+        args.limit,
+        stale_only,
+        now,
+        reference.as_ref(),
+        args.stale_by,
+    );
     if args.json {
         print_json(&json_report(args, reference.as_ref(), stale_only, &rows, total))?;
     } else {
@@ -289,16 +332,18 @@ fn collect_rows(
     stale_only: bool,
     now: f64,
     reference: Option<&Reference>,
+    stale_by: StaleBy,
 ) -> (Vec<Row>, usize) {
     if !stale_only {
-        let rows = keys.iter().take(limit).map(|k| load_row(store, k, now, reference)).collect();
+        let rows =
+            keys.iter().take(limit).map(|k| load_row(store, k, now, reference, stale_by)).collect();
         return (rows, keys.len());
     }
     // Staleness is only known after loading, so every key is scanned; `limit` caps the output.
     let stale: Vec<Row> = keys
         .iter()
-        .map(|k| load_row(store, k, now, reference))
-        .filter(|r| r.freshness == Some(Freshness::Stale))
+        .map(|k| load_row(store, k, now, reference, stale_by))
+        .filter(|r| r.stale == Some(true))
         .collect();
     let total = stale.len();
     (stale.into_iter().take(limit).collect(), total)
@@ -314,7 +359,9 @@ fn json_report(
     serde_json::json!({
         "store": args.store,
         "machine": reference.map(|r| r.id.as_str()),
+        "machine_version": reference.and_then(|r| r.version.as_deref()),
         "machine_hash": reference.map(|r| r.hash.as_str()),
+        "stale_by": args.stale_by,
         "stale_only": stale_only,
         "count": rows.len(),
         "total": total,
@@ -324,11 +371,21 @@ fn json_report(
 }
 
 fn hash_cell(row: &Row) -> Cell {
-    match row.freshness {
-        Some(Freshness::Current) => Cell::styled(Role::Ok, "ok"),
-        Some(Freshness::Stale) => Cell::styled(Role::Err, "STALE"),
-        Some(Freshness::Other) => Cell::styled(Role::Muted, "other machine"),
-        _ => Cell::styled(Role::Muted, "-"),
+    match row.hash_mismatch {
+        Some(false) => Cell::styled(Role::Ok, "ok"),
+        Some(true) => Cell::styled(Role::Err, "MISMATCH"),
+        None if row.machine_id.is_some() => Cell::styled(Role::Muted, "other machine"),
+        None => Cell::styled(Role::Muted, "-"),
+    }
+}
+
+/// The record's `machine_version` label; warned when it differs from the machine's.
+fn version_cell(row: &Row) -> Cell {
+    let text = row.machine_version.clone().unwrap_or_else(|| "-".to_owned());
+    if row.version_mismatch == Some(true) {
+        Cell::styled(Role::Warn, text)
+    } else {
+        Cell::text(text)
     }
 }
 
@@ -362,7 +419,7 @@ fn print_table(
         let mut cells = vec![
             Cell::text(row.key.clone()),
             Cell::text(row.version.to_string()),
-            Cell::text(row.machine_version.clone().unwrap_or_else(|| "-".to_owned())),
+            version_cell(row),
             Cell::text(status_text),
             Cell::text(states.join(", ")),
             Cell::text(age_text(row.age_s)),

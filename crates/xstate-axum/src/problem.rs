@@ -137,7 +137,7 @@ pub enum ApiError {
     /// The first delivery with this idempotency key is still running (409).
     #[error("idempotency key in flight")]
     IdempotencyInFlight,
-    /// No machine is registered under this name (500, Python `KeyError`).
+    /// No machine is registered under this name (404, Python `KeyError`).
     #[error("no machine registered as '{0}'")]
     UnknownMachine(String),
     /// A blocking task panicked or was cancelled (500).
@@ -165,13 +165,23 @@ fn engine_entry(error: &xstate_core::Error) -> (u16, &'static str, String) {
     }
 }
 
+/// Wording of the engine / persistence snapshot errors that mean "another machine or revision"
+/// (Python `SnapshotDriftError`) rather than "corrupt". `xstate_core::Error::Snapshot` carries
+/// no structured reason, so the message is the only signal; the producers are
+/// `SyncInterpreter::from_snapshot` (`xstate-core`, machine id and structure hash) and the
+/// version policy of `load_interpreter` (`xstate-persistence`). The `drift_wording_is_pinned`
+/// test builds each real error, so a wording change fails a test instead of silently turning
+/// a 409 into a 500.
+const DRIFT_MARKERS: [&str; 3] =
+    ["was written by version", "machine structure changed", "snapshot belongs to machine"];
+
 /// `true` when a snapshot error says the snapshot belongs to another machine or revision
-/// (Python `SnapshotDriftError`) rather than being corrupt.
+/// (Python `SnapshotDriftError`) rather than being corrupt. The single place that classifies
+/// drift by message; see `DRIFT_MARKERS` for why it matches text.
 #[must_use]
 pub fn is_drift(error: &xstate_core::Error) -> bool {
-    const DRIFT: [&str; 3] =
-        ["was written by version", "machine structure changed", "snapshot belongs to machine"];
-    matches!(error, xstate_core::Error::Snapshot(msg) if DRIFT.iter().any(|d| msg.contains(d)))
+    let xstate_core::Error::Snapshot(message) = error else { return false };
+    DRIFT_MARKERS.iter().any(|marker| message.contains(marker))
 }
 
 /// `(status, title, Python class name)` of a store error.
@@ -221,7 +231,7 @@ impl ApiError {
             Self::IdempotencyInFlight => {
                 fixed(409, "Request in flight", "IdempotencyInFlightError")
             }
-            Self::UnknownMachine(_) => fixed(500, "Internal Server Error", "KeyError"),
+            Self::UnknownMachine(_) => fixed(404, "Not Found", "KeyError"),
             Self::Internal(_) => fixed(500, "Internal Server Error", "RuntimeError"),
             Self::Store(e) => {
                 let (s, t, n) = store_entry(e);
@@ -328,5 +338,54 @@ mod tests {
         assert_eq!(body["status"], 409);
         assert_eq!(body["machine_version"], "2");
         assert_eq!(body["error"], "SnapshotDriftError");
+    }
+
+    fn machine(json: &str) -> xstate_core::Machine {
+        xstate_core::Machine::from_json(json).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Save an instance of `stored`, then restore it as `running`: the real engine error.
+    fn restore_error(stored: &str, running: &str) -> xstate_core::Error {
+        let store = xstate_persistence::MemoryStore::new();
+        let options = xstate_persistence::PersistedOptions::<Value>::default();
+        let logic = xstate_core::MachineLogic::<Value>::dynamic();
+        xstate_persistence::persisted(&store, "k", &machine(stored), &logic, &options, |_, _| {
+            Ok(())
+        })
+        .unwrap_or_else(|e| panic!("{e}"));
+        let clock = std::sync::Arc::clone(&options.clock);
+        let running = machine(running);
+        match xstate_persistence::load_interpreter(&store, "k", &running, &logic, clock, &options) {
+            Err(StoreError::Engine(error)) => error,
+            Err(other) => panic!("expected an engine error, got {other}"),
+            Ok(_) => panic!("the snapshot was restored"),
+        }
+    }
+
+    /// Pins the engine wording [`is_drift`] relies on: each real drift error must classify as
+    /// drift (409), or this test fails when the wording changes.
+    #[test]
+    fn drift_wording_is_pinned() {
+        let v1 = r#"{"id":"m","version":"1","initial":"a","states":{"a":{}}}"#;
+        let v2 = r#"{"id":"m","version":"2","initial":"a","states":{"a":{}}}"#;
+        let plain = r#"{"id":"m","initial":"a","states":{"a":{}}}"#;
+        let grown = r#"{"id":"m","initial":"a","states":{"a":{},"b":{}}}"#;
+        let other = r#"{"id":"n","initial":"a","states":{"a":{}}}"#;
+        for (stored, running) in [(v1, v2), (plain, grown), (plain, other)] {
+            let error = restore_error(stored, running);
+            assert!(is_drift(&error), "not classified as drift: {error}");
+            let api = ApiError::Store(StoreError::Engine(error)).with_machine_version(Some("2"));
+            assert_eq!((api.status(), api.error_name().as_str()), (409, "SnapshotDriftError"));
+        }
+        let corrupt = xstate_core::Error::Snapshot("context does not fit the context type".into());
+        assert!(!is_drift(&corrupt));
+        assert_eq!(ApiError::Engine(corrupt).status(), 500);
+    }
+
+    #[test]
+    fn unknown_machine_is_404() {
+        let error = ApiError::UnknownMachine("nope".into());
+        assert_eq!((error.status(), error.error_name().as_str()), (404, "KeyError"));
+        assert_eq!(error.to_problem().title, "Not Found");
     }
 }

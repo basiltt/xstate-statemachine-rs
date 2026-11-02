@@ -6,9 +6,7 @@ use syn::parse::ParseStream;
 
 use super::separator;
 use super::{action, invoke, state, transition};
-use super::{
-    arrow, block, colon, ends_with_brace, parse_json, parse_key, parse_name, parse_string,
-};
+use super::{arrow, block, colon, parse_json, parse_key, parse_name, parse_string};
 use crate::chart::ast::Body;
 
 /// Where a body appears; the root accepts the machine-level keys.
@@ -92,15 +90,12 @@ fn parse_item(
         }
         "meta" | "output" => {
             let json = parse_json(colon(input)?)?;
-            let braced = ends_with_brace(&json);
             *if name == "meta" { &mut body.meta } else { &mut body.output } = Some(json);
-            return Ok(braced);
+            return Ok(false);
         }
         _ if level == Level::Root && ROOT_KEYS.contains(&name.as_str()) => {
-            let json = parse_json(colon(input)?)?;
-            let braced = ends_with_brace(&json);
-            body.root_keys.push((name, json));
-            return Ok(braced);
+            body.root_keys.push((name, parse_json(colon(input)?)?));
+            return Ok(false);
         }
         _ => return Err(unknown(key, &name, level)),
     }

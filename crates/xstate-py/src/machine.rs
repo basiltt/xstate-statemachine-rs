@@ -99,7 +99,7 @@ impl PyMachine {
         logic: Option<&Bound<'_, PyMachineLogic>>,
     ) -> PyResult<Vec<String>> {
         if let Some(logic) = logic {
-            let core = logic.get().build(py, &std::sync::Arc::default());
+            let (core, _owners) = logic.borrow().build(py, &std::sync::Arc::default());
             core.validate(&self.inner).map_err(|e| errors::to_py_err(py, &e))?;
         }
         Ok(self.inner.warnings().iter().map(|w| format!("{}: {}", w.path, w.message)).collect())

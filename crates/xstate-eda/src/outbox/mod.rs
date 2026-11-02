@@ -22,7 +22,7 @@ mod specs;
 mod sqlite;
 
 pub use memory::MemoryOutboxStore;
-pub use plugin::OutboxPlugin;
+pub use plugin::{DEFAULT_MAX_BUFFERED, OutboxFailure, OutboxPlugin};
 pub use relay::OutboxRelay;
 pub use specs::{PublishSource, PublishSpec, publish_specs};
 #[cfg(feature = "sqlite")]

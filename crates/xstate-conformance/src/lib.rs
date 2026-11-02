@@ -147,6 +147,10 @@ pub struct Expectation {
     /// Python only: end-of-run snapshot (layout v4) with volatile fields zeroed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<Value>,
+    /// Python only: the exact text `get_snapshot()` returned (`indent=2`, ASCII-escaped), with
+    /// the volatile fields zeroed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_text: Option<String>,
 }
 
 /// Name and version of an oracle implementation.

@@ -118,11 +118,26 @@ fn check_extensions(ext: &Map<String, Value>) -> Result<(), EnvelopeError> {
         if name == "traceparent" && !is_traceparent(&py_str(value)) {
             return Err(EnvelopeError::corrupt("invalid W3C traceparent extension"));
         }
-        if name == ATTEMPT_EXTENSION && value.as_u64().is_none() {
-            return Err(EnvelopeError::corrupt(format!(
-                "{ATTEMPT_EXTENSION} must be a non-negative integer"
-            )));
+        if name == ATTEMPT_EXTENSION {
+            check_attempt(value)?;
         }
+    }
+    Ok(())
+}
+
+/// The attempt counter is a non-negative integer that every store and broker can hold as an
+/// `i64`: a larger value is a corrupt (or hostile) envelope, not a counter to increment.
+fn check_attempt(value: &Value) -> Result<(), EnvelopeError> {
+    let Some(n) = value.as_u64() else {
+        return Err(EnvelopeError::corrupt(format!(
+            "{ATTEMPT_EXTENSION} must be a non-negative integer"
+        )));
+    };
+    if i64::try_from(n).is_err() {
+        return Err(EnvelopeError::corrupt(format!(
+            "{ATTEMPT_EXTENSION} must not exceed {}",
+            i64::MAX
+        )));
     }
     Ok(())
 }
@@ -194,6 +209,17 @@ mod tests {
         assert!(!is_extension_name(""));
         assert!(!is_extension_name("tenant\n"));
         assert!(is_forbidden("x-Api_Key") && is_forbidden("authtoken") && !is_forbidden("tenant"));
+    }
+
+    #[test]
+    fn the_attempt_extension_is_capped_at_i64_max() {
+        let attempt = |v: Value| check_attempt(&v);
+        assert!(attempt(Value::from(i64::MAX)).is_ok());
+        assert!(attempt(Value::from(0)).is_ok());
+        assert!(attempt(Value::from(u64::MAX)).is_err());
+        assert!(attempt(Value::from(i64::MAX.unsigned_abs() + 1)).is_err());
+        assert!(attempt(Value::from(-1)).is_err());
+        assert!(attempt(Value::from("3")).is_err());
     }
 
     #[test]

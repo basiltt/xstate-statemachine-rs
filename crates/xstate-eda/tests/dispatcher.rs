@@ -12,9 +12,10 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use xstate_core::{Machine, MachineLogic};
 use xstate_eda::{
-    DeadLetterSink, DeadLetterStore, Dispatch, Envelope, EnvelopeHandler, FakeBrokerAdapter,
-    HandlerError, InboundDispatcher, MemoryDeadLetterStore, OnUnknown, ReplayOptions,
-    SyncFakeBrokerAdapter, machines_by_type, replay_dead_letter, sink_fn,
+    BrokerAdapter, BrokerError, DeadLetterSink, DeadLetterStore, Delivery, Dispatch, Envelope,
+    EnvelopeHandler, FakeBrokerAdapter, HandlerError, InboundDispatcher, MemoryDeadLetterStore,
+    OnUnknown, ReplayOptions, SyncBrokerAdapter, SyncFakeBrokerAdapter, machines_by_type,
+    replay_dead_letter, sink_fn,
 };
 use xstate_persistence::receipts::ReceiptFlags;
 use xstate_persistence::{
@@ -428,4 +429,198 @@ fn sinks_are_object_safe() {
     let sink: Arc<dyn DeadLetterSink> = Arc::new(MemoryDeadLetterStore::new());
     assert_eq!(store.count().unwrap(), 0);
     sink.put(xstate_eda::DeadLetter::new("m", "", json!({}), 0.0)).unwrap();
+}
+
+// -- builders and overflow ---------------------------------------------------------------------
+
+#[test]
+fn a_zero_batch_is_refused_like_the_other_limits() {
+    let h = Harness::new();
+    assert!(matches!(
+        InboundDispatcher::new(machines(), h.handler()).max_batch(0),
+        Err(xstate_eda::EdaError::InvalidArgument(_))
+    ));
+    assert!(InboundDispatcher::new(machines(), h.handler()).max_batch(1).is_ok());
+}
+
+#[test]
+fn an_attempt_at_the_ceiling_is_dead_lettered_not_overflowed() {
+    let h = Harness::new();
+    h.failures.always.lock().unwrap().insert(0);
+    let disp = InboundDispatcher::new(machines(), h.handler());
+    let env = add("a", 0).with_attempt(u64::MAX);
+    let res = disp.handle(&env, None);
+    assert_eq!((res.retried, res.dead_lettered), (0, 1));
+}
+
+// -- a broker failure in the middle of a batch ---------------------------------------------------
+
+/// A blocking broker that fails on demand: the `n`-th poll, and the ack of chosen envelope ids.
+struct FlakySync {
+    inner: SyncFakeBrokerAdapter,
+    polls: AtomicUsize,
+    fail_poll_at: usize,
+    fail_ack_of: Mutex<HashSet<String>>,
+}
+
+impl FlakySync {
+    fn new(fail_poll_at: usize) -> Self {
+        Self {
+            inner: SyncFakeBrokerAdapter::new(),
+            polls: AtomicUsize::new(0),
+            fail_poll_at,
+            fail_ack_of: Mutex::new(HashSet::new()),
+        }
+    }
+}
+
+impl SyncBrokerAdapter for FlakySync {
+    fn publish(&self, topic: &str, envelope: &Envelope) -> Result<(), BrokerError> {
+        self.inner.publish(topic, envelope)
+    }
+
+    fn poll(
+        &self,
+        topic: &str,
+        timeout: Option<Duration>,
+    ) -> Result<Option<Delivery>, BrokerError> {
+        if self.polls.fetch_add(1, Ordering::SeqCst) + 1 == self.fail_poll_at {
+            return Err(BrokerError::Other("connection lost".into()));
+        }
+        SyncBrokerAdapter::poll(&self.inner, topic, timeout)
+    }
+
+    fn ack(&self, delivery: &Delivery) -> Result<(), BrokerError> {
+        if self.fail_ack_of.lock().unwrap().contains(&delivery.envelope.id) {
+            return Err(BrokerError::Other("ack failed".into()));
+        }
+        SyncBrokerAdapter::ack(&self.inner, delivery)
+    }
+
+    fn nack(&self, delivery: &Delivery, requeue: bool) -> Result<(), BrokerError> {
+        SyncBrokerAdapter::nack(&self.inner, delivery, requeue)
+    }
+}
+
+#[test]
+fn a_poll_failure_mid_batch_requeues_what_was_pulled() {
+    let h = Harness::new();
+    let disp = InboundDispatcher::new(machines(), h.handler());
+    let broker = FlakySync::new(3);
+    for n in 0..4 {
+        broker.inner.deliver("t", &add("a", n)).unwrap();
+    }
+    let err = disp.run_once_sync(&broker, "t", ZERO).unwrap_err();
+    assert_eq!(err, BrokerError::Other("connection lost".into()));
+    assert_eq!(broker.inner.in_flight(), 0, "nothing is left holding a delivery");
+    assert_eq!(broker.inner.pending("t"), 4, "nothing was lost");
+    // the batch comes back in order, so the next consumer sees the subject's events 0, 1, 2, 3
+    let res = disp.run_once_sync(&broker.inner, "t", ZERO).unwrap();
+    assert_eq!(res.processed, 4);
+    assert_eq!(h.seen("a"), [0, 1, 2, 3]);
+}
+
+#[test]
+fn a_settle_failure_does_not_strand_the_rest_of_the_batch() {
+    let h = Harness::new();
+    let disp = InboundDispatcher::new(machines(), h.handler());
+    let broker = FlakySync::new(usize::MAX);
+    let b = add("b", 1);
+    broker.fail_ack_of.lock().unwrap().insert(b.id.clone());
+    for env in [add("a", 0), b, add("c", 2), add("d", 3)] {
+        broker.inner.deliver("t", &env).unwrap();
+    }
+    let err = disp.run_once_sync(&broker, "t", ZERO).unwrap_err();
+    assert_eq!(err, BrokerError::Other("ack failed".into()), "the first failure is returned");
+    for (key, n) in [("a", 0), ("c", 2), ("d", 3)] {
+        assert_eq!(h.seen(key), [n], "{key} was still handled");
+    }
+    assert_eq!(broker.inner.acked().len(), 3, "and settled");
+    assert_eq!(broker.inner.in_flight(), 1, "only the delivery whose ack failed is left");
+}
+
+/// The async counterpart of [`FlakySync`].
+struct FlakyAsync {
+    inner: FakeBrokerAdapter,
+    polls: AtomicUsize,
+    fail_poll_at: usize,
+    fail_ack_of: Mutex<HashSet<String>>,
+}
+
+impl BrokerAdapter for FlakyAsync {
+    fn publish(
+        &self,
+        topic: &str,
+        envelope: &Envelope,
+    ) -> impl std::future::Future<Output = Result<(), BrokerError>> + Send {
+        self.inner.publish(topic, envelope)
+    }
+
+    async fn poll(
+        &self,
+        topic: &str,
+        timeout: Option<Duration>,
+    ) -> Result<Option<Delivery>, BrokerError> {
+        if self.polls.fetch_add(1, Ordering::SeqCst) + 1 == self.fail_poll_at {
+            return Err(BrokerError::Other("connection lost".into()));
+        }
+        BrokerAdapter::poll(&self.inner, topic, timeout).await
+    }
+
+    async fn ack(&self, delivery: &Delivery) -> Result<(), BrokerError> {
+        if self.fail_ack_of.lock().unwrap().contains(&delivery.envelope.id) {
+            return Err(BrokerError::Other("ack failed".into()));
+        }
+        BrokerAdapter::ack(&self.inner, delivery).await
+    }
+
+    fn nack(
+        &self,
+        delivery: &Delivery,
+        requeue: bool,
+    ) -> impl std::future::Future<Output = Result<(), BrokerError>> + Send {
+        BrokerAdapter::nack(&self.inner, delivery, requeue)
+    }
+}
+
+fn flaky_async(fail_poll_at: usize) -> FlakyAsync {
+    FlakyAsync {
+        inner: FakeBrokerAdapter::new(),
+        polls: AtomicUsize::new(0),
+        fail_poll_at,
+        fail_ack_of: Mutex::new(HashSet::new()),
+    }
+}
+
+#[test]
+fn an_async_poll_failure_mid_batch_requeues_what_was_pulled() {
+    let h = Harness::new();
+    let disp = InboundDispatcher::new(machines(), h.handler());
+    let broker = flaky_async(3);
+    for n in 0..4 {
+        broker.inner.deliver("t", &add("a", n)).unwrap();
+    }
+    let err = common::block_on(disp.run_once(&broker, "t", ZERO)).unwrap_err();
+    assert_eq!(err, BrokerError::Other("connection lost".into()));
+    assert_eq!((broker.inner.in_flight(), broker.inner.pending("t")), (0, 4));
+    let res = common::block_on(disp.run_once(&broker.inner, "t", ZERO)).unwrap();
+    assert_eq!(res.processed, 4);
+    assert_eq!(h.seen("a"), [0, 1, 2, 3]);
+}
+
+#[test]
+fn an_async_settle_failure_hands_back_the_unsettled_deliveries() {
+    let h = Harness::new();
+    let disp = InboundDispatcher::new(machines(), h.handler());
+    let broker = flaky_async(usize::MAX);
+    let b = add("b", 1);
+    broker.fail_ack_of.lock().unwrap().insert(b.id.clone());
+    for env in [add("a", 0), b, add("c", 2)] {
+        broker.inner.deliver("t", &env).unwrap();
+    }
+    let err = common::block_on(disp.run_once(&broker, "t", ZERO)).unwrap_err();
+    assert_eq!(err, BrokerError::Other("ack failed".into()));
+    assert_eq!(broker.inner.in_flight(), 0, "nothing is left holding a delivery");
+    assert_eq!(broker.inner.acked().len(), 1, "only a was acked");
+    assert_eq!(broker.inner.pending("t"), 2, "b and c are back on the topic");
 }

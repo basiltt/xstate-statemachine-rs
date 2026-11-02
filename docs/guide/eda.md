@@ -81,7 +81,16 @@ dead-lettered and acked, so a poison message cannot block its subject; unknown t
 `run_once_sync` / `run_forever_sync` a blocking one.
 
 `ChoreographyRouter` (feature `patterns`) wraps this for the common case of a `type -> machine`
-map.
+map. It drives blocking brokers only (`run_once` / `run_until_quiet` take a `SyncBrokerAdapter`).
+
+**Async `run_once` handles, then acks (M8).** The handler is synchronous, so the async
+`InboundDispatcher::run_once` pulls a batch (up to `max_batch`), runs the handlers of up to
+`max_in_flight` subjects concurrently on scoped worker threads (one subject at a time, in order),
+and only afterwards acks or requeues the deliveries of the batch. The calling task blocks while the
+handlers run, so call it from a blocking-capable context (tokio's `block_in_place`) when handlers
+are slow. Python acks each delivery as its handler finishes; a crash in the middle of a Rust batch
+redelivers the batch and the inbox absorbs the duplicates. `run_once_sync` handles and settles
+subject by subject.
 
 ## Publishing: the transactional outbox
 
@@ -99,21 +108,26 @@ persisted(&store, "order-1", &machine, &logic, &options, |interp, _session| {
     Ok(())
 })?;
 
-let relay = OutboxRelay::new(outbox, broker).batch(100).lease_s(30.0)?;
+let relay = OutboxRelay::new(outbox, broker).batch(100)?.lease_s(30.0)?;
 relay.relay_once().await?;                // or relay_once_sync() with a blocking broker
 ```
 
 (`flush_into` in the body is at-least-once with the relay; call it in `session.after_commit` if you
-prefer never to record an envelope for a state that was not saved.) Stores: `MemoryOutboxStore`
-and `SqliteOutboxStore` (tables `xsm_outbox`, shared with Python).
+prefer never to record an envelope for a state that was not saved.) Delivery is **at-least-once**:
+a crash between publishing and marking a row sent publishes it again, so consumers must dedup
+(an inbox does). Stores: `MemoryOutboxStore` and `SqliteOutboxStore` (tables `xsm_outbox`, shared
+with Python); there is no PostgreSQL outbox store.
 
 ## Dead letters
 
 Two sources produce the same `DeadLetter` record: `DeadLetterPlugin` (an observer) captures a
 poison message with its error chain when the chart enters a state tagged `dead-letter`, and the
-dispatcher writes one for poison messages (after `max_attempts`), unknown event types and corrupt
-envelopes. Records are redacted before they are written and carry the envelope, the reason, the
-attempts and, optionally, a snapshot. Stores: `MemoryDeadLetterStore`, `SqliteDeadLetterStore`
+dispatcher writes one for poison messages (after `max_attempts`), unknown event types (`unknown_event`),
+corrupt envelopes (`corrupt`), deliveries for an instance that already finished (`instance_done`)
+and an envelope id redelivered with different content (`idempotency_mismatch`). Records are redacted before they are written and carry the envelope, the reason, the
+attempts and, optionally, a snapshot. The dispatcher's default in-memory store keeps the newest
+10 000 records (oldest evicted first); pass a durable sink to `InboundDispatcher::dead_letters` to
+keep everything. Stores: `MemoryDeadLetterStore`, `SqliteDeadLetterStore`
 (tables `xsm_dead_letters` and the audit table `xsm_dlq_audit`), or `BrokerDeadLetterSink` to
 publish them on a topic. `replay_dead_letter` re-sends a record through the dispatcher: it needs a
 reason, is a dry run unless told otherwise, refuses a record written by a different machine
@@ -144,9 +158,10 @@ Enable its feature, open it, and hand it to the dispatcher or the relay.
 |---|---|---|---|
 | `redis-streams` | `RedisStreamsBroker` | `open(url, &RedisStreamsOptions::new("app"))` | consumer groups, sharded streams, idle-message claiming; Python key and field layout |
 | `nats` | `NatsBroker` | `open("nats://host:4222", &NatsOptions::new())` | JetStream streams, durable pull consumers, `Nats-Msg-Id` deduplication; needs a server started with `-js` |
-| `rabbitmq` | `RabbitMqBroker` | `open("amqp://user:pass@host:5672/%2f", &RabbitMqOptions::new())` | durable queues, publisher confirms, delivery-count attempts |
+| `rabbitmq` | `RabbitMqBroker` | `open("amqp://user:pass@host:5672/%2f", &RabbitMqOptions::new())` | durable queues, publisher confirms, `mandatory` publishes (an unroutable message is returned and reported, not dropped), delivery-count attempts |
 | `sqs` | `SqsBroker` | `open(&SqsOptions::new())` | a queue per topic (never created by the adapter), FIFO groups and dedup ids for `.fifo` topics, long polling, visibility-timeout redelivery; credentials and region from the AWS environment, or `SqsOptions` for an emulator such as ElasticMQ |
 
-Kafka is not supported yet. All four are exercised against real servers in CI (see the
+Every broker's options carry an `io_timeout` (30 s by default): a poll, publish or ack that does
+not complete in that time fails instead of hanging the consumer. Kafka is not supported yet. All four are exercised against real servers in CI (see the
 [development section](../../README.md#development)) and, when the Python library is installed,
 against its own adapters on the same server.

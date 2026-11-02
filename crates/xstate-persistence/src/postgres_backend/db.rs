@@ -80,6 +80,12 @@ impl Db {
         &self.pool
     }
 
+    /// Start `fut` on the runtime behind this `Db` without waiting for it (safe to call from
+    /// any thread, inside a runtime or not).
+    pub(super) fn spawn(&self, fut: impl Future<Output = ()> + Send + 'static) {
+        drop(self.handle.spawn(fut));
+    }
+
     /// Drive `fut` to completion on this thread; failures are mapped for `key`.
     pub(super) fn run<T>(
         &self,
@@ -143,16 +149,38 @@ pub(super) fn is_unique_violation(e: &sqlx::Error) -> bool {
     sqlstate(e).as_deref() == Some("23505")
 }
 
+/// What a driver failure was, in words that carry no host, statement or value: the SQLSTATE of
+/// a server error, else the kind of the failure.
+fn failure_kind(e: &sqlx::Error) -> String {
+    if let Some(code) = sqlstate(e) {
+        return format!("server error, SQLSTATE {code}");
+    }
+    match e {
+        sqlx::Error::Io(_) => "i/o error",
+        sqlx::Error::Tls(_) => "TLS error",
+        sqlx::Error::PoolTimedOut => "timed out waiting for a connection",
+        sqlx::Error::PoolClosed => "connection pool closed",
+        sqlx::Error::Protocol(_) => "protocol error",
+        sqlx::Error::Configuration(_) => "invalid configuration",
+        _ => "backend unavailable",
+    }
+    .to_owned()
+}
+
 impl Fail {
     /// Map to the store taxonomy: contention is a retryable [`StoreError::LockTimeout`], a value
     /// PostgreSQL refuses (SQLSTATE class 22) is [`StoreError::Other`], a column that does not
-    /// decode is [`StoreError::Corrupt`], everything else [`StoreError::Unavailable`] (never a
-    /// leaked raw driver error).
+    /// decode is [`StoreError::Corrupt`], everything else [`StoreError::Unavailable`].
+    ///
+    /// Messages are a fixed phrase plus the failure's kind or SQLSTATE and never the driver's
+    /// text, which can carry the host, the statement or the offending value; the full text is
+    /// logged at `debug` only.
     pub(super) fn into_store(self, key: &str) -> StoreError {
         let e = match self {
             Self::Store(e) => return e,
             Self::Db(e) => e,
         };
+        tracing::debug!(error = %e, "PostgreSQL call failed");
         match sqlstate(&e) {
             Some(code) if CONTENTION_SQLSTATES.contains(&code.as_str()) => {
                 return StoreError::LockTimeout {
@@ -162,7 +190,9 @@ impl Fail {
                 };
             }
             Some(code) if code.starts_with("22") => {
-                return StoreError::Other(format!("PostgreSQL rejected the value: {e}"));
+                return StoreError::Other(format!(
+                    "PostgreSQL rejected the value (SQLSTATE {code})"
+                ));
             }
             _ => {}
         }
@@ -171,9 +201,9 @@ impl Fail {
             | sqlx::Error::Decode(_)
             | sqlx::Error::ColumnNotFound(_)
             | sqlx::Error::TypeNotFound { .. } => {
-                StoreError::Corrupt(format!("PostgresStore: unreadable column: {e}"))
+                StoreError::Corrupt("PostgresStore: unreadable column".to_owned())
             }
-            other => StoreError::Unavailable(format!("PostgresStore: {other}")),
+            other => StoreError::Unavailable(format!("PostgresStore: {}", failure_kind(&other))),
         }
     }
 

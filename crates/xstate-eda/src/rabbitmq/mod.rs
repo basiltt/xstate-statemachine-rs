@@ -26,9 +26,13 @@
 //!   which then sees the reject); `nack(requeue = true)` puts the delivery back at the head of a
 //!   local queue with `attempt + 1` while the message stays un-acked (a crash or a closed
 //!   channel means redelivery by the broker).
-//! * The envelope's attempt is the broker's count: quorum queues stamp `x-delivery-count`;
-//!   classic queues only say `redelivered`, counted as 1. The wire `xsmattempt` extension is
-//!   never trusted.
+//! * The envelope's attempt is the broker's count: quorum queues (opt in with
+//!   [`RabbitMqOptions::quorum_queues`]) stamp `x-delivery-count`; classic queues only say
+//!   `redelivered`, counted as 1, and their `x-delivery-count` header (publisher-supplied) is
+//!   ignored. The wire `xsmattempt` extension is never trusted.
+//! * A publish is `mandatory` and waits for the publisher confirm: a message no queue accepted
+//!   (an exchange without a matching binding) fails as [`BrokerError::Publish`] instead of
+//!   vanishing. Every broker call is bounded by [`RabbitMqOptions::io_timeout`].
 //! * `prefetch` bounds the un-acked messages of the adapter (held locally plus handed out):
 //!   backpressure. Messages are fetched with `basic.get`, which `basic.qos` does not bound, so
 //!   the adapter enforces the limit itself.
@@ -44,6 +48,7 @@
 //! and re-made after a failure.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use lapin::ConnectionProperties;
 use lapin::uri::AMQPUri;
@@ -61,6 +66,8 @@ use self::transport::{RabbitTransport, Settings, Source};
 pub const DEFAULT_PREFETCH: usize = 20;
 /// Default messages fetched per read.
 pub const DEFAULT_BATCH: usize = 10;
+/// Default bound on one broker call (connect, publish and its confirmation, fetch, settle).
+pub const DEFAULT_IO_TIMEOUT: Duration = crate::async_core::DEFAULT_IO_TIMEOUT;
 
 /// Builds the connection properties of a (re)connection (name, client properties). Called on
 /// every connect.
@@ -78,6 +85,14 @@ pub struct RabbitMqOptions {
     pub batch: usize,
     /// Size cap of an envelope on the wire, checked on publish and before parsing on receive.
     pub max_bytes: usize,
+    /// Bound on one broker call (connecting, publishing and awaiting the publisher confirm,
+    /// fetching, settling). A call that exceeds it fails as `timed out`.
+    pub io_timeout: Duration,
+    /// Declare the queues as quorum queues (`x-queue-type: quorum`), whose broker-maintained
+    /// `x-delivery-count` becomes the delivery attempt. Off by default: on a classic queue that
+    /// header is publisher-controlled and ignored (a redelivery counts as 1). A queue that
+    /// already exists with another type makes the declare fail; the type cannot be changed.
+    pub quorum_queues: bool,
     /// Called for every undecodable inbound message.
     pub on_undecodable: Option<UndecodableHook>,
     connect_with: Option<ConnectFactory>,
@@ -90,6 +105,8 @@ impl std::fmt::Debug for RabbitMqOptions {
             .field("prefetch", &self.prefetch)
             .field("batch", &self.batch)
             .field("max_bytes", &self.max_bytes)
+            .field("io_timeout", &self.io_timeout)
+            .field("quorum_queues", &self.quorum_queues)
             .finish_non_exhaustive()
     }
 }
@@ -109,6 +126,8 @@ impl RabbitMqOptions {
             prefetch: DEFAULT_PREFETCH,
             batch: DEFAULT_BATCH,
             max_bytes: DEFAULT_MAX_SNAPSHOT_BYTES,
+            io_timeout: DEFAULT_IO_TIMEOUT,
+            quorum_queues: false,
             on_undecodable: None,
             connect_with: None,
         }
@@ -142,6 +161,21 @@ impl RabbitMqOptions {
         self
     }
 
+    /// Bound every broker call by `io_timeout` (default 30 s).
+    #[must_use]
+    pub fn io_timeout(mut self, io_timeout: Duration) -> Self {
+        self.io_timeout = io_timeout;
+        self
+    }
+
+    /// Declare the queues as quorum queues and trust their `x-delivery-count` (see the field of
+    /// the same name).
+    #[must_use]
+    pub fn quorum_queues(mut self, quorum: bool) -> Self {
+        self.quorum_queues = quorum;
+        self
+    }
+
     /// Be told about every undecodable inbound message.
     #[must_use]
     pub fn on_undecodable(
@@ -171,6 +205,9 @@ impl RabbitMqOptions {
         if self.batch < 1 {
             return invalid("batch must be >= 1");
         }
+        if self.io_timeout.is_zero() {
+            return invalid("io_timeout must be > 0");
+        }
         if self.exchange.as_deref().is_some_and(str::is_empty) {
             return invalid("the exchange name must not be empty (leave it unset for the default)");
         }
@@ -179,6 +216,8 @@ impl RabbitMqOptions {
             prefetch: self.prefetch,
             batch: self.batch,
             max_bytes: self.max_bytes,
+            io_timeout: self.io_timeout,
+            quorum_queues: self.quorum_queues,
         })
     }
 }

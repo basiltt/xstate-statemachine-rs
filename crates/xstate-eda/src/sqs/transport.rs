@@ -27,7 +27,7 @@ use aws_sdk_sqs::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_sqs::operation::receive_message::builders::ReceiveMessageFluentBuilder;
 use aws_sdk_sqs::types::{MessageAttributeValue, MessageSystemAttributeName};
 
-use crate::async_core::{Raw, Transport};
+use crate::async_core::{Raw, Transport, into_publish};
 use crate::envelope::Envelope;
 use crate::error::BrokerError;
 
@@ -96,6 +96,7 @@ pub(super) struct Settings {
     pub(super) visibility_secs: Option<i32>,
     pub(super) batch: usize,
     pub(super) max_bytes: usize,
+    pub(super) io_timeout: Duration,
 }
 
 /// What settles one delivery: the queue and the receipt handle, plus the client to call with.
@@ -143,6 +144,8 @@ pub(super) struct SqsTransport {
     source: Source,
     settings: Settings,
     cache: Mutex<Cache>,
+    /// Held while the client is built, so concurrent first callers share one client.
+    building: tokio::sync::Mutex<()>,
 }
 
 /// A failure of the SDK, described without the endpoint, the credentials or the request.
@@ -176,14 +179,6 @@ fn publish_failed<E: ProvideErrorMetadata, R>(error: &SdkError<E, R>) -> BrokerE
     BrokerError::Publish(format!("sqs: {}", describe(error)))
 }
 
-/// A failure while preparing a publish is a publish failure.
-fn into_publish(error: BrokerError) -> BrokerError {
-    match error {
-        BrokerError::Other(why) => BrokerError::Publish(why),
-        other => other,
-    }
-}
-
 /// The attempt a receive count stands for: `ApproximateReceiveCount - 1` (a missing or
 /// malformed count is a first delivery).
 fn attempts_of(count: Option<&str>) -> u64 {
@@ -192,14 +187,20 @@ fn attempts_of(count: Option<&str>) -> u64 {
 
 impl SqsTransport {
     pub(super) fn new(source: Source, settings: Settings, client: Option<Client>) -> Self {
-        Self { source, settings, cache: Mutex::new(Cache { client, urls: HashMap::new() }) }
+        Self {
+            source,
+            settings,
+            cache: Mutex::new(Cache { client, urls: HashMap::new() }),
+            building: tokio::sync::Mutex::new(()),
+        }
     }
 
     fn cache(&self) -> MutexGuard<'_, Cache> {
         self.cache.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The SDK client, built on first use.
+    /// The SDK client, built on first use (serialised: of several concurrent first callers one
+    /// builds it and the others reuse it).
     async fn client(&self) -> Result<Client, BrokerError> {
         if let Some(client) = self.cache().client.clone() {
             return Ok(client);
@@ -207,6 +208,11 @@ impl SqsTransport {
         let Source::Config(config) = &self.source else {
             return Err(BrokerError::Other("sqs: the client was closed".to_owned()));
         };
+        let _building = self.building.lock().await;
+        // another caller may have built it while this one waited
+        if let Some(client) = self.cache().client.clone() {
+            return Ok(client);
+        }
         let client = config.connect().await;
         self.cache().client = Some(client.clone());
         Ok(client)
@@ -287,6 +293,10 @@ impl Transport for SqsTransport {
 
     fn max_bytes(&self) -> usize {
         self.settings.max_bytes
+    }
+
+    fn io_timeout(&self) -> Duration {
+        self.settings.io_timeout
     }
 
     /// `SendMessage` with the `ce_type` attribute; on a `.fifo` queue also the group (the subject)

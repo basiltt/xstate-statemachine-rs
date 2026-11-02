@@ -9,29 +9,6 @@ raised only in a minor release.
 
 ## [Unreleased]
 
-### Added
-
-- `xstate-eda` feature `sqs`: `SqsBroker`, the Amazon SQS adapter (queue per topic, FIFO
-  groups and deduplication ids, long polling, visibility-timeout redelivery), wire-compatible
-  with the Python library's `contrib.brokers.sqs`. Exposed by the facade as the `sqs` feature.
-  Tested against ElasticMQ through `XSM_SQS_ENDPOINT`.
-- `xstate-py`: Python bindings (PyO3) backed by the Rust engine. Work in progress; not published
-  to crates.io (`publish = false`).
-
-### Known issues
-
-- The `postgres` feature needs Rust 1.94 (`sqlx` 0.9), above the declared MSRV of 1.88; every other
-  feature builds on 1.88. The `MSRV` CI job (`--all-features`) fails until the MSRV is raised or
-  `sqlx` is replaced.
-
-### Not yet supported
-
-- Kafka broker adapter.
-- `xsm` commands `coverage`, `asyncapi`, `dlq`, `generate-template`, `new`, `plugins`, `update`
-  and `setup` of the Python CLI.
-- OpenTelemetry and structlog / Sentry observers (`xstate-observability` covers the Prometheus
-  metric set through the `metrics` facade).
-
 ## [0.1.0] - 2026-11-02
 
 First release: a Rust port of the Python library
@@ -66,8 +43,11 @@ below. Developed in phases 0 to 7; the headings follow them.
   history, `onDone` propagation, eventless settling with `maxIterations`, action and guard error
   policies (`actionErrorPolicy` defaults to `fail`, as in XState), `onUnhandled` ignore / defer / error) and the synchronous interpreter with a timer
   heap and `Clock` / `SimulatedClock`.
-- Snapshots in the Python layout v4 and the machine structure hash, byte-for-byte; restore with
-  hash verification and timer restart modes (parked / restart / resume / fire-due).
+- Snapshots in the Python layout v4 (same fields, order and values; compact JSON where Python's
+  `get_snapshot()` indents, pinned by a text comparison against Python's output) and the machine
+  structure hash, byte-for-byte; restore with hash verification and timer restart modes
+  (parked / restart / resume / fire-due; `RestoreOptions::default()` resumes, where Python's bare
+  `from_snapshot` parks).
 - `xstate-tokio`: `spawn` and the cloneable `Interpreter` handle, bounded mailbox with
   Block / DropNewest / Reject overflow, `after` timers on `tokio::time`, async services, child
   machine actors, `sendTo` / `sendParent` routing, `systemId` registry, watch-based `view()`.
@@ -122,6 +102,10 @@ below. Developed in phases 0 to 7; the headings follow them.
   `PostgresLog` with the Python SQLAlchemy schema, lease-row locks and compare-and-set saves.
 - `NatsBroker` (JetStream, durable pull consumers, `Nats-Msg-Id` dedup) and `RabbitMqBroker`
   (durable queues, publisher confirms), async and blocking.
+- `SqsBroker` (feature `sqs` of `xstate-eda`, exposed by the facade as `sqs`): the Amazon SQS
+  adapter (queue per topic, FIFO groups and deduplication ids, long polling, visibility-timeout
+  redelivery), wire-compatible with the Python library's `contrib.brokers.sqs`. Tested against
+  ElasticMQ through `XSM_SQS_ENDPOINT`.
 - `SseSink`, a standard-library-only hardened HTTP/SSE server for the Stately Inspector page, and
   `xsm inspect --live` / `xsm replay`.
 - `xstate-agents`: the tool-loop, supervisor, pipeline and debate charts, `AgentLogic` with
@@ -147,6 +131,23 @@ below. Developed in phases 0 to 7; the headings follow them.
   entry enables); `xsm` enables `sqlite` itself. The crates keep `sqlite` as their own default.
 - The CLI package is `xstate-statemachine-cli` because the crate name `xsm` is already taken on
   crates.io; the installed binary is still `xsm`.
+- `xstate-py`: Python bindings (PyO3) backed by the Rust engine. Work in progress; not published
+  to crates.io (`publish = false`); CI builds it with maturin and runs its pytest suite.
+
+### Known limitations
+
+- MSRV is 1.88. The `postgres` feature (and `full`, which includes it) needs Rust 1.94 (`sqlx`
+  0.9); the `MSRV` CI job checks the workspace and every other feature on 1.88 and skips
+  `postgres`.
+- The outbox is at-least-once and has memory and SQLite stores only (no PostgreSQL outbox).
+
+### Not yet supported
+
+- Kafka broker adapter.
+- `xsm` commands `coverage`, `asyncapi`, `dlq`, `generate-template`, `list-templates`, `new`,
+  `plugins`, `update` and `setup` of the Python CLI.
+- OpenTelemetry and structlog / Sentry observers (`xstate-observability` covers the Prometheus
+  metric set through the `metrics` facade).
 
 ### Fixed
 

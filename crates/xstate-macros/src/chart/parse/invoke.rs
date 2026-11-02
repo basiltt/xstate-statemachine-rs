@@ -5,7 +5,7 @@ use syn::braced;
 use syn::parse::ParseStream;
 
 use super::transition::parse_transitions;
-use super::{arrow, colon, ends_with_brace, parse_json, parse_key, parse_name, separator};
+use super::{arrow, colon, parse_json, parse_key, parse_name, separator};
 use crate::chart::ast::Invoke;
 
 /// Keys an `invoke` block accepts.
@@ -20,21 +20,16 @@ pub(super) fn parse_invoke(input: ParseStream<'_>, key: &Ident) -> syn::Result<I
     let mut seen = Vec::new();
     while !content.is_empty() {
         let item = parse_key(&content, &mut seen, &[])?;
-        let mut braced = false;
         match crate::unraw(&item).as_str() {
             "src" => src = Some(parse_name(colon(&content)?)?),
             "id" => id = Some(parse_name(colon(&content)?)?),
             "systemId" => system_id = Some(parse_name(colon(&content)?)?),
-            "input" => {
-                let tokens = parse_json(colon(&content)?)?;
-                braced = ends_with_brace(&tokens);
-                json = Some(tokens);
-            }
+            "input" => json = Some(parse_json(colon(&content)?)?),
             "onDone" => on_done = Some(parse_transitions(arrow(&content)?)?),
             "onError" => on_error = Some(parse_transitions(arrow(&content)?)?),
             _ => return Err(super::unknown_key(&item, "invoke key", INVOKE_KEYS)),
         }
-        separator(&content, braced)?;
+        separator(&content, false)?;
     }
     let Some(src) = src else {
         return Err(syn::Error::new(key.span(), "`invoke` needs a `src: service_name`"));

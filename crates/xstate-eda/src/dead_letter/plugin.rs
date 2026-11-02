@@ -16,7 +16,7 @@ use super::{
     DEAD_LETTER_TAG, DEFAULT_MAX_ERRORS, DeadLetter, DeadLetterSink, ERRORS_CONTEXT_KEY,
     ErrorEntry, MAX_ERROR_MESSAGE,
 };
-use crate::chart::{active_sorted, entered_per_transition, has_tag};
+use crate::chart::{LazyContext, active_sorted, entered_per_transition, has_tag};
 use crate::error::{EdaError, Result};
 
 /// Emit a [`DeadLetter`] when the machine enters a dead-letter state: a state tagged
@@ -144,7 +144,13 @@ impl DeadLetterPlugin {
         }
     }
 
-    fn collect_errors(&self, machine: &Machine, event: &Event, report: &StepReport, ctx: &Value) {
+    fn collect_errors<C: Context>(
+        &self,
+        machine: &Machine,
+        event: &Event,
+        report: &StepReport,
+        ctx: &LazyContext<'_, C>,
+    ) {
         match event.origin {
             EventOrigin::DoneActor => self.chain().clear(),
             EventOrigin::ErrorActor => {
@@ -156,12 +162,12 @@ impl DeadLetterPlugin {
                     .find(|i| i.id == invoke)
                     .map_or(invoke, |i| i.src.as_str());
                 let (ty, message) = service_error(event.payload.get("error"));
-                self.push("service", name, &ty, &message, ctx);
+                self.push("service", name, &ty, &message, json_of(ctx));
             }
             _ => {}
         }
         if let Some(failed) = &report.failed {
-            self.push("action", "?", "TransitionFailedError", failed, ctx);
+            self.push("action", "?", "TransitionFailedError", failed, json_of(ctx));
         }
     }
 
@@ -226,7 +232,7 @@ impl DeadLetterPlugin {
         machine: &Machine,
         event: &Event,
         state: &ActiveState<C>,
-        ctx: &Value,
+        ctx: &LazyContext<'_, C>,
         entered: &[StateId],
     ) {
         let mut ids: Vec<StateId> =
@@ -234,7 +240,7 @@ impl DeadLetterPlugin {
         ids.sort_by(|a, b| machine.node(*a).id.cmp(&machine.node(*b).id));
         ids.dedup();
         for sid in ids {
-            let record = self.capture(machine, event, state, ctx, sid);
+            let record = self.capture(machine, event, state, json_of(ctx), sid);
             let (id, state_id) = (record.id.clone(), record.state_id.clone());
             if let Err(e) = self.sink.put(record) {
                 tracing::error!(target: "xstate::eda", record = %id, machine = machine.id(), state = %state_id, error = %e, "DeadLetter sink failed; the record was NOT stored");
@@ -293,14 +299,26 @@ fn scrub(message: &str, ctx: &Value, keys: &RedactKeys) -> String {
     out
 }
 
-fn context_value<C: Context>(state: &ActiveState<C>) -> Value {
-    serde_json::to_value(state.context()).unwrap_or(Value::Null)
+/// What a context that cannot be serialised stands for.
+static NULL: Value = Value::Null;
+
+/// The step's context as JSON; one that cannot be serialised is logged and read as `null` (the
+/// record is still written, without the attempt counter and the chart's own error chain).
+fn json_of<'a, C: Context>(ctx: &'a LazyContext<'_, C>) -> &'a Value {
+    ctx.get().unwrap_or_else(|why| {
+        tracing::error!(
+            target: "xstate::eda",
+            reason = %why,
+            "dead letter: the context could not be serialised"
+        );
+        &NULL
+    })
 }
 
 impl<C: Context> Observer<C> for DeadLetterPlugin {
     fn on_start(&self, machine: &Machine, state: &ActiveState<C>, _report: &StepReport) {
-        let ctx = context_value(state);
         let entered = active_sorted(machine, state);
+        let ctx = LazyContext::new(state);
         self.emit(machine, &Event::init(), state, &ctx, &entered);
     }
 
@@ -311,7 +329,7 @@ impl<C: Context> Observer<C> for DeadLetterPlugin {
         report: &StepReport,
         state: &ActiveState<C>,
     ) {
-        let ctx = context_value(state);
+        let ctx = LazyContext::new(state);
         self.collect_errors(machine, event, report, &ctx);
         let entered: Vec<StateId> = entered_per_transition(machine, &report.transitions, state)
             .into_iter()

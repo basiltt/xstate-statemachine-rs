@@ -159,3 +159,15 @@ fn async_poll_waits_for_traffic_without_a_runtime() {
     common::block_on(broker.ack(&d)).unwrap();
     assert!(common::block_on(broker.poll("t", Some(Duration::from_millis(20)))).unwrap().is_none());
 }
+
+#[test]
+fn a_timeout_too_large_for_an_instant_waits_instead_of_overflowing() {
+    // `Instant::now() + Duration::MAX` panics: an unrepresentable deadline is "no deadline"
+    let sync = SyncFakeBrokerAdapter::new();
+    sync.publish("t", &env("s", 1)).unwrap();
+    assert!(sync.poll("t", Some(Duration::MAX)).unwrap().is_some());
+    let asynchronous = FakeBrokerAdapter::new();
+    asynchronous.deliver("t", &env("s", 1)).unwrap();
+    let got = common::block_on(asynchronous.poll("t", Some(Duration::MAX))).unwrap();
+    assert!(got.is_some());
+}

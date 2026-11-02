@@ -48,7 +48,22 @@ const POLL_SLICE: Duration = Duration::from_secs(1);
 /// Worker threads of the owned runtime: the clients' I/O needs no more.
 const RUNTIME_THREADS: usize = 2;
 
+/// How much longer a blocking call waits than the transport call it runs, so the transport's
+/// own timeout (which carries the better error) is the one that fires.
+const BLOCK_GRACE: Duration = Duration::from_secs(1);
+
+/// The default bound on one transport call (`io_timeout` of every adapter's options).
+pub(crate) const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(30);
+
 static NEXT_BROKER: AtomicU64 = AtomicU64::new(1);
+
+/// A failure while preparing a publish is a publish failure.
+pub(crate) fn into_publish(error: BrokerError) -> BrokerError {
+    match error {
+        BrokerError::Other(why) => BrokerError::Publish(why),
+        other => other,
+    }
+}
 
 /// CloudEvents structured-mode content type (Kafka/AMQP/NATS bindings; SQS has no such header).
 #[cfg(any(feature = "nats", feature = "rabbitmq"))]
@@ -83,6 +98,11 @@ pub(crate) trait Transport: Send + Sync + 'static {
 
     /// The size cap of an envelope on the wire.
     fn max_bytes(&self) -> usize;
+
+    /// The bound on one native call (connecting, publishing and awaiting the confirmation,
+    /// fetching, settling); the core fails the call as `timed out` when it is exceeded. A
+    /// fetch may additionally wait as long as it was asked to.
+    fn io_timeout(&self) -> Duration;
 
     /// Publish `envelope` on `topic`.
     fn send(
@@ -207,24 +227,42 @@ impl<T: Transport> Core<T> {
 
     // -- publish and settle ---------------------------------------------------------------
 
+    /// Run `fut` for at most the transport's I/O timeout plus `extra` (a wait the call was asked
+    /// to make); a call still running then is abandoned and fails as `timed out`.
+    async fn bounded<V>(
+        &self,
+        extra: Duration,
+        fut: impl Future<Output = Result<V, BrokerError>>,
+    ) -> Result<V, BrokerError> {
+        let limit = self.transport.io_timeout().saturating_add(extra);
+        match tokio::time::timeout(limit, fut).await {
+            Ok(result) => result,
+            Err(_) => Err(BrokerError::Other(format!("{}: timed out", T::NAME))),
+        }
+    }
+
     async fn publish(&self, topic: &str, envelope: &Envelope) -> Result<(), BrokerError> {
-        self.record(self.transport.send(topic, envelope).await)
+        let sent = self.bounded(Duration::ZERO, self.transport.send(topic, envelope)).await;
+        self.record(sent.map_err(into_publish))
     }
 
     /// Settle a delivery as processed (a delivery of another broker, or one already settled, is
     /// a no-op).
     async fn ack(&self, delivery: &Delivery) -> Result<(), BrokerError> {
         match self.claim(delivery) {
-            Some(held) => self.record(self.transport.ack(&held.native).await),
+            Some(held) => {
+                let acked = self.bounded(Duration::ZERO, self.transport.ack(&held.native)).await;
+                self.record(acked)
+            }
             None => Ok(()),
         }
     }
 
-    /// Requeue the delivery locally at the head of its topic with `attempt + 1`. The native
-    /// message stays un-acked, so a crash still means redelivery by the broker.
+    /// Requeue the delivery locally at the head of its topic with `attempt + 1` (saturating).
+    /// The native message stays un-acked, so a crash still means redelivery by the broker.
     fn requeue(&self, delivery: &Delivery) {
         let Some(held) = self.claim(delivery) else { return };
-        let again = held.envelope.with_attempt(held.envelope.attempt() + 1);
+        let again = held.envelope.with_attempt(held.envelope.attempt().saturating_add(1));
         self.state().local.entry(held.topic).or_default().push_front(Local {
             envelope: again,
             native: held.native,
@@ -235,9 +273,18 @@ impl<T: Transport> Core<T> {
     /// Settle the delivery without redelivery: dead-lettering is the dispatcher's job.
     async fn drop_delivery(&self, delivery: &Delivery) -> Result<(), BrokerError> {
         match self.claim(delivery) {
-            Some(held) => self.record(self.transport.drop_message(&held.native).await),
+            Some(held) => {
+                let dropped =
+                    self.bounded(Duration::ZERO, self.transport.drop_message(&held.native)).await;
+                self.record(dropped)
+            }
             None => Ok(()),
         }
+    }
+
+    /// Close the client connection the transport opened.
+    async fn close(&self) -> Result<(), BrokerError> {
+        self.bounded(Duration::ZERO, self.transport.close()).await
     }
 
     fn claim(&self, delivery: &Delivery) -> Option<Inflight<T::Native>> {
@@ -264,7 +311,10 @@ impl<T: Transport> Core<T> {
         }
         let fut = op(&self.state().inflight.get(&delivery.tag)?.native);
         let core = Arc::clone(self);
-        Some(Box::pin(async move { core.record(fut.await) }))
+        Some(Box::pin(async move {
+            let result = core.bounded(Duration::ZERO, fut).await;
+            core.record(result)
+        }))
     }
 
     // -- receive --------------------------------------------------------------------------
@@ -321,7 +371,8 @@ impl<T: Transport> Core<T> {
     /// instead of returning them means a caller that gives up mid-fetch loses nothing: the next
     /// `pop` delivers them.
     async fn fill(&self, topic: &str, wait: Duration) -> Result<(), BrokerError> {
-        let raws = self.record(self.transport.fetch(topic, wait).await)?;
+        let fetched = self.bounded(wait, self.transport.fetch(topic, wait)).await;
+        let raws = self.record(fetched)?;
         let mut good = Vec::new();
         let mut bad = Vec::new();
         for raw in raws {
@@ -334,7 +385,8 @@ impl<T: Transport> Core<T> {
         self.state().local.entry(topic.to_owned()).or_default().extend(good);
         // after stashing: a failing drop loses none of the good ones
         for native in &bad {
-            self.record(self.transport.drop_message(native).await)?;
+            let dropped = self.bounded(Duration::ZERO, self.transport.drop_message(native)).await;
+            self.record(dropped)?;
         }
         Ok(())
     }
@@ -394,19 +446,26 @@ impl Runner {
         async move { handle?.await.map_err(|e| BrokerError::Other(format!("broker task failed: {e}"))) }
     }
 
-    /// Run `fut` on the owned runtime and block this thread until it finishes. Safe to call from
-    /// inside another runtime too (it blocks that worker, it does not panic).
-    fn block<F>(&self, fut: F) -> Result<F::Output, BrokerError>
+    /// Run `fut` on the owned runtime and block this thread until it finishes, at most `limit`.
+    /// Safe to call from inside another runtime too (it blocks that worker, it does not panic).
+    /// A call that outlives `limit` is abandoned (it keeps running on the runtime, its result
+    /// discarded) and fails as `timed out`.
+    fn block<F>(&self, fut: F, limit: Duration) -> Result<F::Output, BrokerError>
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
         let (tx, rx) = mpsc::channel();
         drop(self.runtime()?.spawn(async move {
-            // the receiver only goes away if the caller panicked
+            // the receiver is gone once the caller timed out or panicked
             let _ = tx.send(fut.await);
         }));
-        rx.recv().map_err(|_| BrokerError::Other("broker task failed".to_owned()))
+        rx.recv_timeout(limit).map_err(|e| match e {
+            mpsc::RecvTimeoutError::Timeout => BrokerError::Other("timed out".to_owned()),
+            mpsc::RecvTimeoutError::Disconnected => {
+                BrokerError::Other("broker task failed".to_owned())
+            }
+        })
     }
 }
 
@@ -525,7 +584,7 @@ impl<T: Transport> Broker<T> {
         &self,
     ) -> impl Future<Output = Result<(), BrokerError>> + Send + use<T> {
         let core = Arc::clone(&self.core);
-        let run = self.runner.spawn(async move { core.transport.close().await });
+        let run = self.runner.spawn(async move { core.close().await });
         async move { run.await? }
     }
 
@@ -557,12 +616,18 @@ impl<T: Transport> Broker<T> {
         Fut: Future<Output = Result<(), BrokerError>> + Send + 'static,
     {
         match self.core.on_native(delivery, op) {
-            Some(fut) => self.runner.block(fut)?,
+            Some(fut) => self.runner.block(fut, self.block_limit(Duration::ZERO))?,
             None => Ok(()),
         }
     }
 
     // -- blocking contract ----------------------------------------------------------------
+
+    /// How long a blocking call may take: the transport's I/O timeout, the wait it was asked to
+    /// make and a grace so the transport's own timeout reports first.
+    fn block_limit(&self, wait: Duration) -> Duration {
+        self.core.transport.io_timeout().saturating_add(wait).saturating_add(BLOCK_GRACE)
+    }
 
     pub(crate) fn publish_blocking(
         &self,
@@ -570,7 +635,10 @@ impl<T: Transport> Broker<T> {
         envelope: &Envelope,
     ) -> Result<(), BrokerError> {
         let (core, topic, envelope) = (Arc::clone(&self.core), topic.to_owned(), envelope.clone());
-        self.runner.block(async move { core.publish(&topic, &envelope).await })?
+        self.runner.block(
+            async move { core.publish(&topic, &envelope).await },
+            self.block_limit(Duration::ZERO),
+        )?
     }
 
     pub(crate) fn poll_blocking(
@@ -588,15 +656,17 @@ impl<T: Transport> Broker<T> {
                 return Ok(None);
             }
             fetched = true;
-            let (core, topic, wait) =
-                (Arc::clone(&self.core), topic.to_owned(), wait_for(deadline));
-            self.runner.block(async move { core.fill(&topic, wait).await })??;
+            let wait = wait_for(deadline);
+            let (core, topic) = (Arc::clone(&self.core), topic.to_owned());
+            let limit = self.block_limit(wait);
+            self.runner.block(async move { core.fill(&topic, wait).await }, limit)??;
         }
     }
 
     pub(crate) fn ack_blocking(&self, delivery: &Delivery) -> Result<(), BrokerError> {
         let (core, delivery) = (Arc::clone(&self.core), delivery.clone());
-        self.runner.block(async move { core.ack(&delivery).await })?
+        self.runner
+            .block(async move { core.ack(&delivery).await }, self.block_limit(Duration::ZERO))?
     }
 
     pub(crate) fn nack_blocking(
@@ -609,12 +679,15 @@ impl<T: Transport> Broker<T> {
             return Ok(());
         }
         let (core, delivery) = (Arc::clone(&self.core), delivery.clone());
-        self.runner.block(async move { core.drop_delivery(&delivery).await })?
+        self.runner.block(
+            async move { core.drop_delivery(&delivery).await },
+            self.block_limit(Duration::ZERO),
+        )?
     }
 
     pub(crate) fn close_blocking(&self) -> Result<(), BrokerError> {
         let core = Arc::clone(&self.core);
-        self.runner.block(async move { core.transport.close().await })?
+        self.runner.block(async move { core.close().await }, self.block_limit(Duration::ZERO))?
     }
 }
 

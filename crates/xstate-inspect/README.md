@@ -6,8 +6,10 @@ in-memory collection and `.jsonl` recording, replay of recordings, and a hardene
 SSE server that streams them to the Stately Inspector page.
 
 Context and event payloads are deny-by-default (allow-lists plus key-based redaction), and the
-message bytes are identical to the Python library's `InspectorPlugin`, so recordings made by
-either runtime replay in the other and in the Stately Inspector UI.
+message bytes are identical to the Python library's `InspectorPlugin`: golden recordings written
+by Python are compared line by line with what the Rust observer emits for the same run. Replay
+reads any `.jsonl` recording in that format and feeds the Stately Inspector UI; replaying a Rust
+recording with Python is not covered by a test.
 
 Status: 0.1.0. Protocol pinned to `@statelyai/inspect` 0.7.2; `xsm inspect --live` and
 `xsm replay` are built on it.

@@ -153,7 +153,8 @@
         "history": {},
         "actors": {},
         "system": {}
-      }
+      },
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"m\",\n  \"machine_hash\": \"e90857e070f180cf\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"running\",\n  \"context\": {},\n  \"state_ids\": [\n    \"m.p.r1.b\",\n    \"m.p.r2.d\"\n  ],\n  \"value\": {\n    \"p\": {\n      \"r1\": \"b\",\n      \"r2\": \"d\"\n    }\n  },\n  \"configuration\": [\n    \"m\",\n    \"m.p\",\n    \"m.p.r1\",\n    \"m.p.r1.b\",\n    \"m.p.r2\",\n    \"m.p.r2.d\"\n  ],\n  \"output\": null,\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
     }
   }
 }

@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
 use axum::http::{HeaderMap, header};
@@ -17,6 +18,9 @@ use crate::routes::ws::{WS_TRY_AGAIN_LATER, close, send_json};
 
 /// Cookie carrying the inspector token after the one-time `?token=` redirect.
 pub const COOKIE_NAME: &str = "xsm_inspect";
+
+/// Longest an inspector client may take to accept one frame before it is closed with 1011.
+pub(super) const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct Client {
     id: u64,
@@ -161,12 +165,12 @@ impl WebSocketSink {
     }
 
     /// Pump messages to one accepted socket until it disconnects: the history first, then
-    /// every new message.
+    /// every new message. A client that does not accept a frame within 30 s is closed (1011).
     pub async fn serve(&self, socket: WebSocket) {
         let (id, backlog, mut rx, cut) = self.register();
         let (mut tx, mut inbound) = socket.split();
         for message in &backlog {
-            if !send_json(&mut tx, message).await {
+            if !send_json(&mut tx, message, SEND_TIMEOUT).await {
                 return self.unregister(id);
             }
         }
@@ -174,11 +178,11 @@ impl WebSocketSink {
             tokio::select! {
                 message = rx.recv() => {
                     if cut.load(Ordering::Acquire) {
-                        close(&mut tx, WS_TRY_AGAIN_LATER).await;
+                        close(&mut tx, WS_TRY_AGAIN_LATER, SEND_TIMEOUT).await;
                         break;
                     }
                     let Some(message) = message else { break };
-                    if !send_json(&mut tx, &message).await {
+                    if !send_json(&mut tx, &message, SEND_TIMEOUT).await {
                         break;
                     }
                 }

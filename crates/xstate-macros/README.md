@@ -8,8 +8,11 @@ Procedural macros for `xstate-core`:
 * `statechart!`: a Rust-literal chart DSL covering every XState construct, validated at compile
   time (duplicates, initial children, target resolution, tree shape) and building a `Machine`.
 
-Status: 0.1.0, with `trybuild` UI tests for the diagnostics. The derives need `xstate-core` (and
-`serde` for payload types) in the calling crate; `statechart!` additionally needs `serde_json`.
+Status: 0.1.0, with `trybuild` UI tests for the diagnostics. The `xstate-statemachine` facade
+(feature `macros`) is enough: the generated code resolves `xstate_core` and `serde_json` through
+it, and a CI job checks a crate that depends on the facade alone
+(`tests/facade-only/`). Using `xstate-macros` directly still needs `xstate-core` (and `serde` for
+payload types) in the calling crate, and `statechart!` additionally needs `serde_json`.
 
 ```rust
 use xstate_core::{MachineLogic, SyncInterpreter};

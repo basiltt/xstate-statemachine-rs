@@ -9,6 +9,10 @@ SQLite tables (`xsm_outbox`, `xsm_dead_letters`, `xsm_dlq_audit`) and every JSON
 Python library's, so a database or a broker can be shared between the two runtimes. The crate is
 runtime-agnostic: the async broker contract uses return-position `impl Future + Send`.
 
+Every broker's options carry an `io_timeout` (30 s by default) so a stuck connection fails
+instead of hanging, and the dispatcher's default in-memory dead-letter store keeps the newest
+10 000 records. The outbox is at-least-once and has memory and SQLite stores only.
+
 Status: 0.1.0. Kafka is not yet supported.
 
 ```rust
@@ -28,7 +32,7 @@ assert_eq!(Envelope::from_json(&wire, 1 << 20)?.ty, "order.paid");
 | `sqlite` (default) | `SqliteOutboxStore`, `SqliteDeadLetterStore` |
 | `redis-streams` | `RedisStreamsBroker` (consumer groups, Python key and field layout) |
 | `nats` | `NatsBroker` (JetStream, durable pull consumers, `Nats-Msg-Id` dedup) |
-| `rabbitmq` | `RabbitMqBroker` (durable queues, publisher confirms) |
+| `rabbitmq` | `RabbitMqBroker` (durable queues, publisher confirms, `mandatory` publishes) |
 | `sqs` | `SqsBroker` (Amazon SQS and ElasticMQ, visibility-timeout redelivery) |
 
 ## Python counterpart

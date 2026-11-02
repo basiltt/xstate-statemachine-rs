@@ -99,7 +99,8 @@
         "initial": { "$ref": "#/$defs/observation" },
         "steps": { "type": "array", "items": { "$ref": "#/$defs/observation" } },
         "machine_hash": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
-        "snapshot": { "type": "object" }
+        "snapshot": { "type": "object" },
+        "snapshot_text": { "type": "string" }
       }
     }
   }

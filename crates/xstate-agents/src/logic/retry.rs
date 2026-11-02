@@ -10,6 +10,7 @@ use xstate_core::{ActionScope, DynContext, MachineLogic};
 
 use super::set;
 use crate::budgets::ctx_int;
+use crate::error::{AgentError, Result};
 
 /// Exponential backoff without jitter: `min(base_ms * factor^(attempt-1), max_ms)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -31,6 +32,27 @@ impl Default for AgentRetry {
 }
 
 impl AgentRetry {
+    /// Refuse a policy that would produce NaN, infinite or zero delays.
+    ///
+    /// # Errors
+    /// [`AgentError::Config`] unless `max_attempts >= 1` and `base_ms`, `factor` and `max_ms`
+    /// are finite and positive.
+    pub fn validate(&self) -> Result<()> {
+        if self.max_attempts < 1 {
+            return Err(AgentError::config("retry max_attempts must be >= 1"));
+        }
+        for (name, value) in
+            [("base_ms", self.base_ms), ("factor", self.factor), ("max_ms", self.max_ms)]
+        {
+            if !(value.is_finite() && value > 0.0) {
+                return Err(AgentError::config(format!(
+                    "retry {name} must be a finite number > 0, got {value}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Delay before the next try after `attempt` (1-based) failed.
     #[must_use]
     pub fn delay_ms(&self, attempt: u32) -> f64 {
@@ -65,6 +87,22 @@ impl AgentRetry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validation_rejects_non_finite_and_non_positive_fields() {
+        assert!(AgentRetry::default().validate().is_ok());
+        let bad = [
+            AgentRetry { max_attempts: 0, ..AgentRetry::default() },
+            AgentRetry { base_ms: f64::NAN, ..AgentRetry::default() },
+            AgentRetry { base_ms: 0.0, ..AgentRetry::default() },
+            AgentRetry { factor: f64::INFINITY, ..AgentRetry::default() },
+            AgentRetry { factor: -2.0, ..AgentRetry::default() },
+            AgentRetry { max_ms: f64::INFINITY, ..AgentRetry::default() },
+        ];
+        for retry in bad {
+            assert!(retry.validate().is_err(), "{retry:?}");
+        }
+    }
 
     #[test]
     fn delays_grow_and_cap() {

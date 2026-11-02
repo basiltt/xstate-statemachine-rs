@@ -264,7 +264,8 @@
         "history": {},
         "actors": {},
         "system": {}
-      }
+      },
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"m\",\n  \"machine_hash\": \"88ee67aaa3a13f23\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"running\",\n  \"context\": {},\n  \"state_ids\": [\n    \"m.p.mode.night\",\n    \"m.p.work.locked\"\n  ],\n  \"value\": {\n    \"p\": {\n      \"mode\": \"night\",\n      \"work\": \"locked\"\n    }\n  },\n  \"configuration\": [\n    \"m\",\n    \"m.p\",\n    \"m.p.mode\",\n    \"m.p.mode.night\",\n    \"m.p.work\",\n    \"m.p.work.locked\"\n  ],\n  \"output\": null,\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
     }
   }
 }

@@ -9,8 +9,9 @@
 //! Supported keywords: `type` (string or list), `properties`, `required`,
 //! `additionalProperties` (bool or schema), `items`, `enum`, `const`, `minimum`, `maximum`,
 //! `exclusiveMinimum`, `exclusiveMaximum`, `minLength`, `maxLength`, `minItems`, `maxItems`,
-//! `anyOf` / `oneOf`, local `$ref` (`#/$defs/Name`, `#/definitions/Name`) and `default`.
-//! Anything else is ignored.
+//! `anyOf` / `oneOf`, local `$ref` (`#`, `#/$defs/Name`, `#/definitions/Name`) and `default`.
+//! [`validate`] ignores every other keyword, so tool declarations are screened with
+//! [`check_supported`], which refuses the ones that would otherwise be silently unenforced.
 
 use serde_json::{Map, Value};
 
@@ -55,6 +56,73 @@ struct Walker<'a> {
     root: &'a Value,
     errors: Vec<SchemaError>,
     loc: Vec<(String, bool)>,
+}
+
+/// Keywords [`validate`] does not enforce and [`check_supported`] therefore refuses.
+const UNSUPPORTED_KEYWORDS: &[&str] = &[
+    "pattern",
+    "format",
+    "allOf",
+    "not",
+    "uniqueItems",
+    "minProperties",
+    "maxProperties",
+    "patternProperties",
+    "propertyNames",
+    "multipleOf",
+    "contains",
+    "prefixItems",
+    "dependentRequired",
+    "dependentSchemas",
+    "if",
+    "then",
+    "else",
+];
+
+/// Refuse a schema that uses a keyword [`validate`] would silently ignore (an ignored
+/// constraint reads as an enforced one) or a `$ref` that is not local.
+///
+/// Only schema positions are inspected (`properties` values, `items`, `additionalProperties`,
+/// `anyOf` / `oneOf` branches, `$defs` / `definitions` values): property names and `enum` /
+/// `const` / `default` values are data.
+///
+/// # Errors
+/// A description of the first offending keyword and where it is.
+pub fn check_supported(schema: &Value) -> Result<(), String> {
+    check_node(schema, "$", 0)
+}
+
+fn check_node(schema: &Value, at: &str, depth: usize) -> Result<(), String> {
+    let Value::Object(map) = schema else { return Ok(()) };
+    if depth > MAX_DEPTH {
+        return Err(format!("schema nested too deeply at {at}"));
+    }
+    if let Some(key) = UNSUPPORTED_KEYWORDS.iter().find(|k| map.contains_key(**k)) {
+        return Err(format!("unsupported JSON-schema keyword `{key}` at {at}"));
+    }
+    if let Some(reference) = map.get("$ref").and_then(Value::as_str)
+        && reference != "#"
+        && !reference.starts_with("#/")
+    {
+        return Err(format!("unsupported non-local `$ref` {reference:?} at {at}"));
+    }
+    for group in ["properties", "$defs", "definitions"] {
+        for (name, child) in map.get(group).and_then(Value::as_object).into_iter().flatten() {
+            check_node(child, &format!("{at}.{group}.{name}"), depth + 1)?;
+        }
+    }
+    for key in ["items", "additionalProperties"] {
+        if let Some(child) = map.get(key) {
+            check_node(child, &format!("{at}.{key}"), depth + 1)?;
+        }
+    }
+    for key in ["anyOf", "oneOf"] {
+        let branches = map.get(key).and_then(Value::as_array).into_iter().flatten();
+        for (i, child) in branches.enumerate() {
+            check_node(child, &format!("{at}.{key}[{i}]"), depth + 1)?;
+        }
+    }
+    Ok(())
 }
 
 /// Validate `value` against `schema`; on success return it with `default`s filled in, in the

@@ -192,7 +192,8 @@
         },
         "actors": {},
         "system": {}
-      }
+      },
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"wizard\",\n  \"machine_hash\": \"5e3ee1a014f99134\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"running\",\n  \"context\": {},\n  \"state_ids\": [\n    \"wizard.form.address.street\"\n  ],\n  \"value\": {\n    \"form\": {\n      \"address\": \"street\"\n    }\n  },\n  \"configuration\": [\n    \"wizard\",\n    \"wizard.form\",\n    \"wizard.form.address\",\n    \"wizard.form.address.street\"\n  ],\n  \"output\": null,\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {\n    \"wizard.form\": [\n      \"wizard.form.address\",\n      \"wizard.form.address.city\"\n    ]\n  },\n  \"actors\": {},\n  \"system\": {}\n}"
     }
   }
 }

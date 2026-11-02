@@ -129,12 +129,21 @@ impl PostgresStoreOptions {
 /// `forget` erases the record, its deadlines, its lease row and its `xsm_transitions` rows in one
 /// transaction.
 ///
+/// # Versions
+///
+/// The `version` column is a 32-bit `INTEGER` (the Python layout): a key that has been saved
+/// 2 147 483 647 times cannot be saved again. The save fails with [`StoreError::Other`]
+/// (`PostgreSQL rejected the value`, SQLSTATE 22003, the integer is out of range) instead of
+/// wrapping around, and an `expected_version` beyond the column is a conflict. To start over,
+/// `delete` or `forget` the key and save it afresh.
+///
 /// # Blocking, and where to call it from
 ///
 /// The [`StateStore`] trait is synchronous and sqlx is not, so every call blocks the calling
-/// thread on a runtime (`block_on`). **Do not call a method, drop a lock guard or drop the store
-/// from inside an async task that runs on that same runtime**: from async code use
-/// `tokio::task::spawn_blocking`, like for the other stores.
+/// thread on a runtime (`block_on`). **Do not call a method or drop the store from inside an
+/// async task that runs on that same runtime**: from async code use
+/// `tokio::task::spawn_blocking`, like for the other stores. Dropping a lock guard is the one
+/// exception: inside a runtime the lease is released in the background instead of blocking.
 ///
 /// * [`connect`](Self::connect) builds its own small multi-thread runtime and pool; use it from
 ///   ordinary threads (or `spawn_blocking`).
@@ -351,13 +360,31 @@ impl LockGuard for PostgresLockGuard {
 
 impl Drop for PostgresLockGuard {
     fn drop(&mut self) {
+        // Inside an async context `Handle::block_on` panics ("cannot start a runtime from within
+        // a runtime"), and a destructor must never panic: there the release is handed to the
+        // store's runtime and runs in the background. On a plain thread it is awaited, so the
+        // lease is gone when the guard is.
+        if Handle::try_current().is_ok() {
+            let (pool, source) = (self.db.pool().clone(), self.source.clone());
+            let (key, owner) = (self.key.clone(), self.owner.clone());
+            self.db.spawn(async move {
+                if let Err(fail) = ops::unlock(&pool, &source, &key, &owner).await {
+                    warn_unreleased(&key, &fail.into_store(&key));
+                }
+            });
+            return;
+        }
         let released = self
             .db
             .run(&self.key, ops::unlock(self.db.pool(), &self.source, &self.key, &self.owner));
         if let Err(error) = released {
-            // The lease then expires on its own after `lock_ttl`; the guarded block's result is
-            // what the caller must see.
-            tracing::warn!(key = %self.key, %error, "could not release the PostgreSQL lock lease");
+            warn_unreleased(&self.key, &error);
         }
     }
+}
+
+/// The lease then expires on its own after `lock_ttl`; the guarded block's result is what the
+/// caller must see.
+fn warn_unreleased(key: &str, error: &StoreError) {
+    tracing::warn!(key = %key, %error, "could not release the PostgreSQL lock lease");
 }

@@ -1,6 +1,7 @@
 //! The circuit-breaker chart and the logic it names.
 
-use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use serde_json::{Value, json};
 use xstate_core::{ActionScope, DynContext, MachineLogic};
@@ -88,18 +89,36 @@ fn zero(key: &'static str) -> CounterAction {
 /// The logic [`CIRCUIT_BREAKER_CONFIG`] needs, with the cooldown bound to `cooldown_ms`.
 #[must_use]
 pub fn circuit_breaker_logic(cooldown_ms: f64) -> MachineLogic<DynContext> {
+    breaker_logic(cooldown_ms, &Arc::new(AtomicU64::new(0)))
+}
+
+/// [`circuit_breaker_logic`] whose `probeAvailable` guard also honours `released`: probe slots
+/// given back (a probe that ended in a way the breaker does not count) in the current
+/// half-open window. The chart is untouched; the count lives outside the context because a
+/// release happens outside any transition. `resetProbes` zeroes it on every half-open entry.
+pub(super) fn breaker_logic(
+    cooldown_ms: f64,
+    released: &Arc<AtomicU64>,
+) -> MachineLogic<DynContext> {
+    let (zero_released, guard_released) = (Arc::clone(released), Arc::clone(released));
     MachineLogic::dynamic()
         .action("countFailure", bump("failures"))
         .action("resetFailures", zero("failures"))
         .action("countOpen", bump("opened_count"))
-        .action("resetProbes", zero("half_open_calls"))
+        .action("resetProbes", move |scope: &mut ActionScope<'_, DynContext>| {
+            set_key(scope.context, "half_open_calls", Value::from(0));
+            zero_released.store(0, Ordering::Relaxed);
+            Ok(())
+        })
         .action("countProbe", bump("half_open_calls"))
         // +1: this FAILURE is being counted by the same transition.
         .guard("thresholdReached", |ctx, _event, _params| {
             Ok(counter(ctx, "failures") + 1 >= counter(ctx, "failure_threshold"))
         })
-        .guard("probeAvailable", |ctx, _event, _params| {
-            Ok(counter(ctx, "half_open_calls") < counter(ctx, "half_open_max_calls"))
+        .guard("probeAvailable", move |ctx, _event, _params| {
+            let in_flight = counter(ctx, "half_open_calls")
+                .saturating_sub(guard_released.load(Ordering::Relaxed));
+            Ok(in_flight < counter(ctx, "half_open_max_calls"))
         })
         .delay("cooldown", cooldown_ms)
 }

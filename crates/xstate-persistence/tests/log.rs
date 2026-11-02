@@ -227,6 +227,22 @@ fn jsonl_writes_one_sorted_key_line_per_record_and_survives_reopen() {
     assert_eq!(reopened.read("order:1", 0, 10).unwrap().len(), 2);
 }
 
+#[cfg(unix)]
+#[test]
+fn jsonl_files_are_created_private_even_under_a_permissive_umask() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.jsonl");
+    let log = JsonLinesLog::new(&path).unwrap();
+    log.append(&record("a", 1, 1.0)).unwrap();
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&path), 0o600, "the audit trail is not world-readable");
+    // a purge rewrites through a temporary file that is private as well
+    log.append(&record("a", 2, 500.0)).unwrap();
+    assert_eq!(log.purge_older_than(100.0).unwrap(), 1);
+    assert_eq!(mode(&path), 0o600);
+}
+
 #[test]
 fn jsonl_reads_python_files_with_bom_and_crlf() {
     let dir = tempfile::tempdir().unwrap();

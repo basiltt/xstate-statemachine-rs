@@ -18,7 +18,10 @@ migration story and the main differentiator over a greenfield Rust statechart cr
 
 ## Decision
 
-1. The Rust snapshot type is **layout v4, byte-for-byte compatible** with Python, including:
+1. The Rust snapshot type is **layout v4, compatible with Python's**: the same fields in the same
+   order with the same values, so that `Snapshot::to_json()` equals the text of Python's
+   `get_snapshot()` once the insignificant whitespace is removed (Python indents by 2, Rust writes
+   compact JSON). The structure hash is byte-identical. Compatibility includes:
    - `machine_hash`: first 16 hex chars of SHA-256 over the canonical, sorted-key JSON of the
      per-node structural shape, exactly as `persistence/snapshot.py::structure_hash` defines it.
    - `state_ids` sorted, `configuration` sorted, `taken_at` as a float epoch, status strings.
@@ -26,8 +29,10 @@ migration story and the main differentiator over a greenfield Rust statechart cr
    markers so a single database can serve both runtimes.
 3. Envelope, inspector protocol and AsyncAPI output are byte-compatible as well.
 4. Python-generated fixtures (`conformance/cases/*.json` → `expected.python.snapshot`,
-   `expected.python.machine_hash`) are the test vectors; the Rust `machine_hash` and snapshot
-   serializer must reproduce them exactly.
+   `expected.python.snapshot_text`, `expected.python.machine_hash`) are the test vectors; the Rust
+   `machine_hash` must reproduce them exactly, the snapshot must equal `snapshot` as a value and
+   `snapshot_text` as text (whitespace removed, volatile wall-clock fields zeroed on both sides), and
+   the Python text must restore through `from_snapshot`.
 5. Event-name aliasing (ADR-0001) is applied when *restoring* a snapshot whose queued events use
    v4 names, so old snapshots stay loadable.
 

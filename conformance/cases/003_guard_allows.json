@@ -176,7 +176,8 @@
         "history": {},
         "actors": {},
         "system": {}
-      }
+      },
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"door\",\n  \"machine_hash\": \"7084a3dc8a8e6882\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"running\",\n  \"context\": {\n    \"opens\": 1,\n    \"locked\": false\n  },\n  \"state_ids\": [\n    \"door.closed\"\n  ],\n  \"value\": \"closed\",\n  \"configuration\": [\n    \"door\",\n    \"door.closed\"\n  ],\n  \"output\": null,\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
     }
   }
 }

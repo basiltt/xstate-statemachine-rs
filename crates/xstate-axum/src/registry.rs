@@ -24,16 +24,19 @@ use xstate_persistence::{
     DEFAULT_MAX_SNAPSHOT_BYTES, InboxStore, PersistedOptions, StateStore, StoreError,
 };
 
-use crate::auth::{AuthRequest, Authorizer, PrincipalResolver, allow_all};
+use crate::auth::{AuthRequest, Authorizer, PrincipalResolver};
 use crate::body::DEFAULT_BODY_TIMEOUT;
 use crate::fanout::Subscribers;
 use crate::problem::ApiError;
 use crate::receipt::ContextSerializer;
 
+mod connections;
 mod cycle;
 mod probes;
 mod scanner;
 
+use connections::Connections;
+pub use connections::{ConnectionRefused, ConnectionSlot, DEFAULT_MAX_CONNECTIONS};
 pub use cycle::{SendOutcome, SendRequest};
 pub use probes::{HEALTH_PATH, READY_PATH};
 pub use scanner::NowFn;
@@ -48,8 +51,6 @@ pub type OptionsFactory = Arc<dyn Fn() -> PersistedOptions<Value> + Send + Sync>
 
 /// Builds an observer for one interpreter, given its store key (the inspector uses it).
 pub type ObserverFactory = Arc<dyn Fn(&str) -> Arc<dyn Observer<Value>> + Send + Sync>;
-
-type Topic = (String, String);
 
 /// Configuration errors (raised while building, never per request).
 #[derive(Debug, thiserror::Error)]
@@ -86,10 +87,21 @@ pub enum RegistryError {
     Engine(#[from] xstate_core::Error),
 }
 
-/// How a machine is exposed.
+/// How a machine is exposed. There is deliberately no `Default`: the authorizer is always
+/// chosen explicitly (Python requires `authorize=`, X0.1), so a machine is never open by
+/// accident. Build with [`RegisterOptions::new`]; pass [`allow_all`](crate::allow_all) to opt
+/// out of authorization knowingly.
+///
+/// ```
+/// use xstate_axum::{RegisterOptions, allow_all};
+/// // allow_all: every client may read and drive every instance (development only).
+/// let options = RegisterOptions::new(allow_all()).strict(true);
+/// assert!(options.strict);
+/// ```
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct RegisterOptions {
-    /// Who may read and drive instances (default [`allow_all`], which warns once).
+    /// Who may read and drive instances.
     pub authorize: Arc<dyn Authorizer>,
     /// When set, bodies include `context` (after dropping `_xsm_` keys); otherwise state only.
     pub context_serializer: Option<ContextSerializer>,
@@ -97,9 +109,26 @@ pub struct RegisterOptions {
     pub strict: bool,
 }
 
-impl Default for RegisterOptions {
-    fn default() -> Self {
-        Self { authorize: allow_all(), context_serializer: None, strict: false }
+impl RegisterOptions {
+    /// Options with `authorize` as the machine's authorizer, no context in bodies and
+    /// `strict` off.
+    #[must_use]
+    pub fn new(authorize: Arc<dyn Authorizer>) -> Self {
+        Self { authorize, context_serializer: None, strict: false }
+    }
+
+    /// Include `context` in bodies, rendered by `serializer` (after dropping `_xsm_` keys).
+    #[must_use]
+    pub fn context_serializer(mut self, serializer: ContextSerializer) -> Self {
+        self.context_serializer = Some(serializer);
+        self
+    }
+
+    /// Refuse events no state declares with 422 `Unknown event` (Python `strict=True`).
+    #[must_use]
+    pub fn strict(mut self, strict: bool) -> Self {
+        self.strict = strict;
+        self
     }
 }
 
@@ -133,6 +162,7 @@ pub(crate) struct Settings {
     pub(crate) body_timeout: Duration,
     pub(crate) heartbeat: Duration,
     pub(crate) max_connections_per_key: usize,
+    pub(crate) max_connections: usize,
     pub(crate) drain_timeout: Duration,
     pub(crate) allowed_origins: HashSet<String>,
     pub(crate) timers: Option<Duration>,
@@ -213,6 +243,14 @@ impl RegistryBuilder {
         self
     }
 
+    /// Concurrent SSE + WebSocket clients across the whole registry (default
+    /// [`DEFAULT_MAX_CONNECTIONS`]; 429 / 1013 beyond), enforced alongside the per-key cap.
+    #[must_use]
+    pub fn max_connections(mut self, n: usize) -> Self {
+        self.settings.max_connections = n;
+        self
+    }
+
     /// Upper bound on [`StatechartRegistry::shutdown`] (default 10 s).
     #[must_use]
     pub fn drain_timeout(mut self, timeout: Duration) -> Self {
@@ -273,8 +311,8 @@ impl RegistryBuilder {
     /// Validate the settings and build the registry.
     ///
     /// # Errors
-    /// [`RegistryError::InvalidSetting`] for a zero heartbeat / body timeout / connection cap,
-    /// or an inbox without a principal resolver.
+    /// [`RegistryError::InvalidSetting`] for a zero heartbeat / body timeout / body limit /
+    /// connection cap, or an inbox without a principal resolver.
     pub fn build(self) -> Result<Arc<StatechartRegistry>, RegistryError> {
         let s = &self.settings;
         let bad = |m: &str| Err(RegistryError::InvalidSetting(m.to_owned()));
@@ -284,8 +322,14 @@ impl RegistryBuilder {
         if s.body_timeout.is_zero() {
             return bad("body_timeout must be > 0");
         }
+        if s.max_body_bytes == 0 {
+            return bad("max_body_bytes must be >= 1");
+        }
         if s.max_connections_per_key < 1 {
             return bad("max_connections_per_key must be >= 1");
+        }
+        if s.max_connections < 1 {
+            return bad("max_connections must be >= 1");
         }
         if self.settings.timers.is_some_and(|t| t.is_zero()) {
             return bad("the timer scan interval must be > 0");
@@ -303,7 +347,7 @@ impl RegistryBuilder {
             regs: Arc::new(self.regs),
             observers: RwLock::new(Vec::new()),
             subscribers: Arc::new(Subscribers::new()),
-            connections: Mutex::new(HashMap::new()),
+            connections: Mutex::new(Connections::default()),
             started: AtomicBool::new(false),
             draining: AtomicBool::new(false),
             scanner: Mutex::new(None),
@@ -323,7 +367,7 @@ pub struct StatechartRegistry {
     pub(crate) regs: Arc<HashMap<String, Arc<Registration>>>,
     observers: RwLock<Vec<ObserverFactory>>,
     subscribers: Arc<Subscribers>,
-    connections: Mutex<HashMap<Topic, usize>>,
+    connections: Mutex<Connections>,
     started: AtomicBool,
     draining: AtomicBool,
     scanner: Mutex<Option<scanner::ScannerHandle>>,
@@ -358,6 +402,7 @@ impl StatechartRegistry {
                 body_timeout: DEFAULT_BODY_TIMEOUT,
                 heartbeat: Duration::from_secs(15),
                 max_connections_per_key: 16,
+                max_connections: DEFAULT_MAX_CONNECTIONS,
                 drain_timeout: Duration::from_secs(10),
                 allowed_origins: HashSet::new(),
                 timers: None,
@@ -477,61 +522,5 @@ impl StatechartRegistry {
         };
         let bare = origin.split_once("://").map_or(origin, |(_, rest)| rest);
         !host.is_empty() && bare.trim_end_matches('/') == host
-    }
-
-    /// Reserve a stream slot for an instance; `None` when the per-key limit is reached or the
-    /// registry is draining. The slot is released when the returned guard drops.
-    #[must_use]
-    pub fn try_open_connection(self: &Arc<Self>, name: &str, key: &str) -> Option<ConnectionSlot> {
-        let topic = (name.to_owned(), key.to_owned());
-        let mut conns = relock(&self.connections);
-        let n = conns.get(&topic).copied().unwrap_or(0);
-        if n >= self.settings.max_connections_per_key || self.is_draining() {
-            return None;
-        }
-        conns.insert(topic.clone(), n + 1);
-        Some(ConnectionSlot { registry: Arc::clone(self), topic })
-    }
-
-    fn close_connection(&self, topic: &Topic) {
-        let mut conns = relock(&self.connections);
-        match conns.get(topic).copied() {
-            Some(n) if n > 1 => {
-                conns.insert(topic.clone(), n - 1);
-            }
-            _ => {
-                conns.remove(topic);
-            }
-        }
-    }
-
-    /// Open stream connections of one instance, or of every instance when `topic` is `None`.
-    #[must_use]
-    pub fn connections(&self, topic: Option<(&str, &str)>) -> usize {
-        let conns = relock(&self.connections);
-        match topic {
-            None => conns.values().sum(),
-            Some((name, key)) => {
-                conns.get(&(name.to_owned(), key.to_owned())).copied().unwrap_or(0)
-            }
-        }
-    }
-}
-
-/// A reserved stream slot (SSE or WebSocket); released on drop.
-pub struct ConnectionSlot {
-    registry: Arc<StatechartRegistry>,
-    topic: Topic,
-}
-
-impl fmt::Debug for ConnectionSlot {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ConnectionSlot").field("topic", &self.topic).finish_non_exhaustive()
-    }
-}
-
-impl Drop for ConnectionSlot {
-    fn drop(&mut self) {
-        self.registry.close_connection(&self.topic);
     }
 }

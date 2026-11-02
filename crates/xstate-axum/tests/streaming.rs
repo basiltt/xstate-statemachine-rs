@@ -10,7 +10,7 @@ use common::{
 };
 use serde_json::json;
 use tokio::io::AsyncWriteExt;
-use xstate_axum::{WS_MESSAGE_TOO_BIG, WS_POLICY_VIOLATION};
+use xstate_axum::{WS_GOING_AWAY, WS_MESSAGE_TOO_BIG, WS_POLICY_VIOLATION, WS_TRY_AGAIN_LATER};
 
 const WAIT: Duration = Duration::from_secs(5);
 
@@ -124,6 +124,33 @@ async fn websocket_refuses_cross_origin_with_1008() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn registry_wide_connection_cap_refuses_sse_and_websocket() {
+    let reg = registry(|b| b.max_connections(1));
+    let app = app(&reg);
+    let addr = serve(app.clone()).await;
+    let mut first = connect(addr).await;
+    first
+        .write_all(b"GET /order/c1/stream HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut buf = String::new();
+    read_until(&mut first, &mut buf, "event: snapshot", WAIT).await;
+    let other_key = get(&app, "/order/c2/stream").await;
+    assert_eq!(
+        other_key.json(),
+        json!({"type": "about:blank", "title": "Too many connections", "status": 429})
+    );
+    let mut ws = connect(addr).await;
+    assert!(ws_handshake(&mut ws, "/order/c3/ws", &[]).await.contains("101"));
+    assert_eq!(ws_read_close(&mut ws).await, WS_TRY_AGAIN_LATER);
+    drop(first);
+    eventually(WAIT, || reg.connections(None) == 0).await;
+    let mut again = connect(addr).await;
+    assert!(ws_handshake(&mut again, "/order/c3/ws", &[]).await.contains("101"));
+    assert_eq!(ws_read_json(&mut again).await["kind"], "snapshot", "a freed slot is reusable");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shutdown_ends_streams_and_answers_503() {
     let reg = registry(|b| b);
     reg.start().unwrap_or_else(|e| panic!("{e}"));
@@ -137,9 +164,14 @@ async fn shutdown_ends_streams_and_answers_503() {
     let mut buf = String::new();
     read_until(&mut stream, &mut buf, "event: snapshot", WAIT).await;
     assert_eq!(get(&app, "/_xsm/ready").await.status, 200);
+    let mut ws = connect(addr).await;
+    assert!(ws_handshake(&mut ws, "/order/d2/ws", &[]).await.contains("101"));
+    assert_eq!(ws_read_json(&mut ws).await["kind"], "snapshot");
 
     reg.shutdown().await;
     read_until(&mut stream, &mut buf, "0\r\n\r\n", WAIT).await;
+    assert_eq!(ws_read_close(&mut ws).await, WS_GOING_AWAY);
+    assert_eq!(reg.connections(None), 0, "shutdown returns once every stream ended");
     let refused = get(&app, "/order/d1/stream").await;
     assert_eq!(
         (refused.status.as_u16(), refused.json()["title"].clone()),

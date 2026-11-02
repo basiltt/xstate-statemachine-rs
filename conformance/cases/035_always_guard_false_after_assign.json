@@ -132,7 +132,8 @@
         "history": {},
         "actors": {},
         "system": {}
-      }
+      },
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"m\",\n  \"machine_hash\": \"e940454ba5b1e7da\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"running\",\n  \"context\": {\n    \"n\": 3\n  },\n  \"state_ids\": [\n    \"m.counting\"\n  ],\n  \"value\": \"counting\",\n  \"configuration\": [\n    \"m\",\n    \"m.counting\"\n  ],\n  \"output\": null,\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
     }
   }
 }

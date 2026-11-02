@@ -43,6 +43,9 @@ pub const DEFAULT_MAX_ATTEMPTS: u64 = 5;
 pub const DEFAULT_MAX_IN_FLIGHT: usize = 16;
 /// Upper bound on deliveries pulled into one batch.
 pub const DEFAULT_MAX_BATCH: usize = 1000;
+/// Records the dispatcher's default in-memory dead-letter store keeps (oldest evicted first);
+/// pass a durable sink to [`InboundDispatcher::dead_letters`] to keep everything.
+pub const DEFAULT_DEAD_LETTER_CAPACITY: usize = 10_000;
 /// Envelope ids whose failure count the dispatcher remembers (least recently used dropped).
 const ATTEMPTS_MEMORY: usize = 10_000;
 
@@ -231,7 +234,7 @@ impl Attempts {
     }
 
     fn bump(&mut self, id: &str, floor: u64) -> u64 {
-        let n = floor.max(self.get(id)) + 1;
+        let n = floor.max(self.get(id)).saturating_add(1);
         self.tick += 1;
         if let Some((_, stamp)) = self.counts.insert(id.to_owned(), (n, self.tick)) {
             self.order.remove(&stamp);
@@ -295,7 +298,9 @@ impl<H: EnvelopeHandler> InboundDispatcher<H> {
             max_in_flight: DEFAULT_MAX_IN_FLIGHT,
             max_attempts: DEFAULT_MAX_ATTEMPTS,
             max_batch: DEFAULT_MAX_BATCH,
-            dead_letters: Arc::new(MemoryDeadLetterStore::new()),
+            dead_letters: Arc::new(MemoryDeadLetterStore::with_capacity(
+                DEFAULT_DEAD_LETTER_CAPACITY,
+            )),
             event_type: None,
             key_for: Box::new(|env, _| env.subject.clone().unwrap_or_else(|| "None".into())),
             dedup_key: Box::new(|env| Some(env.id.clone())),
@@ -343,13 +348,19 @@ impl<H: EnvelopeHandler> InboundDispatcher<H> {
     }
 
     /// Deliveries pulled into one batch.
-    #[must_use]
-    pub fn max_batch(mut self, n: usize) -> Self {
-        self.max_batch = n.max(1);
-        self
+    ///
+    /// # Errors
+    /// [`EdaError::InvalidArgument`] for 0.
+    pub fn max_batch(mut self, n: usize) -> Result<Self> {
+        if n < 1 {
+            return Err(EdaError::InvalidArgument("max_batch must be >= 1".into()));
+        }
+        self.max_batch = n;
+        Ok(self)
     }
 
-    /// Where dead letters go (default an in-memory store private to the dispatcher).
+    /// Where dead letters go (default an in-memory store private to the dispatcher, capped at
+    /// [`DEFAULT_DEAD_LETTER_CAPACITY`] records).
     #[must_use]
     pub fn dead_letters(mut self, sink: Arc<dyn DeadLetterSink>) -> Self {
         self.dead_letters = sink;
@@ -419,5 +430,18 @@ impl<H: EnvelopeHandler> InboundDispatcher<H> {
 
     fn forget(&self, envelope: &Envelope) {
         self.attempts().forget(&envelope.id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_attempt_count_saturates_instead_of_overflowing() {
+        let mut attempts = Attempts::default();
+        assert_eq!(attempts.bump("a", u64::MAX), u64::MAX);
+        assert_eq!(attempts.bump("a", 0), u64::MAX, "the stored count saturates too");
+        assert_eq!(attempts.bump("b", 4), 5);
     }
 }

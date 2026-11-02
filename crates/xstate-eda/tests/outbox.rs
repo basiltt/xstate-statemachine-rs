@@ -78,7 +78,8 @@ fn relay_publishes_in_order_and_marks_sent() {
         for n in 0..3 {
             store.add("orders", &env(n)).unwrap();
         }
-        let relay = OutboxRelay::new(Arc::clone(&store), SyncFakeBrokerAdapter::new()).batch(2);
+        let relay =
+            OutboxRelay::new(Arc::clone(&store), SyncFakeBrokerAdapter::new()).batch(2).unwrap();
         assert_eq!(relay.relay_once_sync().unwrap(), 2);
         assert_eq!(relay.relay_once_sync().unwrap(), 1);
         assert_eq!(relay.relay_once_sync().unwrap(), 0);
@@ -299,4 +300,74 @@ fn plugin_inside_persisted_publishes_after_commit() {
     );
     assert!(res.is_err());
     assert_eq!(broker.published_on("events").len(), 2);
+}
+
+#[test]
+fn a_zero_relay_batch_is_refused() {
+    let store: Arc<dyn OutboxStore> = Arc::new(MemoryOutboxStore::new());
+    let relay = OutboxRelay::new(store, SyncFakeBrokerAdapter::new());
+    assert!(matches!(relay.batch(0), Err(EdaError::InvalidArgument(_))));
+}
+
+fn three_states() -> Machine {
+    Machine::from_value(&json!({
+        "id": "m", "initial": "a", "context": {"n": 1},
+        "states": {
+            "a": {"tags": ["publish"], "on": {"GO": "b"}},
+            "b": {"tags": ["publish"], "on": {"GO": "c"}},
+            "c": {"tags": ["publish"]},
+        }
+    }))
+    .unwrap()
+}
+
+#[test]
+fn the_plugin_buffer_is_bounded_and_counts_what_it_drops() {
+    assert!(matches!(OutboxPlugin::new().max_buffered(0), Err(EdaError::InvalidArgument(_))));
+    let plugin = Arc::new(OutboxPlugin::new().max_buffered(2).unwrap());
+    let mut interp = SyncInterpreter::new(three_states(), MachineLogic::dynamic());
+    interp.observe(plugin.clone() as Arc<dyn Observer<Value>>);
+    interp.start().unwrap();
+    interp.send("GO").unwrap();
+    interp.send("GO").unwrap();
+    assert_eq!(plugin.buffered(), 2);
+    assert_eq!(plugin.dropped(), 1, "the third envelope did not fit");
+    let kept: Vec<String> = plugin.drain().into_iter().map(|e| e.ty).collect();
+    assert_eq!(kept, ["xsm.m.transition.a", "xsm.m.transition.b"], "the oldest are kept");
+    // draining makes room again
+    assert_eq!(plugin.dropped(), 1);
+}
+
+#[test]
+fn a_malformed_publish_spec_is_reported_not_swallowed() {
+    let machine = Machine::from_value(&json!({
+        "id": "m", "initial": "a", "context": {},
+        "states": {
+            "a": {"on": {"GO": {"target": "b", "meta": {"publish": 5}}}},
+            "b": {},
+        }
+    }))
+    .unwrap();
+    let plugin = Arc::new(OutboxPlugin::new());
+    let mut interp = SyncInterpreter::new(machine, MachineLogic::dynamic());
+    interp.observe(plugin.clone() as Arc<dyn Observer<Value>>);
+    interp.start().unwrap();
+    interp.send("GO").unwrap();
+    let failures = plugin.failures();
+    assert_eq!(failures.len(), 1, "reported once, not once per step: {failures:?}");
+    assert!(failures[0].reason.contains("meta.publish"), "{failures:?}");
+    assert!(matches!(plugin.try_drain(), Err(EdaError::InvalidSpec(_))));
+    assert!(plugin.drain().is_empty(), "and nothing was published in its place");
+    assert_eq!(plugin.take_failures().len(), 1);
+    assert_eq!(plugin.failures().len(), 0);
+}
+
+#[test]
+fn a_clean_chart_drains_without_failures() {
+    let plugin = Arc::new(OutboxPlugin::new());
+    let mut interp = SyncInterpreter::new(three_states(), MachineLogic::dynamic());
+    interp.observe(plugin.clone() as Arc<dyn Observer<Value>>);
+    interp.start().unwrap();
+    assert_eq!(plugin.try_drain().unwrap().len(), 1);
+    assert_eq!(plugin.failures().len(), 0);
 }

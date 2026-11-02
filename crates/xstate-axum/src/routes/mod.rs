@@ -120,6 +120,50 @@ fn routable(event: &str) -> bool {
     !event.starts_with([':', '*']) && !event.contains(['/', '{', '}'])
 }
 
+/// Title of the 403 refusing a gated event anywhere but its dedicated route.
+pub(crate) const GATED_TITLE: &str = "Use this event's dedicated route";
+
+/// The `/send` and WebSocket rule: an event must be declared by the machine (any event is
+/// accepted when the machine declares none).
+pub(crate) fn is_declared(events: &[String], event: &str) -> bool {
+    events.is_empty() || events.iter().any(|e| e == event)
+}
+
+/// A prefix axum can mount without panicking: `/`-led, no braces (path parameters), no
+/// whitespace or control characters, no segment starting with `:` or `*`.
+fn valid_prefix(prefix: &str) -> bool {
+    prefix.starts_with('/')
+        && !prefix.contains(['{', '}'])
+        && !prefix.chars().any(|c| c.is_whitespace() || c.is_control())
+        && !prefix.split('/').any(|segment| segment.starts_with([':', '*']))
+}
+
+/// Refuse gates naming events the machine does not declare (battle #276-a).
+fn check_gates(
+    name: &str,
+    events: &[String],
+    gates: &HashMap<String, Arc<dyn EventGate>>,
+) -> Result<(), RegistryError> {
+    let mut unknown: Vec<String> = gates.keys().filter(|e| !events.contains(e)).cloned().collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort();
+    Err(RegistryError::UnknownGatedEvents { machine: name.to_owned(), events: unknown })
+}
+
+/// The validated mount prefix (default `/{name}`), without a trailing `/`.
+fn mount_base(prefix: Option<&str>, name: &str) -> Result<String, RegistryError> {
+    let base = prefix.map_or_else(|| format!("/{name}"), str::to_owned);
+    if !valid_prefix(&base) {
+        return Err(RegistryError::InvalidSetting(format!(
+            "router prefix {base:?} must start with '/' and contain no braces, whitespace or \
+             ':' / '*' segments"
+        )));
+    }
+    Ok(base.trim_end_matches('/').to_owned())
+}
+
 /// Build the routes of machine `name`:
 ///
 /// | Method | Path | |
@@ -137,7 +181,9 @@ fn routable(event: &str) -> bool {
 ///
 /// # Errors
 /// [`RegistryError::UnknownMachine`]; [`RegistryError::UnknownGatedEvents`] when a gate names
-/// an event the machine does not declare (battle #276-a: silent acceptance is a bug).
+/// an event the machine does not declare (battle #276-a: silent acceptance is a bug);
+/// [`RegistryError::InvalidSetting`] for a prefix that is not `/`-led or contains braces,
+/// whitespace or a `:` / `*` segment (axum would panic on it).
 pub fn router(
     registry: &Arc<StatechartRegistry>,
     name: &str,
@@ -149,17 +195,8 @@ pub fn router(
         .cloned()
         .ok_or_else(|| RegistryError::UnknownMachine(name.to_owned()))?;
     let events = declared_events(&reg.machine);
-    let mut unknown: Vec<String> =
-        options.per_event_gates.keys().filter(|e| !events.contains(e)).cloned().collect();
-    if !unknown.is_empty() {
-        unknown.sort();
-        return Err(RegistryError::UnknownGatedEvents {
-            machine: name.to_owned(),
-            events: unknown,
-        });
-    }
-    let base = options.prefix.clone().unwrap_or_else(|| format!("/{name}"));
-    let base = base.trim_end_matches('/').to_owned();
+    check_gates(name, &events, &options.per_event_gates)?;
+    let base = mount_base(options.prefix.as_deref(), name)?;
     let ctx = Arc::new(RouteCtx {
         registry: Arc::clone(registry),
         name: name.to_owned(),
@@ -186,4 +223,27 @@ pub fn router(
         router = router.route(&format!("{base}/{{id}}/diagram.mmd"), get(diagram::diagram));
     }
     Ok(router.with_state(ctx))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefix_rules() {
+        for good in ["/", "/orders", "/api/v1/orders/", "/a-b_c.d~e"] {
+            assert!(valid_prefix(good), "{good:?}");
+        }
+        for bad in ["", "orders", "/a/{id}", "/a}", "/a b", "/a\tb", "/a/:x", "/a/*rest"] {
+            assert!(!valid_prefix(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn declared_rule() {
+        let events = vec!["GO".to_owned()];
+        assert!(is_declared(&events, "GO"));
+        assert!(!is_declared(&events, "STOP"));
+        assert!(is_declared(&[], "ANY"), "a machine declaring no events accepts any");
+    }
 }

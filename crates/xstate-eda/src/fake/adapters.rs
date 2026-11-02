@@ -61,8 +61,10 @@ macro_rules! constructors {
 constructors!(FakeBrokerAdapter);
 constructors!(SyncFakeBrokerAdapter);
 
+/// The instant `timeout` from now; `None` (no deadline) for none given or one too far away to
+/// represent.
 fn deadline(timeout: Option<Duration>) -> Option<Instant> {
-    timeout.map(|t| Instant::now() + t)
+    timeout.and_then(|t| Instant::now().checked_add(t))
 }
 
 impl BrokerAdapter for FakeBrokerAdapter {
@@ -147,7 +149,9 @@ struct Sleep {
 
 impl Sleep {
     fn new(duration: Duration) -> Self {
-        Self { deadline: Instant::now() + duration, waker: None }
+        // a duration too long to represent is clamped: the sleep ends at once, it never panics
+        let now = Instant::now();
+        Self { deadline: now.checked_add(duration).unwrap_or(now), waker: None }
     }
 }
 

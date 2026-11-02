@@ -7,7 +7,9 @@ Two oracles are consulted:
   This is the semantic oracle the Rust engine must match (ADR-0001).
 * **python** — the Python ``xstate-statemachine`` library. Its transition observations are
   recorded for comparison, and its ``machine_hash`` and end-of-run snapshot are the
-  byte-compatibility vectors for the Rust snapshot format (ADR-0003).
+  byte-compatibility vectors for the Rust snapshot format (ADR-0003). The snapshot is
+  recorded both parsed (``snapshot``) and as the exact ``get_snapshot()`` text
+  (``snapshot_text``, volatile fields zeroed).
 
 Where the two oracles disagree the case must carry a ``divergence`` object explaining why;
 otherwise the run fails. ``divergences.generated.md`` is rewritten with the current list.
@@ -26,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +41,11 @@ ORACLE_JS = HERE / "xstate_oracle" / "oracle.mjs"
 DIVERGENCES_MD = CONFORMANCE / "divergences.generated.md"
 
 OBSERVATION_KEYS = ("state_ids", "context", "actions", "status")
+
+# Volatile wall-clock fields. They are masked in the *text* of the snapshot (not only in the
+# parsed object) so that the recorded `snapshot_text` is reproducible and a Rust test can
+# compare text with text.
+_VOLATILE_NUMBER = re.compile(r'("(?:taken_at|due_at_wall)": )[-+0-9.eE]+|("(?:taken_at|due_at_wall)": )null')
 
 
 # --------------------------------------------------------------------------- oracles
@@ -121,11 +129,16 @@ def run_python_oracle(case: dict[str, Any]) -> dict[str, Any]:
             raise SystemExit(f"{case['name']}: unknown step {step!r}")
         steps.append(observe())
 
-    snapshot = json.loads(interp.get_snapshot())
-    # Volatile wall-clock fields are zeroed so the fixture is reproducible.
-    snapshot["taken_at"] = 0.0
-    for d in snapshot.get("deadlines", []):
-        d["due_at_wall"] = 0.0
+    # The exact text `get_snapshot()` returned (indent=2, ASCII-escaped), with the volatile
+    # wall-clock fields zeroed so the fixture is reproducible.
+    snapshot_text = _VOLATILE_NUMBER.sub(
+        lambda m: (m.group(1) or m.group(2)) + "0.0", interp.get_snapshot()
+    )
+    snapshot = json.loads(snapshot_text)
+    if snapshot.get("taken_at") != 0.0 or any(
+        d.get("due_at_wall") != 0.0 for d in snapshot.get("deadlines", [])
+    ):
+        raise SystemExit(f"{case['name']}: volatile snapshot fields were not masked in the text")
 
     return {
         "oracle": {"name": "xstate-statemachine", "version": xsm.__version__},
@@ -133,6 +146,7 @@ def run_python_oracle(case: dict[str, Any]) -> dict[str, Any]:
         "steps": steps,
         "machine_hash": structure_hash(machine),
         "snapshot": snapshot,
+        "snapshot_text": snapshot_text,
     }
 
 

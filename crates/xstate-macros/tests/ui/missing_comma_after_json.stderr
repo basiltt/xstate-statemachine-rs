@@ -1,0 +1,5 @@
+error: expected `,` after JSON value
+ --> tests/ui/missing_comma_after_json.rs:8:9
+  |
+8 |         states: {
+  |         ^^^^^^

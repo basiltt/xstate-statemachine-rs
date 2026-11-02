@@ -6,10 +6,10 @@ Python builders emit, so charts can be inspected, diffed and edited with the sam
 
 | Module | Pattern | What it gives you |
 |---|---|---|
-| `retry` | `RetryPolicy` | exponential backoff with jitter as named delay / guard / actions |
-| `circuit_breaker` | `CircuitBreaker` | Nygard's breaker as a three-state chart on a `SyncInterpreter` |
+| `retry` | `RetryPolicy` | exponential backoff with jitter as named delay / guard / actions; decorrelated jitter keeps the previous delay in the context under `<attempt_key>_delay_ms` |
+| `circuit_breaker` | `CircuitBreaker` | Nygard's breaker as a three-state chart on a `SyncInterpreter`, applied with `wrap(breaker, f)` (there is no decorator) |
 | `saga` | `SagaBuilder` | orchestrated sagas emitted as plain XState machine JSON |
-| `choreography` | `ChoreographyRouter` | an inbound dispatcher over a `type -> machine` map |
+| `choreography` | `ChoreographyRouter` | an inbound dispatcher over a `type -> machine` map (blocking brokers only) |
 
 Status: 0.1.0; goldens generated from the Python library pin the saga and circuit-breaker charts.
 

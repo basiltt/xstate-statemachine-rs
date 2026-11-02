@@ -113,12 +113,12 @@ storage level; differences in engine semantics are in
 | Async actors | Yes | `xstate-tokio`: bounded mailbox with overflow policies, `after` on `tokio::time`, async services, child machines, `sendTo` / `sendParent` |
 | Persistence stores | Yes | Memory, file, SQLite, Redis, PostgreSQL (the SQLAlchemy layout; no MySQL, Django or other ORM stores) |
 | Locks, timers, inbox, log | Yes | Optimistic and pessimistic locking, `persisted`, durable deadlines and scanner, idempotency inbox, transition log, snapshot migrations, `adopt` |
-| EDA: envelope, dispatcher, outbox, DLQ, AsyncAPI | Yes | Byte-identical envelopes, per-subject ordering, retries, replay, relay with claim leases, AsyncAPI 3.0 |
+| EDA: envelope, dispatcher, outbox, DLQ, AsyncAPI | Yes | Byte-identical envelopes, per-subject ordering, retries, replay, AsyncAPI 3.0. The outbox is at-least-once (relay with claim leases) and has memory and SQLite stores only, no PostgreSQL outbox. The async `run_once` handles a batch on scoped threads and acks it afterwards ([differences](docs/guide/migrating-from-python.md)) |
 | Brokers | Redis Streams, NATS, RabbitMQ, SQS: Yes. Kafka: not yet | Same topics, bodies and attributes as the Python adapters |
-| Patterns | Yes | Retry with jitter, circuit breaker, saga builder, choreography router; identical chart JSON |
+| Patterns | Yes | Retry with jitter, circuit breaker (applied with `wrap`, no decorator), saga builder, choreography router (blocking brokers only); identical chart JSON |
 | Observability | Partial | Prometheus metric set through the `metrics` facade; OpenTelemetry, structlog, Sentry not yet |
 | Inspector | Yes | JSONL recording and replay, SSE server (`xsm inspect --live`), axum WebSocket endpoint; `@statelyai/inspect` 0.7.2 |
-| CLI commands | Partial (9 of the Python commands) | `validate`, `inspect`, `diagram`, `docs`, `simulate`, `paths`, `snapshots`, `replay`, `info`; not yet `coverage`, `asyncapi`, `dlq`, `generate-template`, `new`, `plugins`, `update`, `setup` |
+| CLI commands | Partial (9 of the Python commands) | `validate`, `inspect`, `diagram`, `docs`, `simulate`, `paths`, `snapshots`, `replay`, `info`; not yet `coverage`, `asyncapi`, `dlq`, `generate-template`, `list-templates`, `new`, `plugins`, `update`, `setup`. `snapshots` reads SQLite and file stores (no `memory://`) and `--stale` compares version labels like Python (`--stale-by hash` compares structure) |
 | Typed DSL | Rust-native | `statechart!`, `#[derive(TypedEvent)]`, `#[derive(TypedState)]`, `MachineBuilder`; the Python class DSL (metaclass scanning, naming-convention hooks) is not copied |
 | HTTP | Yes (axum) | Registry, REST and per-event routes, SSE, WebSocket, RFC 9457 problem details, idempotency keys; Flask, Django, DRF, Litestar, Channels, Celery integrations are Python-framework specific and not ported |
 | Agents | Yes (core) | Tool-loop, supervisor, pipeline and debate charts, budgets, allow-lists, approvals, structured output, trace; provider adapters and framework bridges are out of scope |
@@ -127,25 +127,33 @@ storage level; differences in engine semantics are in
 
 ## Performance
 
-Median (p50) per operation on one developer machine, from [`benches/budgets.json`](benches/budgets.json)
-(recorded 2026-11-02, after the allocation pass; criterion benches in
-`crates/xstate-core/benches`). The Python figures are the Python library's own benchmark
-medians (`benchmarks/budgets.json`).
+Median (p50) per operation on one developer machine (Intel Core i7-11850H, 31.7 GiB, Windows 11),
+from [`benches/budgets.json`](benches/budgets.json) (recorded 2026-11-02, after the allocation
+pass; criterion benches in `crates/xstate-core/benches`). The Python figures are the Python
+library's own: `send_*` and `build_50_states` are scenarios S1 to S5 of its cross-library
+benchmark (`benchmarks/competitors/results.json`, `xstate-statemachine (sync)` measured on
+**Python 0.11.0**, CPython 3.14 on the same host), and the snapshot and persistence figures are the
+baselines in its `benchmarks/budgets.json`. They were not re-measured against 0.12.0, which the
+port targets.
 
 | Benchmark | Rust p50 | Python p50 | Speed-up | What it measures |
 |---|---|---|---|---|
-| `send_flat` | 0.42 µs | 14 µs | 33x | one event on a two-state machine, no actions |
-| `send_guard_assign` | 0.52 µs | 16 µs | 31x | guard plus `assign` on a dynamic context |
-| `send_nested_3` | 0.65 µs | 35 µs | 54x | three-level hierarchy, cross-branch transition |
-| `send_parallel_2` | 0.57 µs | 39 µs | 69x | two orthogonal regions toggling |
+| `send_flat` | 0.42 µs | 14 µs (S1) | 33x | one event on a two-state machine, no actions |
+| `send_guard_assign` | 0.52 µs | 16 µs (S2) | 31x | guard plus `assign` on a dynamic context |
+| `send_nested_3` | 0.65 µs | 35 µs (S3) | 54x | three-level hierarchy, cross-branch transition |
+| `send_parallel_2` | 0.57 µs | 39 µs (S4) | 69x | two orthogonal regions toggling |
 | `snapshot_get` | 1.3 µs | 12 µs | 9x | serialise a 50-state machine's snapshot |
 | `snapshot_restore` | 9 µs | 23 µs | 2.6x | parse, validate and restore, including logic validation |
 | `step_flat` | 0.33 µs | n/a | | the bare `engine::step`, no interpreter |
-| `build_50_states` | 180 µs | 115 µs\* | | JSON text to `Machine`, 50 states (parse 44 µs, config 49 µs, compile 62 µs) |
+| `build_50_states` | 180 µs | 115 µs (S5)\* | | JSON text to `Machine`, 50 states (parse 44 µs, config 49 µs, compile 62 µs) |
 
-\* Python's figure builds a much smaller machine from an already parsed dict, so it is not
+\* Python's S5 builds a much smaller machine from an already parsed dict, so it is not
 comparable; machine construction is a once-per-process cost. `persisted_memory` (load, send, save
 on the memory store; Python 87 µs, target 8 µs) has no baseline yet.
+
+These numbers come from a quiet machine and are one run each: expect them to move by roughly
+1.5 to 2x with load, thermal state and compiler or CPython version, and treat the speed-ups as an
+order of magnitude (tens of times for event handling), not as a precise ratio.
 
 [`benches/README.md`](benches/README.md) lists the targets. The budgets file also defines the
 relative performance gate (a machine speed factor is estimated from the median ratio across all
@@ -154,21 +162,27 @@ builds every benchmark (`cargo bench --no-run`) but does not run the gate.
 
 ## Interoperability with the Python library
 
-Compatibility is a design goal (ADR-0003) and is tested in both directions against the real
-Python library (`XSM_PYTHON`, see [Development](#development)): Rust writes and Python reads, and
-the other way round. Byte-compatible:
+Compatibility is a design goal (ADR-0003). The **stores and brokers** are tested in both
+directions against the real Python library (`XSM_PYTHON`, see [Development](#development)): Rust
+writes and Python reads, and the other way round. Everything else is pinned by **goldens generated
+from the Python library** (`conformance/tools/*.py`) and compared with Rust's output, i.e. one
+direction, Python to Rust: snapshots, envelopes, AsyncAPI documents, saga and circuit-breaker
+charts, Mermaid / PlantUML diagrams and inspector recordings. Compatible at the byte level:
 
 - **Snapshots**: layout v4 (field order, `state_ids`, `configuration`, `deadlines`, ...) and the
   **machine structure hash** (SHA-256 prefix of the canonical node-shape JSON), so a snapshot saved
-  by Python restores in Rust and vice versa.
+  by Python restores in Rust and vice versa. The hash is byte-identical; the snapshot text equals
+  Python's `get_snapshot()` once whitespace is removed (Rust writes compact JSON, Python indents by
+  2), which a conformance test asserts on every fixture where the engines agree.
 - **Store layouts**: SQLite (`statecharts`, `deadlines`, inbox, log, outbox and dead-letter
   tables), file records (`.xsm.json`), Redis (`snap:{key}` hashes, Lua scripts, inbox, log) and
   PostgreSQL (`xsm_*` tables of the SQLAlchemy schema, with schema-version refusal).
 - **Envelopes**: CloudEvents 1.0 JSON, sortable ids, and the broker wire formats (Redis Streams
   fields, NATS JetStream subjects and `Nats-Msg-Id`, RabbitMQ queues, SQS queue names, bodies and
   `ce_type` attribute).
-- **Inspector recordings**: `.jsonl` sessions identical line by line to the Python
-  `InspectorPlugin`; the protocol is pinned to `@statelyai/inspect` 0.7.2.
+- **Inspector recordings**: the Rust observer's `.jsonl` output is identical line by line to
+  Python `InspectorPlugin` recordings of the same run (golden comparison); the protocol is pinned
+  to `@statelyai/inspect` 0.7.2.
 - **Saga and circuit-breaker charts**: the builders emit the same machine JSON.
 - **AsyncAPI 3.0 documents** and the **Mermaid / PlantUML diagrams** of the fixture machines.
 - **HTTP behaviour**: problem details and the `Idempotency-Key` semantics.
@@ -198,7 +212,9 @@ Disagreements between the two oracles are listed in
 
 ## Development
 
-Quality gates (all of them run in CI; the toolchain is stable, MSRV 1.88):
+Quality gates (all of them run in CI; the toolchain is stable, MSRV 1.88; the `postgres` feature,
+and so `full`, needs Rust 1.94 because of `sqlx` 0.9, which is why the MSRV job checks everything
+except `postgres`):
 
 ```bash
 cargo fmt --all --check
@@ -213,8 +229,10 @@ cargo bench --workspace --benches --no-run                   # the benchmarks mu
 ### Backend tests need servers
 
 The tests of the Redis, PostgreSQL, NATS, RabbitMQ and SQS backends talk to real servers. Without
-one they print `skipping ...: no <service> at <url>` and pass, so a green local run does not mean
-the backends ran; CI's `integration` job starts all five and fails if a test skipped for a missing service.
+one they print `skipping ...` and pass, so a green local run does not mean the backends ran.
+Set `XSM_REQUIRE_SERVICES=1` to make a missing service a panic instead of a skip; CI's
+`integration` job sets it, starts all five servers and also fails if any test line starts with
+`skipping`.
 
 | Variable | Default | Server |
 |---|---|---|
@@ -225,9 +243,16 @@ the backends ran; CI's `integration` job starts all five and fails if a test ski
 | `XSM_SQS_ENDPOINT` | `http://127.0.0.1:9324` | `docker run -d -p 9324:9324 softwaremill/elasticmq-native` |
 
 Tests use a unique key, topic, queue or table per test and clean up after themselves.
-`XSM_PYTHON` points at a Python with the Python library installed (default: the `.venv` of a
-sibling `PythonProjects/xstate-statemachine` checkout) for the cross-language tests, which skip
-when it cannot import `xstate_statemachine`. Then:
+`XSM_PYTHON` points at a Python with the Python library installed for the cross-language
+tests, which skip (panic under `XSM_REQUIRE_SERVICES=1`) when it cannot import
+`xstate_statemachine`. The default assumes this layout, with the two repositories as cousins:
+
+```text
+<projects>/RustProjects/xstate-statemachine-rs/          # this repository
+<projects>/PythonProjects/xstate-statemachine/.venv/     # the Python library with its virtualenv
+```
+
+Then:
 
 ```bash
 cargo test --workspace --all-features --locked
@@ -235,14 +260,20 @@ cargo test --workspace --all-features --locked
 
 ### Conformance and releases
 
-Regenerate conformance expectations (needs Node 20 or newer and the Python library):
+Regenerate conformance expectations (needs Node 20 or newer and the Python library) and the
+Mermaid / PlantUML goldens (Python library only); both have a `--check` mode that CI uses:
 
 ```bash
 npm ci --prefix conformance/tools/xstate_oracle
 python conformance/tools/generate_expected.py
+python conformance/tools/export_golden.py
 ```
 
-A release is a `vX.Y.Z` tag: `.github/workflows/release.yml` runs the gates and
+CI installs the Python library from its GitHub repository (`main`), because 0.12.0 is not on PyPI
+yet (PyPI has 0.11.0).
+
+A release is a `vX.Y.Z` tag: `.github/workflows/release.yml` runs the gates, the whole CI workflow
+(so the integration job and the fixture-freshness checks must be green) and
 `scripts/publish.sh --dry-run`, then (after approval) publishes the crates in the order of
 `scripts/publish-order.txt`.
 

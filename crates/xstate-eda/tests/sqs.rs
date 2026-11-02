@@ -9,6 +9,8 @@
 // The skip notes are printed on purpose: a CI without an SQS endpoint must say why nothing ran.
 #![allow(clippy::print_stderr)]
 
+mod common;
+
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::future::Future;
@@ -97,7 +99,10 @@ impl Qs {
         if !reachable {
             // a runtime dropped inside an async test would panic
             rt.shutdown_background();
-            eprintln!("skipping `{test}`: no SQS endpoint at {endpoint} (set XSM_SQS_ENDPOINT)");
+            common::service_unavailable(
+                test,
+                &format!("no SQS endpoint at {endpoint} (set XSM_SQS_ENDPOINT)"),
+            );
             return None;
         }
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
@@ -257,6 +262,7 @@ fn envelope(subject: &str, n: i64) -> Envelope {
 fn options_are_validated_and_debug_hides_secrets() {
     let bad = |o: SqsOptions| matches!(SqsBroker::open(&o), Err(EdaError::InvalidArgument(_)));
     assert!(bad(SqsOptions::new().batch(0)));
+    assert!(bad(SqsOptions::new().io_timeout(Duration::ZERO)));
     assert!(bad(SqsOptions::new().region("")));
     assert!(bad(SqsOptions::new().endpoint_url("not a url")));
     assert!(bad(SqsOptions::new().visibility_timeout(Duration::from_secs(50_000))));
@@ -265,6 +271,24 @@ fn options_are_validated_and_debug_hides_secrets() {
         SqsOptions::new().endpoint_url("http://sekrit-host:9324").credentials("AKIDSEKRIT", "sk")
     );
     assert!(!shown.contains("sekrit") && !shown.contains("AKIDSEKRIT"), "{shown}");
+}
+
+#[test]
+fn an_endpoint_that_never_answers_times_out() {
+    use xstate_eda::SyncBrokerAdapter;
+    let port = common::silent_server();
+    let options = SqsOptions::new()
+        .endpoint_url(format!("http://127.0.0.1:{port}"))
+        .region("us-east-1")
+        .credentials("AKIDTEST", "secret")
+        .io_timeout(Duration::from_millis(300));
+    let broker = ok(SqsBroker::open(&options));
+    let started = Instant::now();
+    let result = SyncBrokerAdapter::publish(&broker, "orders", &envelope("s", 1));
+    let Err(BrokerError::Publish(why)) = result else { panic!("expected a timeout: {result:?}") };
+    assert!(why.contains("timed out"), "{why}");
+    assert!(started.elapsed() < Duration::from_secs(10), "bounded by io_timeout");
+    assert!(!broker.healthy());
 }
 
 mod sync_api {

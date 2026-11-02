@@ -88,8 +88,27 @@ pub(super) async fn load(
     }))
 }
 
+/// `prefix` as a `LIKE` pattern that matches itself and anything after it: `\`, `%` and `_` are
+/// escaped (with `\`, the default `LIKE` escape) so a prefix like `100%_` matches literally.
+fn like_prefix(prefix: &str) -> String {
+    let mut pattern = String::with_capacity(prefix.len() + 1);
+    for c in prefix.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern.push('%');
+    pattern
+}
+
 /// Keys starting with `prefix`, ascending by code point (`COLLATE "C"`: byte order of UTF-8),
 /// whatever collation the database was created with.
+///
+/// Matched with an escaped `LIKE 'prefix%'`, which PostgreSQL can answer from an index on `key`
+/// (when the database collation is `C`, or the index was built with `text_pattern_ops`) instead of
+/// evaluating `substr` on every row. The schema keeps Python's DDL and so adds no such index
+/// itself: create one in your own migrations if the table is large.
 pub(super) async fn list_keys(
     pool: &PgPool,
     t: &Table,
@@ -97,13 +116,11 @@ pub(super) async fn list_keys(
     limit: usize,
 ) -> FailResult<Vec<String>> {
     let sql = format!(
-        "SELECT key FROM {} WHERE substr(key, 1, $1) = $2 ORDER BY key COLLATE \"C\" LIMIT $3",
+        "SELECT key FROM {} WHERE key LIKE $1 ESCAPE '\\' ORDER BY key COLLATE \"C\" LIMIT $2",
         t.sql
     );
-    let prefix_chars = i32::try_from(prefix.chars().count()).unwrap_or(i32::MAX);
     let keys = sqlx::query_scalar(AssertSqlSafe(sql))
-        .bind(prefix_chars)
-        .bind(prefix)
+        .bind(like_prefix(prefix))
         .bind(sql_count(limit))
         .fetch_all(pool)
         .await?;
@@ -347,6 +364,11 @@ pub(super) async fn forget(pool: &PgPool, t: &Table, key: &str) -> FailResult<Fo
 // Lease rows
 
 /// One attempt at the lease row: take it when absent or expired, in a single statement.
+///
+/// Both the expiry written and the expiry tested use the **database server's** clock
+/// (`clock_timestamp()`, as epoch seconds like Python's `time.time()`), never the client's: the
+/// lease is shared by every process on the database, and clients whose clocks disagree (or step)
+/// would otherwise steal a live lease or wait on a dead one.
 pub(super) async fn try_lock(
     pool: &PgPool,
     t: &Table,
@@ -354,17 +376,16 @@ pub(super) async fn try_lock(
     owner: &str,
     ttl_s: f64,
 ) -> FailResult<bool> {
-    let now = wall_now();
     let done = sqlx::query(
-        "INSERT INTO xsm_locks AS l (source, key, owner, expires_at) VALUES ($1, $2, $3, $4) ON \
-         CONFLICT (source, key) DO UPDATE SET owner = EXCLUDED.owner, expires_at = \
-         EXCLUDED.expires_at WHERE l.expires_at < $5",
+        "INSERT INTO xsm_locks AS l (source, key, owner, expires_at) VALUES ($1, $2, $3, \
+         EXTRACT(EPOCH FROM clock_timestamp())::float8 + $4) ON CONFLICT (source, key) DO UPDATE \
+         SET owner = EXCLUDED.owner, expires_at = EXCLUDED.expires_at WHERE l.expires_at < \
+         EXTRACT(EPOCH FROM clock_timestamp())::float8",
     )
     .bind(&t.raw)
     .bind(key)
     .bind(owner)
-    .bind(now + ttl_s)
-    .bind(now)
+    .bind(ttl_s)
     .execute(pool)
     .await?;
     Ok(done.rows_affected() == 1)
@@ -379,4 +400,16 @@ pub(super) async fn unlock(pool: &PgPool, source: &str, key: &str, owner: &str) 
         .execute(pool)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::like_prefix;
+
+    #[test]
+    fn a_prefix_becomes_an_escaped_like_pattern() {
+        assert_eq!(like_prefix(""), "%");
+        assert_eq!(like_prefix("order:"), "order:%");
+        assert_eq!(like_prefix(r"100%_a\b"), r"100\%\_a\\b%");
+    }
 }

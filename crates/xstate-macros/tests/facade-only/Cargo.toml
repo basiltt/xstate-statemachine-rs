@@ -1,0 +1,12 @@
+# Compiled by `tests/facade_only.rs` (not a workspace member): a crate that depends only on the
+# `xstate-statemachine` facade must be able to use every macro.
+[package]
+name = "facade-only"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+xstate-statemachine = { path = "../../../xstate-statemachine", features = ["macros"] }
+
+[workspace]

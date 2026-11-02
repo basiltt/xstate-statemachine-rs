@@ -1,13 +1,19 @@
 //! Byte-compatibility with the Python library (ADR-0003): the structure hash of every fixture
 //! machine must equal Python's `structure_hash`, and — for cases where the two oracles agree
 //! on behaviour — the end-of-run snapshot must equal Python's layout-v4 snapshot (volatile
-//! wall-clock fields zeroed).
+//! wall-clock fields zeroed), both as a parsed value and as text: `Snapshot::to_json()` must
+//! equal the text of Python's `get_snapshot()` once the insignificant whitespace of Python's
+//! `indent=2` is removed (key order, number formatting and string escaping must all match).
+//! A Python-produced snapshot text must also restore through `SyncInterpreter::from_snapshot`.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
+
+use std::sync::Arc;
 
 use serde_json::Value;
 use xstate_conformance::runner::run_case_with_interpreter;
 use xstate_conformance::{cases_dir, load_cases};
+use xstate_core::{RestoreOptions, SimulatedClock, Snapshot, SyncInterpreter};
 
 fn zero_volatile(snapshot: &mut Value) {
     snapshot["taken_at"] = Value::from(0.0);
@@ -16,6 +22,45 @@ fn zero_volatile(snapshot: &mut Value) {
             d["due_at_wall"] = Value::from(0.0);
         }
     }
+}
+
+/// Remove the insignificant whitespace (everything outside string literals) from JSON text.
+fn strip_json_whitespace(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let (mut in_string, mut escaped) = (false, false);
+    for c in text.chars() {
+        if in_string {
+            out.push(c);
+            match (escaped, c) {
+                (true, _) => escaped = false,
+                (false, '\\') => escaped = true,
+                (false, '"') => in_string = false,
+                _ => {}
+            }
+        } else if c == '"' {
+            in_string = true;
+            out.push(c);
+        } else if !c.is_whitespace() {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The cases with a Python snapshot text whose behaviour the two engines agree on.
+fn text_vectors() -> Vec<(xstate_conformance::Case, String)> {
+    load_cases(&cases_dir())
+        .expect("fixtures load")
+        .into_iter()
+        .filter_map(|case| {
+            let py = &case.expected.as_ref().expect("expected").python;
+            if py.unsupported.is_some() || case.divergence.is_some() {
+                return None;
+            }
+            let text = py.snapshot_text.clone()?;
+            Some((case, text))
+        })
+        .collect()
 }
 
 #[test]
@@ -121,4 +166,71 @@ fn snapshot_round_trips_through_json_and_restore() {
             case.name
         );
     }
+}
+
+#[test]
+fn snapshot_text_matches_python_text() {
+    let mut failures = Vec::new();
+    let vectors = text_vectors();
+    for (case, python_text) in &vectors {
+        let (_, interp) = match run_case_with_interpreter(case) {
+            Ok(r) => r,
+            Err(e) => {
+                failures.push(format!("{}: engine error: {e}", case.name));
+                continue;
+            }
+        };
+        let mut snapshot = interp.snapshot().expect("snapshot");
+        snapshot.taken_at = 0.0;
+        for d in &mut snapshot.deadlines {
+            d.due_at_wall = 0.0;
+        }
+        let rust_text = snapshot.to_json().expect("json");
+        let expected = strip_json_whitespace(python_text);
+        if rust_text != expected {
+            failures.push(format!(
+                "{}:
+  rust:   {rust_text}
+  python: {expected}",
+                case.name
+            ));
+        }
+    }
+    assert!(vectors.len() > 20, "too few snapshot text vectors checked ({})", vectors.len());
+    assert!(
+        failures.is_empty(),
+        "{} snapshot text mismatches:
+{}",
+        failures.len(),
+        failures.join(
+            "
+"
+        )
+    );
+}
+
+#[test]
+fn python_snapshot_text_restores() {
+    let vectors = text_vectors();
+    for (case, python_text) in &vectors {
+        let parsed = Snapshot::from_json(python_text)
+            .unwrap_or_else(|e| panic!("{}: Python snapshot text does not parse: {e}", case.name));
+        let machine = xstate_core::Machine::from_value(&case.machine).expect("machine");
+        let logic = xstate_conformance::runner::stub_logic(case, &machine);
+        let restored = SyncInterpreter::from_snapshot(
+            machine,
+            logic,
+            &parsed,
+            Arc::new(SimulatedClock::new()),
+            &RestoreOptions::default(),
+        )
+        .unwrap_or_else(|e| panic!("{}: restoring the Python snapshot failed: {e}", case.name));
+        assert_eq!(
+            restored.state_ids(),
+            parsed.state_ids,
+            "{}: state ids after restoring the Python snapshot",
+            case.name
+        );
+    }
+    assert!(vectors.len() > 20, "too few snapshot text vectors restored ({})", vectors.len());
 }

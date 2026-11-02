@@ -14,7 +14,7 @@ use serde_json::Value;
 use super::conn::{Pool, error_label, scan_all};
 use super::deadlines::{self, due_keys, parse_all};
 use super::keys::{Keys, SCHEMA_VERSION, escape_glob};
-use super::scripts::{DELETE, FORGET, SAVE, SCHEMA, UNLOCK};
+use super::scripts::{DELETE, FORGET, PRUNE_KEYS, SAVE, SCHEMA, UNLOCK};
 use crate::memory_store::{StorePolicy, check_record_fields, deadline_after};
 use crate::store::{
     DEFAULT_MAX_SNAPSHOT_BYTES, ForgetReport, Health, LockGuard, Result, SaveOptions, StateStore,
@@ -26,6 +26,13 @@ pub const DEFAULT_LOCK_TTL_MS: u64 = 30_000;
 
 /// Pause between attempts to take a held lock.
 const LOCK_POLL: Duration = Duration::from_millis(10);
+
+/// Bound on releasing a lock from `Drop`: a Redis that went away must not stall the thread that
+/// merely finished its guarded block (the lock then expires on its own after `lock_ttl_ms`).
+const RELEASE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Snapshot keys checked (and pruned if expired) per script call by `list_keys`.
+const PRUNE_CHUNK: usize = 200;
 
 /// Options of a [`RedisStore`].
 #[derive(Debug, Clone)]
@@ -85,6 +92,16 @@ impl RedisStoreOptions {
 /// [`StateStore::due_keys`] reads), locks in `SET NX PX` tokens released by compare-and-delete.
 /// `forget` also erases the key's `RedisLog` stream. Not for a Redis you do not persist (AOF /
 /// RDB) if you need durability across a Redis restart.
+///
+/// # Expiry and the key set
+///
+/// With [`RedisStoreOptions::ttl_s`] a snapshot hash expires on its own, but its member of the
+/// `{p}:keys` set (what [`list_keys`](StateStore::list_keys) walks) does not: Redis cannot expire
+/// one member of a set, and Python's store leaves it too. The member of an expired snapshot is
+/// therefore retained until `list_keys` meets it: that call checks the keys it is about to
+/// return and removes, atomically, the members whose snapshot is gone (so it never reports an
+/// expired key, and the set shrinks as it is listed). `forget` and `delete` remove their key's
+/// member at once.
 #[derive(Debug)]
 pub struct RedisStore {
     pool: Arc<Pool>,
@@ -236,6 +253,29 @@ impl RedisStore {
             call.arg(key).invoke(conn)
         })
     }
+
+    /// The first `limit` of the sorted `candidates` whose snapshot still exists. A snapshot
+    /// hash that expired (`ttl_s`) leaves its member in the `{p}:keys` set; the members met on
+    /// the way are removed, in one atomic script per chunk, so the set is pruned by the same
+    /// calls that would otherwise advertise dead keys, at the cost of only the keys examined.
+    fn live_keys(&self, set: &str, candidates: &[String], limit: usize) -> Result<Vec<String>> {
+        let mut live: Vec<String> = Vec::new();
+        for chunk in candidates.chunks(PRUNE_CHUNK) {
+            let gone: Vec<String> = self.pool.run(|conn| {
+                let mut call = PRUNE_KEYS.key(set);
+                for key in chunk {
+                    call.arg(key).arg(self.keys.snap(key));
+                }
+                call.invoke(conn)
+            })?;
+            live.extend(chunk.iter().filter(|k| !gone.contains(*k)).cloned());
+            if live.len() >= limit {
+                break;
+            }
+        }
+        live.truncate(limit);
+        Ok(live)
+    }
 }
 
 impl StateStore for RedisStore {
@@ -304,11 +344,10 @@ impl StateStore for RedisStore {
         let pattern = format!("{}*", escape_glob(prefix));
         let set = self.keys.keys();
         let mut found = self.pool.run(|conn| scan_all(conn, Some(&set), &pattern))?;
-        found.retain(|k| k.starts_with(prefix));
-        found.truncate(limit);
-        // A key planted by another writer that `load()` would refuse is never advertised.
-        found.retain(|k| validate_key(k).is_ok());
-        Ok(found)
+        // A key planted by another writer that `load()` would refuse is never advertised, and it
+        // must not use up the limit either: filter before truncating.
+        found.retain(|k| k.starts_with(prefix) && validate_key(k).is_ok());
+        self.live_keys(&set, &found, limit)
     }
 
     fn lock(&self, key: &str, timeout: Duration) -> Result<Box<dyn LockGuard>> {
@@ -396,9 +435,16 @@ impl LockGuard for RedisLockGuard {
 
 impl Drop for RedisLockGuard {
     fn drop(&mut self) {
-        // A failed release is dropped on purpose: the lock then expires after `lock_ttl_ms`, and
-        // whatever the guarded block returned is what the caller must see.
-        let _ = self.pool.run(|conn| UNLOCK.key(&self.name).arg(&self.token).invoke::<i64>(conn));
+        // Redis is reached over blocking sockets, so unlike an async client this never needs a
+        // runtime and cannot panic inside one; the short bound keeps a vanished Redis from
+        // stalling the caller. A failed release is logged, not returned: the lock then expires
+        // after `lock_ttl_ms`, and whatever the guarded block returned is what the caller sees.
+        let released = self.pool.run_within(RELEASE_TIMEOUT, |conn| {
+            UNLOCK.key(&self.name).arg(&self.token).invoke::<i64>(conn)
+        });
+        if let Err(error) = released {
+            tracing::warn!(key = %self.key, %error, "could not release the Redis lock");
+        }
     }
 }
 

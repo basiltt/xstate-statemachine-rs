@@ -229,3 +229,9 @@ fn runtime_rules_still_surface_as_errors() {
     let err = statechart! { id: "m", maxIterations: 0, states: { a } }.unwrap_err();
     assert_eq!(err.kind(), xstate_core::ErrorKind::InvalidConfig);
 }
+
+#[test]
+fn explicit_crate_path_is_accepted() {
+    let machine = statechart! { crate: ::xstate_core, id: "m", states: { a } }.unwrap();
+    assert_eq!(machine.to_json()["id"], "m");
+}

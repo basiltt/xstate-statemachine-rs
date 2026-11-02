@@ -295,3 +295,19 @@ fn build_returns_a_fresh_value_each_call() {
     first["id"] = json!("mutated");
     assert_eq!(ok(saga.build())["id"], "order_plain");
 }
+
+#[test]
+fn retrying_steps_with_the_same_camel_case_name_are_rejected() {
+    let retry = || policy(2, JitterMode::None);
+    let first =
+        ok(ok(SagaBuilder::new("s")).step(SagaStep::new("reserve_stock", "a").retry(retry())));
+    let clash = first.clone().step(SagaStep::new("reserveStock", "b").retry(retry()));
+    match clash {
+        Err(SagaError::Invalid(message)) => {
+            assert!(message.contains("reserveStockRetry"), "{message}");
+        }
+        other => panic!("expected a prefix collision, got {other:?}"),
+    }
+    // Without a retry on the newcomer nothing is generated for it, so there is no clash.
+    assert!(first.step(SagaStep::new("reserveStock", "b")).is_ok());
+}

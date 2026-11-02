@@ -5,11 +5,14 @@ mod common;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use common::{app, call, get, order_logic, order_machine, post, registry, store};
+use common::{
+    app, call, connect, get, order_logic, order_machine, post, registry, serve, store,
+    ws_handshake, ws_read_json, ws_send_text,
+};
 use serde_json::{Value, json};
 use xstate_axum::{
     ApiError, AuthRequest, EventGate, Forbidden, Problem, RegisterOptions, RegistryError,
-    RouterOptions, SendRequest, StatechartRegistry, router,
+    RouterOptions, SendRequest, StatechartRegistry, allow_all, router,
 };
 use xstate_persistence::{MemoryInbox, StateStore};
 
@@ -104,7 +107,8 @@ async fn undeclared_event_is_a_validation_problem() {
                "errors": [{"loc": ["body", "type"], "type": "literal_error"},
                           {"loc": ["body", "extra"], "type": "extra_forbidden"}]})
     );
-    let missing = call(&app, "POST", "/order/o1/send", &[], None).await;
+    let missing =
+        call(&app, "POST", "/order/o1/send", &[("content-type", "application/json")], None).await;
     assert_eq!(missing.json()["errors"], json!([{"loc": ["body"], "type": "missing"}]));
     let broken = post(&app, "/order/o1/send", "{not json").await;
     assert_eq!(broken.json()["errors"], json!([{"loc": ["body"], "type": "json_invalid"}]));
@@ -122,7 +126,8 @@ async fn strict_registration_refuses_unknown_events_with_422() {
             "order",
             order_machine(),
             order_logic(),
-            RegisterOptions { strict: true, ..RegisterOptions::default() },
+            // allow_all: no authorizer under test here.
+            RegisterOptions::new(allow_all()).strict(true),
         )
         .and_then(xstate_axum::RegistryBuilder::build)
         .unwrap_or_else(|e| panic!("{e}"));
@@ -194,6 +199,81 @@ async fn per_event_gate_is_refused_on_send_and_enforced_on_its_route() {
     assert!(matches!(router(&reg, "order", bad), Err(RegistryError::UnknownGatedEvents { .. })));
 }
 
+/// Regression: the WebSocket applied neither the per-event gates nor the declared-event rule
+/// of `/send`, so a gated event could bypass its gate over `/ws`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_refuses_gated_and_undeclared_events() {
+    let reg = registry(|b| b);
+    let app = gated_router(&reg);
+    let addr = serve(app.clone()).await;
+    let mut ws = connect(addr).await;
+    assert!(ws_handshake(&mut ws, "/order/w1/ws", &[]).await.contains("101"));
+    assert_eq!(ws_read_json(&mut ws).await["kind"], "snapshot");
+    ws_send_text(&mut ws, r#"{"type":"PAY","payload":{"amount":1}}"#).await;
+    assert_eq!(
+        ws_read_json(&mut ws).await,
+        json!({"kind": "error", "status": 403, "title": "Use this event's dedicated route"})
+    );
+    ws_send_text(&mut ws, r#"{"type":"NOPE"}"#).await;
+    let undeclared = ws_read_json(&mut ws).await;
+    assert_eq!(
+        (undeclared["kind"].clone(), undeclared["status"].clone(), undeclared["errors"].clone()),
+        (json!("error"), json!(422), json!([{"loc": ["body", "type"], "type": "literal_error"}]))
+    );
+    ws_send_text(&mut ws, r#"{"type":"NOTE"}"#).await;
+    assert_eq!(ws_read_json(&mut ws).await["kind"], "receipt", "ungated events still flow");
+    assert_eq!(get(&app, "/order/w1").await.json()["state"], "pending", "PAY never ran");
+}
+
+#[tokio::test]
+async fn state_changing_posts_refuse_cross_origin_and_require_json() {
+    let app = app(&registry(|b| b));
+    let evil = [("origin", "http://evil.example")];
+    for uri in ["/order/o1/send", "/order/o1/events/NOTE"] {
+        let cross = call(&app, "POST", uri, &evil, Some(r#"{"type":"NOTE"}"#)).await;
+        assert_eq!(
+            (cross.status.as_u16(), cross.json()["title"].clone()),
+            (403, json!("Origin not allowed")),
+            "{uri}"
+        );
+        let bare = call(&app, "POST", uri, &[], None).await;
+        assert_eq!(
+            (bare.status.as_u16(), bare.json()["error"].clone()),
+            (415, json!("UnsupportedMediaTypeError")),
+            "an empty body still needs application/json: {uri}"
+        );
+    }
+    let same = [("origin", "http://127.0.0.1")];
+    let ok = call(&app, "POST", "/order/o1/events/NOTE", &same, Some("")).await;
+    assert_eq!(ok.status, 200);
+}
+
+#[tokio::test]
+async fn bad_router_prefix_and_zero_body_limit_are_setting_errors() {
+    let reg = registry(|b| b);
+    for prefix in ["orders", "/a/{id}", "/a b", "/a/:x", "/a/*rest", ""] {
+        let options = RouterOptions { prefix: Some(prefix.to_owned()), ..RouterOptions::default() };
+        assert!(
+            matches!(router(&reg, "order", options), Err(RegistryError::InvalidSetting(_))),
+            "{prefix:?}"
+        );
+    }
+    let options = RouterOptions { prefix: Some("/api/orders/".into()), ..RouterOptions::default() };
+    let app = router(&reg, "order", options).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(get(&app, "/api/orders/o1").await.status, 200);
+    let zero = StatechartRegistry::builder(store()).max_body_bytes(0).build();
+    assert!(matches!(zero, Err(RegistryError::InvalidSetting(_))));
+    let no_cap = StatechartRegistry::builder(store()).max_connections(0).build();
+    assert!(matches!(no_cap, Err(RegistryError::InvalidSetting(_))));
+}
+
+#[tokio::test]
+async fn unknown_machine_is_404() {
+    let reg = registry(|b| b);
+    let error = reg.send(SendRequest::new("nope", "k", "GO")).await.err();
+    assert_eq!(error.as_ref().map(ApiError::status), Some(404));
+}
+
 fn idempotent_registry(store: Arc<dyn StateStore>) -> Arc<StatechartRegistry> {
     common::registry_over(store, |b| {
         b.inbox(Arc::new(MemoryInbox::new())).principal(|parts: &axum::http::request::Parts| {
@@ -225,7 +305,7 @@ async fn idempotent_replay_returns_the_cached_receipt() {
         json!({"type": "about:blank", "title": "Idempotency key reused", "status": 422, "error": "IdempotencyMismatchError"})
     );
     let other_user = [("x-user", "bob"), ("idempotency-key", "k1")];
-    let bob = call(&app, "POST", "/order/o2/events/NOTE", &other_user, None).await;
+    let bob = call(&app, "POST", "/order/o2/events/NOTE", &other_user, Some("")).await;
     assert_eq!(bob.json()["duplicate"], false, "keys are scoped per principal and instance");
 }
 
@@ -233,7 +313,7 @@ async fn idempotent_replay_returns_the_cached_receipt() {
 async fn idempotency_key_rules() {
     let app = app(&idempotent_registry(store()));
     let anonymous =
-        call(&app, "POST", "/order/o1/events/NOTE", &[("idempotency-key", "k")], None).await;
+        call(&app, "POST", "/order/o1/events/NOTE", &[("idempotency-key", "k")], Some("")).await;
     assert_eq!(
         (anonymous.status.as_u16(), anonymous.json()["error"].clone()),
         (401, json!("UnauthenticatedError"))
@@ -244,7 +324,7 @@ async fn idempotency_key_rules() {
         "POST",
         "/order/o1/events/NOTE",
         &[("x-user", "a"), ("idempotency-key", &long)],
-        None,
+        Some(""),
     )
     .await;
     assert_eq!(
@@ -253,7 +333,7 @@ async fn idempotency_key_rules() {
     );
     let plain = app_without_inbox();
     let refused =
-        call(&plain, "POST", "/order/o1/events/NOTE", &[("idempotency-key", "k")], None).await;
+        call(&plain, "POST", "/order/o1/events/NOTE", &[("idempotency-key", "k")], Some("")).await;
     assert_eq!(refused.status, 501);
     assert_eq!(refused.json()["error"], "IdempotencyNotConfiguredError");
 }
@@ -287,12 +367,7 @@ async fn authorizer_sees_principal_and_event() {
         .principal(|p: &axum::http::request::Parts| {
             p.headers.get("x-user").and_then(|v| v.to_str().ok()).map(str::to_owned)
         })
-        .register(
-            "order",
-            order_machine(),
-            order_logic(),
-            RegisterOptions { authorize, ..RegisterOptions::default() },
-        )
+        .register("order", order_machine(), order_logic(), RegisterOptions::new(authorize))
         .and_then(xstate_axum::RegistryBuilder::build)
         .unwrap_or_else(|e| panic!("{e}"));
     let app = app(&reg);
@@ -302,7 +377,7 @@ async fn authorizer_sees_principal_and_event() {
         refused.json(),
         json!({"type": "about:blank", "title": "Forbidden", "status": 403, "error": "ForbiddenError"})
     );
-    let admin = call(&app, "POST", "/order/o1/events/NOTE", &[("x-user", "admin")], None).await;
+    let admin = call(&app, "POST", "/order/o1/events/NOTE", &[("x-user", "admin")], Some("")).await;
     assert_eq!(admin.status, 200);
 }
 
@@ -327,8 +402,8 @@ async fn context_serializer_drops_private_keys_and_act_publishes() {
     )
     .unwrap_or_else(|e| panic!("{e}"));
     let serializer: xstate_axum::ContextSerializer = Arc::new(Value::clone);
-    let options =
-        RegisterOptions { context_serializer: Some(serializer), ..RegisterOptions::default() };
+    // allow_all: no authorizer under test here.
+    let options = RegisterOptions::new(allow_all()).context_serializer(serializer);
     let reg = StatechartRegistry::builder(store())
         .register("c", machine, xstate_core::MachineLogic::dynamic(), options)
         .and_then(xstate_axum::RegistryBuilder::build)
