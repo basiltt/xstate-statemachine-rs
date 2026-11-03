@@ -26,11 +26,13 @@ When the two oracles disagree the case must carry a `divergence` note; the curre
   "logic": {                               // optional stubs; everything defaults to a no-op
     "guards":   { "isUnlocked": false },   // constant results; unlisted guards are true
     "services": { "fetchUser": { "result": {"name": "Ada"} } }, // or { "error": "boom" }
-    "delays":   { "BACKOFF": 1000 }        // named delays in ms
+    "delays":   { "BACKOFF": 1000 },       // named delays in ms
+    "record_guards": true                  // optional: record guard evaluations (below)
   },
   "steps": [
     { "send": "TOGGLE" },                  // event type only
     { "send": { "type": "ADD", "qty": 2 } }, // event with payload fields
+    { "send_batch": ["FINISH", "NEXT"] },  // events queued together, then processed
     { "advance_ms": 500 }                  // move the simulated clock
   ],
   "divergence": {                          // only when the oracles disagree
@@ -49,9 +51,19 @@ An **observation** is taken after `start()` (`initial`) and after every step:
   "actions": ["countOpen"],        // user actions executed since the previous observation, in order
   "status": "running",             // running | done | error | stopped
   "output": null,                  // present when status is done
-  "error": "boom"                  // present when status is error
+  "error": "boom",                 // present when status is error
+  "guards": ["isAdmin"]            // only with logic.record_guards: guard evaluations, in order
 }
 ```
+
+`send_batch` queues every event before the machine processes any of them (Python's
+`send_events`); XState and the Rust engine receive them as consecutive `send` calls, which is
+the same thing there because a send is processed to completion before it returns. A batch makes
+observable what is processed before an external event that is already waiting (the internal
+queue).
+
+With `record_guards` every evaluation of a named stub guard is recorded, in order, so a case
+can pin which guards the selection algorithm evaluates and how often.
 
 Built-in actions (`assign`, `raise`, `log`, `sendTo`, ...) are not recorded; only named user
 actions are. The Python expectation additionally carries `machine_hash`, `snapshot` and `snapshot_text` (the exact text of Python's
@@ -65,7 +77,9 @@ zeroed.
   block ancestors".
 - Built-in actions are written in JSON form, `{"type": "assign", "params": {"assignment": {...}}}`
   and `{"type": "raise", "params": {"event": {...}}}`; the xstate oracle provides matching
-  implementations under those names.
+  implementations under those names. `assign` also accepts the property mapping directly as
+  `params` (`{"type": "xstate.assign", "params": {"count": 1}}`); `params.assignment` wins when
+  present.
 
 ## Regenerating
 

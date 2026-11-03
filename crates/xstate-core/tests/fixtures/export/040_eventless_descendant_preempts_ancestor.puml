@@ -1,0 +1,24 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_p
+  state "p" as m_p {
+    state "r1" as m_p_r1 {
+      [*] --> m_p_r1_a
+      state "a" as m_p_r1_a
+    }
+    --
+    state "r2" as m_p_r2 {
+      [*] --> m_p_r2_b
+      state "b" as m_p_r2_b
+      state "c" as m_p_r2_c
+      state "d" as m_p_r2_d
+    }
+  }
+  state "out" as m_out
+}
+[*] --> m_p
+m_p --> m_out : always [stateIn]
+m_p_r2_b --> m_p_r2_c : GO
+m_p_r2_c --> m_p_r2_d : always
+@enduml

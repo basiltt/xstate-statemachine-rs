@@ -78,6 +78,9 @@ pub struct Logic {
     /// Named delays in milliseconds.
     #[serde(default)]
     pub delays: BTreeMap<String, f64>,
+    /// Record every guard evaluation in the observations (`Observation::guards`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub record_guards: bool,
 }
 
 /// Outcome of a stubbed service: either a result or an error message.
@@ -99,6 +102,11 @@ pub enum Step {
     /// Send an event: a bare type string or an object with `type` plus payload fields.
     #[serde(rename = "send")]
     Send(Value),
+    /// Queue several events before any of them is processed (Python's `send_events`). XState
+    /// and the Rust engine process a send to completion before it returns, so they receive
+    /// consecutive sends.
+    #[serde(rename = "send_batch")]
+    SendBatch(Vec<Value>),
     /// Advance the simulated clock by this many milliseconds.
     #[serde(rename = "advance_ms")]
     AdvanceMs(f64),
@@ -180,6 +188,10 @@ pub struct Observation {
     /// Error message, present once `error`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Named guards evaluated since the previous observation, in order; present only when the
+    /// case sets `logic.record_guards`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guards: Option<Vec<String>>,
 }
 
 /// Path of the `conformance/cases` directory inside this repository.

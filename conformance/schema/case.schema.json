@@ -23,7 +23,8 @@
             "additionalProperties": false
           }
         },
-        "delays": { "type": "object", "additionalProperties": { "type": "number", "minimum": 0 } }
+        "delays": { "type": "object", "additionalProperties": { "type": "number", "minimum": 0 } },
+        "record_guards": { "type": "boolean" }
       }
     },
     "steps": {
@@ -40,6 +41,23 @@
                   { "type": "string" },
                   { "type": "object", "required": ["type"], "properties": { "type": { "type": "string" } } }
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["send_batch"],
+            "additionalProperties": false,
+            "properties": {
+              "send_batch": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "oneOf": [
+                    { "type": "string" },
+                    { "type": "object", "required": ["type"], "properties": { "type": { "type": "string" } } }
+                  ]
+                }
               }
             }
           },
@@ -83,7 +101,8 @@
         "actions": { "type": "array", "items": { "type": "string" } },
         "status": { "type": "string", "enum": ["running", "done", "error", "stopped"] },
         "output": {},
-        "error": { "type": "string" }
+        "error": { "type": "string" },
+        "guards": { "type": "array", "items": { "type": "string" } }
       }
     },
     "expectation": {

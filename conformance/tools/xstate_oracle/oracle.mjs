@@ -4,8 +4,8 @@
 // Output: one JSON document on stdout:
 //   { "oracle": {"name": "xstate", "version": "5.x"}, "cases": { "<name>": Expectation } }
 //
-// The case format is documented in ../../README.md. Guards are constants, user actions are
-// recorded by name, services complete with a fixed result (or a fixed error), and named
+// The case format is documented in ../../README.md. Guards are constants (recorded by name in
+// evaluation order when the case sets `logic.record_guards`), user actions are recorded by name, services complete with a fixed result (or a fixed error), and named
 // delays are constants — the same stubbing the Python oracle applies, so the two outputs are
 // directly comparable.
 //
@@ -209,9 +209,16 @@ async function runCase(c) {
   const logic = c.logic ?? {};
   const names = collectNames(c.machine);
   const ran = [];
+  const guardLog = [];
+  const recordGuards = logic.record_guards === true;
 
   const guards = {};
-  for (const g of names.guards) guards[g] = () => (logic.guards?.[g] ?? true) === true;
+  for (const g of names.guards) {
+    guards[g] = () => {
+      if (recordGuards) guardLog.push(g);
+      return (logic.guards?.[g] ?? true) === true;
+    };
+  }
   const actions = {};
   for (const a of names.actions) actions[a] = () => {};
   const actors = {};
@@ -247,6 +254,7 @@ async function runCase(c) {
     };
     if (snap.status === "done") out.output = snap.output ?? null;
     if (snap.status === "error") out.error = String(snap.error?.message ?? snap.error ?? "");
+    if (recordGuards) out.guards = guardLog.splice(0, guardLog.length);
     return out;
   };
 
@@ -256,6 +264,7 @@ async function runCase(c) {
   const steps = [];
   for (const step of c.steps ?? []) {
     if ("send" in step) actor.send(eventOf(step.send));
+    else if ("send_batch" in step) for (const ev of step.send_batch) actor.send(eventOf(ev));
     else if ("advance_ms" in step) clock.increment(step.advance_ms);
     else throw new Error(`unknown step ${JSON.stringify(step)}`);
     await flush();

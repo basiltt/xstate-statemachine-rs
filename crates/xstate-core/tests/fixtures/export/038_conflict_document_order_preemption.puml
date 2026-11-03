@@ -1,0 +1,21 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_p
+  state "p" as m_p {
+    state "r1" as m_p_r1 {
+      [*] --> m_p_r1_a
+      state "a" as m_p_r1_a
+    }
+    --
+    state "r2" as m_p_r2 {
+      [*] --> m_p_r2_x
+      state "x" as m_p_r2_x
+      state "y" as m_p_r2_y
+    }
+  }
+}
+[*] --> m_p
+m_p_r1_a --> m_p_r2_x : E
+m_p_r2_x --> m_p_r2_y : E
+@enduml

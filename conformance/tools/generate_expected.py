@@ -40,7 +40,7 @@ CASES_DIR = CONFORMANCE / "cases"
 ORACLE_JS = HERE / "xstate_oracle" / "oracle.mjs"
 DIVERGENCES_MD = CONFORMANCE / "divergences.generated.md"
 
-OBSERVATION_KEYS = ("state_ids", "context", "actions", "status")
+OBSERVATION_KEYS = ("state_ids", "context", "actions", "status", "guards")
 
 # Volatile wall-clock fields. They are masked in the *text* of the snapshot (not only in the
 # parsed object) so that the recorded `snapshot_text` is reproducible and a Rust test can
@@ -74,14 +74,18 @@ def run_python_oracle(case: dict[str, Any]) -> dict[str, Any]:
     cfg = json.loads(json.dumps(case["machine"]))  # private deep copy
     logic_spec = case.get("logic", {})
     ran: list[str] = []
+    record_guards = logic_spec.get("record_guards") is True
+    guard_log: list[str] | None = [] if record_guards else None
 
     service_results = {
         name: spec.get("result")
         for name, spec in logic_spec.get("services", {}).items()
         if "error" not in spec
     }
+    # `guard_log` is passed only when the case asks for it (older libraries lack it).
+    extra: dict[str, Any] = {"guard_log": guard_log} if record_guards else {}
     logic = stub_logic(cfg, ran=ran, guards=dict(logic_spec.get("guards", {})),
-                       service_results=service_results)
+                       service_results=service_results, **extra)
 
     for name, spec in logic_spec.get("services", {}).items():
         if "error" in spec:
@@ -110,6 +114,9 @@ def run_python_oracle(case: dict[str, Any]) -> dict[str, Any]:
             out["output"] = getattr(interp, "output", None)
         if interp.status == "error":
             out["error"] = str(getattr(interp, "last_error", "") or "")
+        if guard_log is not None:
+            out["guards"] = guard_log[:]
+            del guard_log[:]
         return out
 
     interp.start()
@@ -123,6 +130,9 @@ def run_python_oracle(case: dict[str, Any]) -> dict[str, Any]:
             else:
                 payload = {k: v for k, v in ev.items() if k != "type"}
                 interp.send(ev["type"], **payload)
+        elif "send_batch" in step:
+            # Queued together, processed in one drain (`send_events`).
+            interp.send_events(list(step["send_batch"]))
         elif "advance_ms" in step:
             clock.increment(step["advance_ms"])
         else:

@@ -124,13 +124,13 @@ integrating, gating and committing. Commits are on `main` in order:
 
 ### How correctness was established
 
-- **Conformance suite** (`conformance/`): 37 JSON cases, each run through the real XState v5 engine
+- **Conformance suite** (`conformance/`): 45 JSON cases, each run through the real XState v5 engine
   (Node, `conformance/tools/xstate_oracle`) and the Python library
   (`conformance/tools/generate_expected.py`), producing expected traces, Python `machine_hash` and
   Python snapshot text. `crates/xstate-conformance/tests` asserts the Rust engine matches XState on
   every case and reproduces Python's hash and snapshot (text equal modulo Python's 2-space
-  indentation). `generate_expected.py --check` reports 37 cases, 0 divergent, 0 stale against the
-  Python parity branch (8 divergent against released 0.12.0).
+  indentation). `generate_expected.py --check` reports 45 cases, 0 divergent, 0 stale against the
+  Python parity branch (released 0.12.0 diverges on the eight original cases and on `038`–`045`).
 - **Golden fixtures generated from the Python library** (regenerate with
   `"<python venv>" -I conformance/tools/<script>.py`; all currently drift-free):
   `inspect_golden.py` (3 inspector recordings, byte-identical), `eda_golden.py` (envelopes, dead
@@ -252,13 +252,19 @@ Three independent reviews (security · Rust quality · correctness/parity) found
 
 Engine / core
 - The eight recorded Python-vs-XState divergences are fixed on the Python `xstate-v5-engine-parity`
-  branch (unreleased); `conformance/divergences.generated.md` is empty. Remaining engine differences
-  (not pinned by a case yet — add one each): `done.state.*` queue, conflict preemption between
-  transitions selected in one microstep, guard evaluation order, `assign` ordering, compound
-  self-target without `reenter` (XState resets the children; Python runs only the actions), JSON
-  `assign` without an `assignment` wrapper (Python ignores it), and `invoke` without `input`
-  (Python 0.12.0 briefly forwarded the triggering payload; reverted, `event_payload` is the explicit
-  opt-in; XState/Rust pass `null`). See `docs/guide/migrating-from-python.md`.
+  branch (unreleased); `conformance/divergences.generated.md` is empty. The six further engine
+  differences (microstep conflict preemption and grouping, `done.state.*` queue, guard evaluation
+  order, `assign` ordering, compound self-target without `reenter`, JSON `assign` without an
+  `assignment` wrapper) are fixed there too and pinned by cases `038`–`045`; the case format gained
+  `send_batch` steps and `logic.record_guards` (a `guards` list per observation) for them.
+  `invoke` without `input`: Python 0.12.0 briefly forwarded the triggering payload; reverted,
+  `event_payload` is the explicit opt-in; XState/Rust pass `null`. See
+  `docs/guide/migrating-from-python.md`.
+- Not pinned, observed while writing `042`: XState's `selectEventlessTransitions` iterates the
+  active atomic states in configuration *insertion* order (a state entered later is visited
+  later), not document order. Both the Rust engine (bitset, document order) and the Python engine
+  use document order, so after a region moved, the order of `always` guard evaluations -- and
+  which of two conflicting eventless transitions wins -- can differ from XState.
 - Rust engine fix found during the Python convergence: `start()` landing directly in a top-level
   final state now runs the exit actions (XState does; `crates/xstate-core/tests/start_in_final.rs`).
 - `RestoreOptions::default()` resumes timers; Python's bare `from_snapshot` parks them (`persisted()`

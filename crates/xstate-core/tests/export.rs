@@ -20,8 +20,9 @@ fn conformance_dir() -> Option<PathBuf> {
 }
 
 /// Conformance cases the Python library cannot render, so they have no golden file (see
-/// `conformance/tools/export_golden.py`): `target: [a, b]` is rejected at build time.
-const NO_GOLDEN: &[&str] = &["031_multi_target_parallel_entry"];
+/// `conformance/tools/export_golden.py`). None today: the Python library accepts multi-target
+/// transitions (`031_multi_target_parallel_entry`) since its XState v5 convergence.
+const NO_GOLDEN: &[&str] = &[];
 /// Mermaid goldens where the Rust output deliberately differs from Python's: Python emits the
 /// reserved word `end` as a node id, which Mermaid cannot parse, and Rust renames it
 /// (`end_<n>`). `(case, python id, rust id)`; the golden stays exactly what Python produced and
@@ -29,7 +30,7 @@ const NO_GOLDEN: &[&str] = &["031_multi_target_parallel_entry"];
 const MERMAID_RESERVED_ID: &[(&str, &str, &str)] =
     &[("024_done_state_queue_order", "end", "end_3")];
 /// Conformance cases in `conformance/cases`.
-const EXPECTED_CASES: usize = 37;
+const EXPECTED_CASES: usize = 45;
 /// Golden files in `tests/fixtures/export`: one `.mmd` and one `.puml` per case with a golden.
 const EXPECTED_GOLDEN_FILES: usize = 2 * (EXPECTED_CASES - NO_GOLDEN.len());
 

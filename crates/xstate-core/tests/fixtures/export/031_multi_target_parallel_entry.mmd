@@ -1,0 +1,20 @@
+stateDiagram-v2
+[*] --> m
+state "m" as m {
+    [*] --> idle
+    state "idle" as idle
+    state "p" as p {
+        state "r1" as r1 {
+            [*] --> a
+            state "a" as a
+            state "x" as x
+        }
+        --
+        state "r2" as r2 {
+            [*] --> c
+            state "c" as c
+            state "y" as y
+        }
+    }
+}
+idle --> x : GO

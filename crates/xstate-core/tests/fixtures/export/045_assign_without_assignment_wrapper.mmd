@@ -1,0 +1,8 @@
+stateDiagram-v2
+[*] --> m
+state "m" as m {
+    [*] --> a
+    state "a" as a
+    state "b" as b
+}
+a --> b : SET

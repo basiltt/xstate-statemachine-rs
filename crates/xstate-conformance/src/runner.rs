@@ -1,7 +1,7 @@
 //! Runner: drives a [`Case`] through the Rust engine with the same stubbing the oracles use
 //! and produces [`Observation`]s that can be compared with `expected.xstate`.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 use xstate_core::{
@@ -24,10 +24,34 @@ pub struct RunOutcome {
 /// the machine references.
 #[must_use]
 pub fn stub_logic(case: &Case, machine: &Machine) -> MachineLogic<DynContext> {
+    stub_logic_recording(case, machine, None)
+}
+
+/// Guard evaluations recorded by [`stub_logic_recording`], in order.
+pub type GuardLog = Arc<Mutex<Vec<String>>>;
+
+/// [`stub_logic`] whose guards also append their name to `log` every time they are evaluated.
+#[must_use]
+pub fn stub_logic_recording(
+    case: &Case,
+    machine: &Machine,
+    log: Option<&GuardLog>,
+) -> MachineLogic<DynContext> {
+    let constant = |name: &str, value: bool| {
+        let log = log.cloned();
+        let name = name.to_owned();
+        move |_: &DynContext, _: &Event, _: &Value| {
+            if let Some(log) = &log
+                && let Ok(mut entries) = log.lock()
+            {
+                entries.push(name.clone());
+            }
+            Ok(value)
+        }
+    };
     let mut logic = MachineLogic::new();
     for (name, value) in &case.logic.guards {
-        let v = *value;
-        logic = logic.guard(name.clone(), move |_, _, _| Ok(v));
+        logic = logic.guard(name.clone(), constant(name, *value));
     }
     for (name, stub) in &case.logic.services {
         let result = stub.result.clone();
@@ -42,7 +66,7 @@ pub fn stub_logic(case: &Case, machine: &Machine) -> MachineLogic<DynContext> {
     }
     for name in referenced_names(machine) {
         if !case.logic.guards.contains_key(&name) {
-            logic = logic.guard(name.clone(), |_, _, _| Ok(true));
+            logic = logic.guard(name.clone(), constant(&name, true));
         }
         logic = logic.action(name.clone(), |_| Ok(()));
     }
@@ -123,11 +147,12 @@ pub fn run_case_with_interpreter(
     case: &Case,
 ) -> Result<(RunOutcome, SyncInterpreter<DynContext>), Error> {
     let machine = Machine::from_value(&case.machine)?;
-    let logic = stub_logic(case, &machine);
+    let log: Option<GuardLog> = case.logic.record_guards.then(GuardLog::default);
+    let logic = stub_logic_recording(case, &machine, log.as_ref());
     let clock = SimulatedClock::new();
     let mut interp = SyncInterpreter::with_clock(machine, logic, Arc::new(clock.clone()));
     let started = interp.start()?;
-    let initial = observe(&interp, started.action_names());
+    let initial = observe(&interp, started.action_names(), log.as_ref());
 
     let mut steps = Vec::with_capacity(case.steps.len());
     for step in &case.steps {
@@ -136,16 +161,29 @@ pub fn run_case_with_interpreter(
                 let event = Event::from_json(value.clone())?;
                 interp.send(event)?.action_names()
             }
+            Step::SendBatch(values) => {
+                let mut actions = Vec::new();
+                for value in values {
+                    let event = Event::from_json(value.clone())?;
+                    actions.extend(interp.send(event)?.action_names());
+                }
+                actions
+            }
             Step::AdvanceMs(ms) => interp.advance(&clock, *ms)?.action_names(),
         };
-        steps.push(observe(&interp, actions));
+        steps.push(observe(&interp, actions, log.as_ref()));
     }
     Ok((RunOutcome { initial, steps }, interp))
 }
 
-fn observe(interp: &SyncInterpreter<DynContext>, actions: Vec<String>) -> Observation {
+fn observe(
+    interp: &SyncInterpreter<DynContext>,
+    actions: Vec<String>,
+    log: Option<&GuardLog>,
+) -> Observation {
     let status = interp.status();
     let state = interp.state();
+    let guards = log.map(|log| log.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default());
     Observation {
         state_ids: interp.state_ids(),
         context: interp.context().cloned().unwrap_or(Value::Null),
@@ -154,5 +192,6 @@ fn observe(interp: &SyncInterpreter<DynContext>, actions: Vec<String>) -> Observ
         output: (status == Status::Done).then(|| state.map_or(Value::Null, |s| s.output().clone())),
         error: (status == Status::Error)
             .then(|| state.and_then(|s| s.error().map(str::to_owned)).unwrap_or_default()),
+        guards,
     }
 }

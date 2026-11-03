@@ -55,27 +55,26 @@ semantics on its `xstate-v5-engine-parity` branch (unreleased after 0.12.0): the
 divergences that the conformance suite had recorded -- exit order, parallel entry order,
 wildcards matching engine events, sibling-region targets, exit actions on completion, `reenter`
 into a descendant, multi-target transitions into parallel regions, and the JSON-form `choose` --
-are fixed there, `conformance/divergences.generated.md` is empty, and the Python repository
-replays the same 37 cases in `tests/test_xstate_conformance_cases.py`. Against released Python
-0.12.0 the old table still applies; it is kept in that release's changelog.
+are fixed there. So are six further engine differences, each now pinned by a conformance case
+(`038`–`045`): transitions selected for one event form one microstep with conflict preemption
+(grouped exit, then actions, then entry), `done.state.*` goes to the internal queue, guards are
+evaluated in XState's selection order (cases may record guard evaluations with
+`logic.record_guards`), one `assign` computes every property against the context before it, a
+compound self-target without `reenter` resets its children, and a JSON `assign` without the
+`assignment` wrapper is applied. `conformance/divergences.generated.md` is empty, and the Python
+repository replays the same 45 cases in `tests/test_xstate_conformance_cases.py`. Against
+released Python 0.12.0 the old table still applies; it is kept in that release's changelog.
 
 Differences that remain, by design or because no conformance case pins them yet:
 
 | Behaviour | Python (parity branch) | Rust (XState v5) |
 |---|---|---|
-| `done.state.*` | queued on the external queue | internal queue |
-| Transitions selected in one microstep | run one after another, no conflict preemption | optimal enabled set with preemption; grouped exit, then actions, then entry |
-| Guard evaluation | every candidate guard is evaluated (memoised) | stops once a transition is selected for a leaf |
-| `assign` | applied in place; later property functions see earlier writes | computed against the context before the action list |
-| Compound self-target without `reenter` | runs the transition's actions only | exits and re-enters the children (XState: `x_b`, `t`, `e_a`) |
-| JSON `assign` without an `assignment` wrapper | ignored | applied |
 | Event names | v4 (`done.invoke.*`, `error.platform.*`) | v5 (`xstate.done.actor.*`, `xstate.error.actor.*`) in memory; v4 spellings are accepted on input |
 | `invoke` without `input` | `{}` (0.12.0 briefly forwarded the triggering payload; reverted, `event_payload` is the explicit opt-in) | `null`, as XState passes `undefined`; a declared `input` factory sees the event in both |
 | Multi-target transitions in diagrams, graph and coverage | only the first target is shown | every target |
 
-The done-state queue and transition-preemption rows are pinned by conformance cases (`024`,
-`022` / `023`); the others describe the engines' designs (ADR-0001, ADR-0002) and are not pinned
-by a cross-oracle case yet -- adding one for each is on the QA list.
+These rows describe the engines' designs (ADR-0001, ADR-0002) and are not pinned by a
+cross-oracle case.
 
 Snapshots and the structure hash are exempt: they use the Python (v4) event spellings, because
 those are the bytes the Python library reads and hashes (ADR-0003). The engine normalises them on

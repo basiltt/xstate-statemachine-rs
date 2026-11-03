@@ -1,0 +1,16 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_work
+  state "work" as m_work {
+    [*] --> m_work_step
+    state "step" as m_work_step
+    state "last" as m_work_last
+    m_work_last --> [*]
+  }
+  state "after" as m_after
+}
+[*] --> m_work
+m_work --> m_after : onDone
+m_work_step --> m_work_last : FINISH
+@enduml

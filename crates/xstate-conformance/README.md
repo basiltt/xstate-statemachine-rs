@@ -7,7 +7,7 @@ logic, a step script and the behaviour observed by two oracles: the real XState 
 Python's snapshot bytes and structure hash.
 
 Status: 0.1.0, **not published** (`publish = false`): it backs this workspace's own test suite.
-37 cases; the engine matches XState on all of them. Cases where the two oracles disagree are
+45 cases; the engine matches XState on all of them. Cases where the two oracles disagree are
 listed in [`conformance/divergences.generated.md`](../../conformance/divergences.generated.md).
 
 ```bash

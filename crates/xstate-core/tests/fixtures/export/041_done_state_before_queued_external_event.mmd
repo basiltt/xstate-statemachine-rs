@@ -1,0 +1,14 @@
+stateDiagram-v2
+[*] --> m
+state "m" as m {
+    [*] --> work
+    state "work" as work {
+        [*] --> step
+        state "step" as step
+        state "last" as last
+        last --> [*]
+    }
+    state "after" as after
+}
+work --> after : onDone
+step --> last : FINISH

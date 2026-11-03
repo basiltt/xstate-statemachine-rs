@@ -8,8 +8,8 @@ use xstate_conformance::{Observation, cases_dir, load_cases};
 
 fn describe(o: &Observation) -> String {
     format!(
-        "states={:?} actions={:?} status={} context={} output={:?} error={:?}",
-        o.state_ids, o.actions, o.status, o.context, o.output, o.error
+        "states={:?} actions={:?} status={} context={} output={:?} error={:?} guards={:?}",
+        o.state_ids, o.actions, o.status, o.context, o.output, o.error, o.guards
     )
 }
 
@@ -26,6 +26,7 @@ fn same(a: &Observation, b: &Observation) -> bool {
         && a.context == b.context
         && norm(a.output.as_ref()) == norm(b.output.as_ref())
         && a.error == b.error
+        && a.guards == b.guards
 }
 
 #[test]

@@ -19,6 +19,17 @@ raised only in a minor release.
 - Conformance: the Python engine converged on XState v5 for the eight recorded divergences
   (Python branch `xstate-v5-engine-parity`); `conformance/divergences.generated.md` is empty and
   cases 020, 021, 027–032 now carry identical Python and XState expectations.
+- Conformance: eight new cases (`038`–`045`) pin the remaining engine differences the Python
+  engine has now converged on -- conflict preemption and exit/actions/entry grouping in one
+  microstep, `done.state.*` on the internal queue, guard evaluation order, `assign` ordering, a
+  compound self-target without `reenter`, and a JSON `assign` without the `assignment` wrapper.
+  The case format gained a `send_batch` step (events queued together before processing) and
+  `logic.record_guards`, which adds the guard evaluations to every observation (`guards`); the
+  XState oracle, the Python generator, the schema and `xstate-conformance` (`Step::SendBatch`,
+  `Logic::record_guards`, `Observation::guards`, `runner::stub_logic_recording`) support both.
+  The Rust engine already matched XState on all eight. The Mermaid / PlantUML goldens now include
+  `031_multi_target_parallel_entry`, which the Python library renders since it accepts
+  multi-target transitions.
 
 ## [0.1.0] - 2026-11-02
 
