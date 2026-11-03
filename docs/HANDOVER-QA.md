@@ -249,10 +249,11 @@ Three independent reviews (security · Rust quality · correctness/parity) found
 
 Engine / core
 - 8 documented divergences from the Python engine (XState wins) — `conformance/divergences.generated.md`.
-- Python 0.12.0 added a ninth, not covered by the conformance cases: an `invoke` with no `input`
-  receives the triggering event's payload in Python, `null`/`undefined` in XState v5 and Rust
-  (verified with the Node oracle). Documented in `docs/guide/migrating-from-python.md`; a
-  conformance case that observes service input would pin it.
+- Python 0.12.0 briefly added a ninth, not covered by the conformance cases: an `invoke` with no
+  `input` received the triggering event's payload (XState v5 and Rust pass `null`/`undefined`,
+  verified with the Node oracle). Fixed in the Python repository after 0.12.0 (unreleased `main`;
+  `event_payload` is the explicit opt-in). A conformance case that observes service input would
+  pin it on both sides — add one.
 - `RestoreOptions::default()` resumes timers; Python's bare `from_snapshot` parks them (`persisted()`
   resumes in both).
 - Mermaid export renames a node whose id is the reserved word `end` (Python emits invalid Mermaid).
