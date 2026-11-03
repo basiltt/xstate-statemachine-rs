@@ -64,6 +64,7 @@ some internal events may be ordered differently until the Python library converg
 | `reenter` | honoured for self-targets only | controls whether a descendant target exits the source |
 | Parallel entry order | the targeted region is entered last | document order |
 | Event names | v4 (`done.invoke.*`, `error.platform.*`) | v5 (`xstate.done.actor.*`, `xstate.error.actor.*`) in memory; v4 spellings are accepted on input |
+| `invoke` without `input` (Python 0.12.0+) | the service receives the triggering event's payload as its input | `null`, as XState v5 passes `undefined` (verified against xstate 5.33.3: `fromPromise`/`fromCallback` see `input === undefined`); declare `input` explicitly to pass data — a declared `input` factory sees the event in both runtimes |
 
 The done-state queue, transition preemption, exit order, parallel entry order and `reenter` rows
 are pinned by conformance cases (`024`, `022` / `023`, `020`, `021`, `017` / `030`). The
