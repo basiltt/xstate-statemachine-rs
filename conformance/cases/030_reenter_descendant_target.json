@@ -45,11 +45,6 @@
       "send": "HARD"
     }
   ],
-  "divergence": {
-    "python": "`reenter` is honoured for self-targets only; a re-entering transition to a descendant exits just the previously active child.",
-    "spec": "With `reenter: true` the domain is the least common ancestor above the source, so the source itself is exited and re-entered (x_p ... e_p) before the target child.",
-    "rust_follows": "xstate"
-  },
   "expected": {
     "xstate": {
       "initial": {
@@ -132,7 +127,9 @@
           "context": {},
           "actions": [
             "x_b",
+            "x_p",
             "hard",
+            "e_p",
             "e_a"
           ],
           "status": "running"

@@ -52,11 +52,6 @@
       "send": "E"
     }
   ],
-  "divergence": {
-    "python": "Exits and re-enters only the sibling region that holds the target (r2); the source region r1 stays active.",
-    "spec": "The transition domain is the parallel state itself, so every descendant of it is exited (both regions) and both regions are re-entered: the target region through the target, the other through its initial state. The parallel state itself is not re-entered.",
-    "rust_follows": "xstate"
-  },
   "expected": {
     "xstate": {
       "initial": {
@@ -129,6 +124,10 @@
           "actions": [
             "x_c",
             "x_r2",
+            "x_a",
+            "x_r1",
+            "e_r1",
+            "e_a",
             "e_r2",
             "e_d"
           ],

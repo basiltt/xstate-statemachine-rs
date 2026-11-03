@@ -9,6 +9,17 @@ raised only in a minor release.
 
 ## [Unreleased]
 
+### Fixed
+
+- `xstate-core`: `start()` landing directly in a top-level final state now runs the exit actions
+  of the final state and the root, as XState v5 does (`e_root, e_done, x_done, x_root`).
+
+### Changed
+
+- Conformance: the Python engine converged on XState v5 for the eight recorded divergences
+  (Python branch `xstate-v5-engine-parity`); `conformance/divergences.generated.md` is empty and
+  cases 020, 021, 027–032 now carry identical Python and XState expectations.
+
 ## [0.1.0] - 2026-11-02
 
 First release: a Rust port of the Python library

@@ -53,11 +53,6 @@
       "send": "GO"
     }
   ],
-  "divergence": {
-    "python": "Multi-target transitions (`target: [a, b]`) are rejected at build time.",
-    "spec": "XState (and SCXML) allow several targets as long as they lie in different regions of one parallel state; both are entered instead of the regions' initial states.",
-    "rust_follows": "xstate"
-  },
   "expected": {
     "xstate": {
       "initial": {
@@ -92,7 +87,68 @@
         "name": "xstate-statemachine",
         "version": "0.12.0"
       },
-      "unsupported": "InvalidConfigError: Transition 'GO' on state 'm.idle': 'target' must be a string (multi-target lists are not supported), got list"
+      "initial": {
+        "state_ids": [
+          "m.idle"
+        ],
+        "context": {},
+        "actions": [],
+        "status": "running"
+      },
+      "steps": [
+        {
+          "state_ids": [
+            "m.p.r1.x",
+            "m.p.r2.y"
+          ],
+          "context": {},
+          "actions": [
+            "e_x",
+            "e_y"
+          ],
+          "status": "running"
+        }
+      ],
+      "machine_hash": "8b03a1848894f479",
+      "snapshot": {
+        "version": 4,
+        "machine_id": "m",
+        "machine_hash": "8b03a1848894f479",
+        "machine_version": null,
+        "taken_at": 0.0,
+        "status": "running",
+        "context": {},
+        "state_ids": [
+          "m.p.r1.x",
+          "m.p.r2.y"
+        ],
+        "value": {
+          "p": {
+            "r1": "x",
+            "r2": "y"
+          }
+        },
+        "configuration": [
+          "m",
+          "m.p",
+          "m.p.r1",
+          "m.p.r1.x",
+          "m.p.r2",
+          "m.p.r2.y"
+        ],
+        "output": null,
+        "error": null,
+        "chain_trips": 0,
+        "last_chain_error": null,
+        "deferred": [],
+        "pending_events": [],
+        "scheduled_sends": [],
+        "deadlines": [],
+        "history": {},
+        "actors": {},
+        "system": {}
+      },
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"m\",\n  \"machine_hash\": \"8b03a1848894f479\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"running\",\n  \"context\": {},\n  \"state_ids\": [\n    \"m.p.r1.x\",\n    \"m.p.r2.y\"\n  ],\n  \"value\": {\n    \"p\": {\n      \"r1\": \"x\",\n      \"r2\": \"y\"\n    }\n  },\n  \"configuration\": [\n    \"m\",\n    \"m.p\",\n    \"m.p.r1\",\n    \"m.p.r1.x\",\n    \"m.p.r2\",\n    \"m.p.r2.y\"\n  ],\n  \"output\": null,\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
     }
   }
 }

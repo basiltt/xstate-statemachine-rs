@@ -208,7 +208,9 @@ The engine is specified by executable fixtures in [`conformance/`](conformance/R
 case is run through the real XState v5 engine (Node) and through the Python library; the Rust
 engine must match XState's observations and reproduce Python's snapshot bytes and structure hash.
 Disagreements between the two oracles are listed in
-[`conformance/divergences.generated.md`](conformance/divergences.generated.md).
+[`conformance/divergences.generated.md`](conformance/divergences.generated.md) — empty since the
+Python engine converged on XState v5 (its `xstate-v5-engine-parity` branch, after 0.12.0); the
+eight cases that used to differ are now ordinary conformance cases on both sides.
 
 ## Development
 

@@ -50,11 +50,6 @@
       "send": "STOP"
     }
   ],
-  "divergence": {
-    "python": "Exits all active states ordered by (depth descending, state-id descending): every leaf first, then every region, so regions interleave and 'zeta' precedes 'alpha' because its id string sorts higher.",
-    "spec": "SCXML exitStates: statesToExit in exit order, i.e. reverse document order with descendants before ancestors, region by region: a1, alpha, z1, zeta.",
-    "rust_follows": "xstate"
-  },
   "expected": {
     "xstate": {
       "initial": {
@@ -118,10 +113,10 @@
           ],
           "context": {},
           "actions": [
-            "x_z1",
             "x_a1",
-            "x_zeta",
-            "x_alpha"
+            "x_alpha",
+            "x_z1",
+            "x_zeta"
           ],
           "status": "done",
           "output": null

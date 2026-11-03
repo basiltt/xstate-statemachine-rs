@@ -74,8 +74,21 @@ pub(super) fn start<C: Context>(cx: &mut Ctx<'_, C>) -> Result<()> {
     to_enter.insert(StateId::ROOT);
     add_descendants_to_enter(machine, StateId::ROOT, &cx.state.history, &mut to_enter);
     enter_states(cx, &to_enter, &init)?;
+    exit_all_when_done(cx, &init)?;
     cx.report.microsteps += 1;
     settle(cx, init)
+}
+
+/// XState runs the exit actions of every remaining active state (reverse document order) as
+/// soon as the machine is done -- in `microstep`, which also covers the initial transition.
+fn exit_all_when_done<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Result<()> {
+    if cx.state.status == Status::Done {
+        let remaining: Vec<StateId> = cx.state.configuration().collect();
+        for &s in remaining.iter().rev() {
+            run_actions(cx, &cx.machine.node(s).exit, event)?;
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn macrostep<C: Context>(cx: &mut Ctx<'_, C>, event: Event) -> Result<()> {
@@ -243,15 +256,7 @@ fn microstep<C: Context>(
 
     let to_enter = compute_entry_set(machine, &filtered, &cx.state.history);
     enter_states(cx, &to_enter, event)?;
-
-    if cx.state.status == Status::Done {
-        // XState runs the exit actions of every remaining active state once the machine is done.
-        let remaining: Vec<StateId> = cx.state.configuration().collect();
-        for &s in remaining.iter().rev() {
-            run_actions(cx, &machine.node(s).exit, event)?;
-        }
-    }
-    Ok(())
+    exit_all_when_done(cx, event)
 }
 
 /// XState's `removeConflictingTransitions`.

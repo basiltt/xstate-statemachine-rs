@@ -54,11 +54,6 @@
       "send": "PING"
     }
   ],
-  "divergence": {
-    "python": "Wildcard descriptors (`*`, `foo.*`) never match engine-generated events, so a service failure with only a `*` handler puts the machine into `error`.",
-    "spec": "XState v5 getCandidates applies `*` to every event, including xstate.done.actor.* and xstate.error.actor.* (its source carries a TODO questioning this). The failure is consumed by the `*` handler and the machine keeps running.",
-    "rust_follows": "xstate"
-  },
   "expected": {
     "xstate": {
       "initial": {
@@ -108,7 +103,9 @@
           "w.a"
         ],
         "context": {},
-        "actions": [],
+        "actions": [
+          "starA"
+        ],
         "status": "running"
       },
       "steps": [
@@ -117,18 +114,20 @@
             "w.b"
           ],
           "context": {},
-          "actions": [],
-          "status": "error",
-          "error": ""
+          "actions": [
+            "starB"
+          ],
+          "status": "running"
         },
         {
           "state_ids": [
             "w.b"
           ],
           "context": {},
-          "actions": [],
-          "status": "error",
-          "error": ""
+          "actions": [
+            "starB"
+          ],
+          "status": "running"
         }
       ],
       "machine_hash": "fa529241089d40e3",
@@ -138,7 +137,7 @@
         "machine_hash": "fa529241089d40e3",
         "machine_version": null,
         "taken_at": 0.0,
-        "status": "error",
+        "status": "running",
         "context": {},
         "state_ids": [
           "w.b"
@@ -149,7 +148,7 @@
           "w.b"
         ],
         "output": null,
-        "error": "kaboom",
+        "error": null,
         "chain_trips": 0,
         "last_chain_error": null,
         "deferred": [],
@@ -160,7 +159,7 @@
         "actors": {},
         "system": {}
       },
-      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"w\",\n  \"machine_hash\": \"fa529241089d40e3\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"error\",\n  \"context\": {},\n  \"state_ids\": [\n    \"w.b\"\n  ],\n  \"value\": \"b\",\n  \"configuration\": [\n    \"w\",\n    \"w.b\"\n  ],\n  \"output\": null,\n  \"error\": \"kaboom\",\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"w\",\n  \"machine_hash\": \"fa529241089d40e3\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"running\",\n  \"context\": {},\n  \"state_ids\": [\n    \"w.b\"\n  ],\n  \"value\": \"b\",\n  \"configuration\": [\n    \"w\",\n    \"w.b\"\n  ],\n  \"output\": null,\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
     }
   }
 }

@@ -47,46 +47,40 @@ Sentry observers, and the LLM provider adapters and framework bridges of the age
 
 ## Semantic differences
 
-### Engine semantics: the Rust engine follows XState v5
+### Engine semantics: both engines follow XState v5
 
 ADR-0001: the headline promise is that a chart behaves as it does in the Stately editor's
-simulator, which is the real XState v5 engine. The Python engine deviates from XState in a few
-places; the Rust engine does not. A fleet that mixes the two shares *state*, not semantics, so
-some internal events may be ordered differently until the Python library converges.
+simulator, which is the real XState v5 engine. The Python library's engine converged on the same
+semantics on its `xstate-v5-engine-parity` branch (unreleased after 0.12.0): the eight
+divergences that the conformance suite had recorded -- exit order, parallel entry order,
+wildcards matching engine events, sibling-region targets, exit actions on completion, `reenter`
+into a descendant, multi-target transitions into parallel regions, and the JSON-form `choose` --
+are fixed there, `conformance/divergences.generated.md` is empty, and the Python repository
+replays the same 37 cases in `tests/test_xstate_conformance_cases.py`. Against released Python
+0.12.0 the old table still applies; it is kept in that release's changelog.
 
-| Behaviour | Python | Rust (XState v5) |
+Differences that remain, by design or because no conformance case pins them yet:
+
+| Behaviour | Python (parity branch) | Rust (XState v5) |
 |---|---|---|
 | `done.state.*` | queued on the external queue | internal queue |
 | Transitions selected in one microstep | run one after another, no conflict preemption | optimal enabled set with preemption; grouped exit, then actions, then entry |
-| Exit order | ties broken by the state-id string | reverse document order, descendants first, region by region |
 | Guard evaluation | every candidate guard is evaluated (memoised) | stops once a transition is selected for a leaf |
 | `assign` | applied in place; later property functions see earlier writes | computed against the context before the action list |
-| `reenter` | honoured for self-targets only | controls whether a descendant target exits the source |
-| Parallel entry order | the targeted region is entered last | document order |
+| Compound self-target without `reenter` | runs the transition's actions only | exits and re-enters the children (XState: `x_b`, `t`, `e_a`) |
+| JSON `assign` without an `assignment` wrapper | ignored | applied |
 | Event names | v4 (`done.invoke.*`, `error.platform.*`) | v5 (`xstate.done.actor.*`, `xstate.error.actor.*`) in memory; v4 spellings are accepted on input |
-| `invoke` without `input` | Python 0.12.0 forwarded the triggering event's payload; reverted after 0.12.0 (unreleased `main`): `{}`, with `event_payload` as the explicit opt-in | `null`, as XState v5 passes `undefined` (verified against xstate 5.33.3); a declared `input` factory sees the event in both runtimes |
+| `invoke` without `input` | `{}` (0.12.0 briefly forwarded the triggering payload; reverted, `event_payload` is the explicit opt-in) | `null`, as XState passes `undefined`; a declared `input` factory sees the event in both |
+| Multi-target transitions in diagrams, graph and coverage | only the first target is shown | every target |
 
-The done-state queue, transition preemption, exit order, parallel entry order and `reenter` rows
-are pinned by conformance cases (`024`, `022` / `023`, `020`, `021`, `017` / `030`). The
-guard-evaluation, `assign` and event-name rows describe the engine's design (ADR-0001, ADR-0002)
-and are not pinned by a cross-oracle case. The cases where the two oracles disagree are generated
-into [`conformance/divergences.generated.md`](../../conformance/divergences.generated.md); today
-they are:
-
-| Case | Python | XState / Rust |
-|---|---|---|
-| `exit_order_reverse_document` | exits ordered by depth then id string, regions interleave | reverse document order |
-| `parallel_entry_order` | regions off the entry path first, the target's region last | document order |
-| `wildcard_vs_engine_events` | `*` and `foo.*` never match engine events: a service failure with only a `*` handler puts the machine in `error` | `*` matches every event, including `xstate.error.actor.*`: the handler consumes the failure |
-| `parallel_cross_region_target` | only the target's region is exited and re-entered | the domain is the parallel state: both regions exit and re-enter |
-| `exit_actions_on_completion` | reaching a top-level final state runs no further exit actions | exit actions of every active state run, then the machine is done |
-| `reenter_descendant_target` | `reenter` ignored for a descendant target | the source is exited and re-entered |
-| `multi_target_parallel_entry` | `target: [a, b]` rejected at build time | allowed when the targets are in different regions of a parallel state |
-| `choose_and_state_in` | JSON-form `choose` with `params.branches` runs no branch | the first matching branch runs |
+The done-state queue and transition-preemption rows are pinned by conformance cases (`024`,
+`022` / `023`); the others describe the engines' designs (ADR-0001, ADR-0002) and are not pinned
+by a cross-oracle case yet -- adding one for each is on the QA list.
 
 Snapshots and the structure hash are exempt: they use the Python (v4) event spellings, because
 those are the bytes the Python library reads and hashes (ADR-0003). The engine normalises them on
-restore.
+restore. The structure hash renders only the first target of a multi-target transition in both
+runtimes, so hashes stay identical.
 
 ### Model and API
 

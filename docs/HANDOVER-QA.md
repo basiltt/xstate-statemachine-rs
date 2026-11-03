@@ -87,12 +87,14 @@ xstate-statemachine (facade crate, feature flags = Python extras)
 
 Key design decisions (ADRs):
 
-- **0001 Engine semantics.** When Python and XState v5 disagree, XState wins. Eight known
-  Python-vs-XState divergences are listed in `conformance/divergences.generated.md` (exit order,
-  parallel entry order, wildcard matching of engine events, cross-region targets, exit actions on
-  completion, reenter into descendants, multi-target rejection, JSON-form `choose`). Snapshots and the
-  structure hash nevertheless use the Python/v4 event spellings (`after.*`, `done.state.*`,
-  `done.invoke.*`, `error.platform.*`) so the bytes match Python.
+- **0001 Engine semantics.** When Python and XState v5 disagree, XState wins. The eight
+  Python-vs-XState divergences the suite recorded against Python 0.12.0 (exit order, parallel entry
+  order, wildcard matching of engine events, cross-region targets, exit actions on completion,
+  reenter into descendants, multi-target rejection, JSON-form `choose`) were fixed in the Python
+  repository on branch `xstate-v5-engine-parity` (2026-11-03, unreleased), so
+  `conformance/divergences.generated.md` is now empty. Snapshots and the structure hash use the
+  Python/v4 event spellings (`after.*`, `done.state.*`, `done.invoke.*`, `error.platform.*`) so
+  the bytes match Python.
 - **0002 Two-tier context.** `DynContext = serde_json::Value` (JSON-form `assign`) plus a typed
   `C: Context` for users who want structs.
 - **0003 Byte-compatible snapshots and store layouts.** Layout v4; SQLite schema v2; Redis and
@@ -127,7 +129,8 @@ integrating, gating and committing. Commits are on `main` in order:
   (`conformance/tools/generate_expected.py`), producing expected traces, Python `machine_hash` and
   Python snapshot text. `crates/xstate-conformance/tests` asserts the Rust engine matches XState on
   every case and reproduces Python's hash and snapshot (text equal modulo Python's 2-space
-  indentation). `generate_expected.py --check` reports 37 cases, 8 divergent (documented), 0 stale.
+  indentation). `generate_expected.py --check` reports 37 cases, 0 divergent, 0 stale against the
+  Python parity branch (8 divergent against released 0.12.0).
 - **Golden fixtures generated from the Python library** (regenerate with
   `"<python venv>" -I conformance/tools/<script>.py`; all currently drift-free):
   `inspect_golden.py` (3 inspector recordings, byte-identical), `eda_golden.py` (envelopes, dead
@@ -248,12 +251,16 @@ Three independent reviews (security · Rust quality · correctness/parity) found
 ### Known gaps and deliberate deviations (verify, do not rediscover)
 
 Engine / core
-- 8 documented divergences from the Python engine (XState wins) — `conformance/divergences.generated.md`.
-- Python 0.12.0 briefly added a ninth, not covered by the conformance cases: an `invoke` with no
-  `input` received the triggering event's payload (XState v5 and Rust pass `null`/`undefined`,
-  verified with the Node oracle). Fixed in the Python repository after 0.12.0 (unreleased `main`;
-  `event_payload` is the explicit opt-in). A conformance case that observes service input would
-  pin it on both sides — add one.
+- The eight recorded Python-vs-XState divergences are fixed on the Python `xstate-v5-engine-parity`
+  branch (unreleased); `conformance/divergences.generated.md` is empty. Remaining engine differences
+  (not pinned by a case yet — add one each): `done.state.*` queue, conflict preemption between
+  transitions selected in one microstep, guard evaluation order, `assign` ordering, compound
+  self-target without `reenter` (XState resets the children; Python runs only the actions), JSON
+  `assign` without an `assignment` wrapper (Python ignores it), and `invoke` without `input`
+  (Python 0.12.0 briefly forwarded the triggering payload; reverted, `event_payload` is the explicit
+  opt-in; XState/Rust pass `null`). See `docs/guide/migrating-from-python.md`.
+- Rust engine fix found during the Python convergence: `start()` landing directly in a top-level
+  final state now runs the exit actions (XState does; `crates/xstate-core/tests/start_in_final.rs`).
 - `RestoreOptions::default()` resumes timers; Python's bare `from_snapshot` parks them (`persisted()`
   resumes in both).
 - Mermaid export renames a node whose id is the reserved word `end` (Python emits invalid Mermaid).

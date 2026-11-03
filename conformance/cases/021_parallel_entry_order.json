@@ -49,11 +49,6 @@
       "send": "GO"
     }
   ],
-  "divergence": {
-    "python": "Enters every region not on the entry path first, and the region containing the target last (second, s1, then first, f2).",
-    "spec": "SCXML enterStates: statesToEnter sorted in entry (document) order, so the targeted region 'first' is entered before 'second' regardless of which holds the target.",
-    "rust_follows": "xstate"
-  },
   "expected": {
     "xstate": {
       "initial": {
@@ -108,10 +103,10 @@
           "context": {},
           "actions": [
             "e_p",
-            "e_second",
-            "e_s1",
             "e_first",
-            "e_f2"
+            "e_f2",
+            "e_second",
+            "e_s1"
           ],
           "status": "running"
         }

@@ -111,11 +111,6 @@
       "send": "LOCK"
     }
   ],
-  "divergence": {
-    "python": "The JSON-form `choose` built-in with `params.branches` runs no branch (the oracle recorded no actions), while the `or` guard still selects the LOCK transition.",
-    "spec": "Translated to XState code (`enqueueActions` with `check`, `and`/`or`/`not`/`stateIn` creators) the first matching branch runs: adminByDay by day, atNight at night, and LOCK is taken.",
-    "rust_follows": "xstate"
-  },
   "expected": {
     "xstate": {
       "initial": {
@@ -195,7 +190,9 @@
             "m.p.work.idle"
           ],
           "context": {},
-          "actions": [],
+          "actions": [
+            "adminByDay"
+          ],
           "status": "running"
         },
         {
@@ -213,7 +210,9 @@
             "m.p.work.idle"
           ],
           "context": {},
-          "actions": [],
+          "actions": [
+            "atNight"
+          ],
           "status": "running"
         },
         {
