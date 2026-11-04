@@ -1,0 +1,50 @@
+stateDiagram-v2
+[*] --> m
+state "m" as m {
+    [*] --> outer
+    state "outer" as outer {
+        [*] --> p
+        state "p" as p {
+            state "hp" as hp
+            --
+            state "r1" as r1 {
+                [*] --> a1
+                state "a1" as a1
+                state "f1" as f1
+                f1 --> [*]
+            }
+            --
+            state "r2" as r2 {
+                state "x" as x {
+                    [*] --> x1
+                    state "x1" as x1
+                    state "xf" as xf
+                    xf --> [*]
+                }
+                --
+                state "y" as y {
+                    [*] --> y1
+                    state "y1" as y1
+                    state "yf" as yf
+                    yf --> [*]
+                }
+            }
+        }
+    }
+    state "after" as after
+    state "a" as a {
+        [*] --> b
+        state "b" as b {
+            [*] --> c
+            state "c" as c
+            state "f" as f
+            f --> [*]
+        }
+    }
+}
+p --> after : onDone
+a1 --> f1 : FIN1
+x1 --> xf : FIN2
+y1 --> yf : FIN2
+after --> a : NEST
+c --> f : FIN

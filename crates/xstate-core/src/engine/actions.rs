@@ -146,13 +146,20 @@ fn run_builtin<C: Context>(cx: &mut Ctx<'_, C>, b: &Builtin, event: &Event) -> R
             cx.effects.push(Effect::Log { expr: expr.clone(), label: label.clone() });
         }
         Builtin::Cancel(id) => cx.effects.push(Effect::CancelSend(id.clone())),
-        Builtin::StopChild(id) => cx.effects.push(Effect::StopActor(id.clone())),
-        Builtin::SpawnChild { src, id, system_id, input } => cx.effects.push(Effect::Spawn {
-            src: src.clone(),
-            id: id.clone().unwrap_or_else(|| src.clone()),
-            system_id: system_id.clone(),
-            input: input.clone(),
-        }),
+        // Starting or stopping a child changes XState's snapshot (`children`).
+        Builtin::StopChild(id) => {
+            cx.effects.push(Effect::StopActor(id.clone()));
+            cx.state.mutations += 1;
+        }
+        Builtin::SpawnChild { src, id, system_id, input } => {
+            cx.effects.push(Effect::Spawn {
+                src: src.clone(),
+                id: id.clone().unwrap_or_else(|| src.clone()),
+                system_id: system_id.clone(),
+                input: input.clone(),
+            });
+            cx.state.mutations += 1;
+        }
         Builtin::Emit(ev) => cx.effects.push(Effect::Emit(ev.clone())),
         Builtin::Choose(branches) => {
             for branch in branches {

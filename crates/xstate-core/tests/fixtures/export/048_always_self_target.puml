@@ -1,0 +1,18 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_a
+  state "a" as m_a
+  state "b" as m_b
+  state "p" as m_p {
+    [*] --> m_p_c
+    state "c" as m_p_c
+  }
+}
+[*] --> m_a
+m --> m_b : GO_B
+m --> m_p : GO_P
+m_a --> m_a : always [gA]
+m_b --> m_b : always [gB]
+m_p --> m_p : always [gP]
+@enduml

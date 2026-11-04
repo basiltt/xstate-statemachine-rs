@@ -1,0 +1,21 @@
+stateDiagram-v2
+[*] --> m
+state "m" as m {
+    [*] --> s
+    state "s" as s {
+        [*] --> g
+        state "h" as h
+        state "g" as g {
+            [*] --> g1
+            state "g1" as g1
+            state "g2" as g2
+        }
+        state "k" as k
+    }
+    state "out" as out
+}
+s --> out : OUT
+g --> k : TOK
+g1 --> g2 : NEXT
+k --> h : BACK
+out --> h : IN

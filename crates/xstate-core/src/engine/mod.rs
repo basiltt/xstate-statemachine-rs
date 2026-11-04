@@ -61,10 +61,17 @@ pub struct ActiveState<C> {
     pub(crate) output: Value,
     pub(crate) error: Option<String>,
     pub(crate) internal_queue: VecDeque<Event>,
-    /// Bumped on every configuration, history or context mutation (eventless re-selection).
+    /// Bumped whenever a microstep produces a new snapshot in XState's sense: a configuration
+    /// change, a recorded history value, an `assign`, a started or stopped actor. The macrostep
+    /// re-selects eventless transitions only after such a microstep (or an internal event).
     pub(crate) mutations: u64,
     /// Count of state entries so far; stamps `after` timers for durable deadlines.
     pub(crate) entry_seq: u64,
+    /// Per state (indexed by [`StateId::index`]): the `entry_seq` of its latest entry, `0` for
+    /// a restored configuration. XState keeps its active states as a list (`snapshot._nodes`)
+    /// to which a microstep appends what it enters, and `selectEventlessTransitions` walks the
+    /// atomic states in that order; sorting the active leaves by this stamp reproduces it.
+    pub(crate) entered_at: Vec<u64>,
 }
 
 impl<C> ActiveState<C> {
@@ -180,6 +187,9 @@ impl<C: Context> ActiveState<C> {
             internal_queue: VecDeque::new(),
             mutations: 0,
             entry_seq,
+            // XState's `restoreSnapshot` rebuilds its state list from the state value: the
+            // leaves in document order, which is what equal stamps sort as.
+            entered_at: vec![0; machine.states().len()],
         }
     }
 }
@@ -323,6 +333,7 @@ pub(crate) fn start_with<C: Context>(
         internal_queue: VecDeque::new(),
         mutations: 0,
         entry_seq: 0,
+        entered_at: vec![0; machine.states().len()],
     };
     let mut effects = Vec::new();
     let mut report = StepReport::default();

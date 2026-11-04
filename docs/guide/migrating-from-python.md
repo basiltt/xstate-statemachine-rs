@@ -55,14 +55,18 @@ semantics on its `xstate-v5-engine-parity` branch (unreleased after 0.12.0): the
 divergences that the conformance suite had recorded -- exit order, parallel entry order,
 wildcards matching engine events, sibling-region targets, exit actions on completion, `reenter`
 into a descendant, multi-target transitions into parallel regions, and the JSON-form `choose` --
-are fixed there. So are six further engine differences, each now pinned by a conformance case
-(`038`–`045`): transitions selected for one event form one microstep with conflict preemption
+are fixed there. So are ten further engine differences, each now pinned by a conformance case
+(`038`–`050`): transitions selected for one event form one microstep with conflict preemption
 (grouped exit, then actions, then entry), `done.state.*` goes to the internal queue, guards are
 evaluated in XState's selection order (cases may record guard evaluations with
 `logic.record_guards`), one `assign` computes every property against the context before it, a
-compound self-target without `reenter` resets its children, and a JSON `assign` without the
-`assignment` wrapper is applied. `conformance/divergences.generated.md` is empty, and the Python
-repository replays the same 45 cases in `tests/test_xstate_conformance_cases.py`. Against
+compound self-target without `reenter` resets its children, a JSON `assign` without the
+`assignment` wrapper is applied, `always` transitions are selected in the order their states were
+entered (not document order), history is recorded only when the state that owns it is exited, an
+eventless microstep that changes nothing (a self-targeting `always`) is not re-selected, and
+`done.state.*` is raised for the compound parent and every completed parallel ancestor (never a
+compound grandparent). `conformance/divergences.generated.md` is empty, and the Python
+repository replays the same 50 cases in `tests/test_xstate_conformance_cases.py`. Against
 released Python 0.12.0 the old table still applies; it is kept in that release's changelog.
 
 Differences that remain, by design or because no conformance case pins them yet:

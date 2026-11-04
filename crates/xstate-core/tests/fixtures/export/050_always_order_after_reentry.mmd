@@ -1,0 +1,38 @@
+stateDiagram-v2
+[*] --> m
+state "m" as m {
+    [*] --> p
+    state "p" as p {
+        state "r1" as r1 {
+            [*] --> s
+            state "s" as s {
+                [*] --> s1
+                state "h" as h
+                state "s1" as s1
+            }
+        }
+        --
+        state "r2" as r2 {
+            [*] --> t
+            state "t" as t {
+                [*] --> t1
+                state "t1" as t1
+            }
+        }
+        --
+        state "r3" as r3 {
+            [*] --> idle
+            state "idle" as idle
+            state "armed" as armed
+        }
+    }
+    state "x" as x
+    state "y" as y
+}
+s --> s : RS
+s1 --> x : always [and]
+t --> t : RT
+t1 --> y : always [and]
+idle --> armed : ARM
+x --> p : BACK
+y --> p : BACK

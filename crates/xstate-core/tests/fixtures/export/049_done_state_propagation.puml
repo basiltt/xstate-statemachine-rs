@@ -1,0 +1,52 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_outer
+  state "outer" as m_outer {
+    [*] --> m_outer_p
+    state "p" as m_outer_p {
+      state "hp" as m_outer_p_hp
+      --
+      state "r1" as m_outer_p_r1 {
+        [*] --> m_outer_p_r1_a1
+        state "a1" as m_outer_p_r1_a1
+        state "f1" as m_outer_p_r1_f1
+        m_outer_p_r1_f1 --> [*]
+      }
+      --
+      state "r2" as m_outer_p_r2 {
+        state "x" as m_outer_p_r2_x {
+          [*] --> m_outer_p_r2_x_x1
+          state "x1" as m_outer_p_r2_x_x1
+          state "xf" as m_outer_p_r2_x_xf
+          m_outer_p_r2_x_xf --> [*]
+        }
+        --
+        state "y" as m_outer_p_r2_y {
+          [*] --> m_outer_p_r2_y_y1
+          state "y1" as m_outer_p_r2_y_y1
+          state "yf" as m_outer_p_r2_y_yf
+          m_outer_p_r2_y_yf --> [*]
+        }
+      }
+    }
+  }
+  state "after" as m_after
+  state "a" as m_a {
+    [*] --> m_a_b
+    state "b" as m_a_b {
+      [*] --> m_a_b_c
+      state "c" as m_a_b_c
+      state "f" as m_a_b_f
+      m_a_b_f --> [*]
+    }
+  }
+}
+[*] --> m_outer
+m_outer_p --> m_after : onDone
+m_outer_p_r1_a1 --> m_outer_p_r1_f1 : FIN1
+m_outer_p_r2_x_x1 --> m_outer_p_r2_x_xf : FIN2
+m_outer_p_r2_y_y1 --> m_outer_p_r2_y_yf : FIN2
+m_after --> m_a : NEST
+m_a_b_c --> m_a_b_f : FIN
+@enduml

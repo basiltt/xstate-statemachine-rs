@@ -13,6 +13,23 @@ raised only in a minor release.
 
 - `xstate-core`: `start()` landing directly in a top-level final state now runs the exit actions
   of the final state and the root, as XState v5 does (`e_root, e_done, x_done, x_root`).
+- `xstate-core`: `always` transitions are selected in the order their atomic states were entered,
+  as XState's `selectEventlessTransitions` walks `snapshot._nodes` (states a microstep keeps stay
+  in place, the ones it enters are appended in document order; a microstep that re-enters exactly
+  what it exited without recording history keeps the order; a restored snapshot starts in
+  document order). The engine visited them in document order, so after one region moved, the
+  other region's `always` guards ran second and a conflict between two regions' `always`
+  transitions could go the other way. `ActiveState` keeps a per-state entry stamp
+  (`entered_at`); the eventless pass sorts its (inline) leaf list by it.
+- `xstate-core`: an eventless microstep that leaves the snapshot unchanged -- same states, no
+  history recorded, no `assign`, no actor started or stopped, no in-place context change by a
+  user action -- no longer re-selects eventless transitions (XState's `macrostep`). A
+  self-targeting `always` with `reenter: true`, or on a compound state, ran again until
+  `maxIterations` failed the machine; it now runs once per macrostep (and once more per internal
+  event). `ActiveState::mutations` counts snapshot changes instead of every exit and entry.
+- `xstate-core`: a parallel state with a `history` child now completes (`done.state.*`, `onDone`)
+  when its regions are final: `isInFinalState` skipped no child, and a history pseudo-state is
+  never final.
 
 ### Changed
 
@@ -30,6 +47,13 @@ raised only in a minor release.
   The Rust engine already matched XState on all eight. The Mermaid / PlantUML goldens now include
   `031_multi_target_parallel_entry`, which the Python library renders since it accepts
   multi-target transitions.
+- Conformance: five new cases (`046`–`050`) pin the last known engine differences, now fixed in
+  both engines: `always` selection in entry order (`046_always_order_follows_entry_order`,
+  `050_always_order_after_reentry`), history recorded only when its owner is exited
+  (`047_history_records_only_on_owner_exit`; the Rust engine already did this), a self-targeting
+  `always` runs once (`048_always_self_target`) and which ancestors receive `done.state.*`
+  (`049_done_state_propagation`: the compound parent, then every completed parallel ancestor; a
+  `"*"` handler sees the ones nobody handles).
 
 ## [0.1.0] - 2026-11-02
 

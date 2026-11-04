@@ -1,0 +1,23 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_s
+  state "s" as m_s {
+    [*] --> m_s_g
+    state "h" as m_s_h
+    state "g" as m_s_g {
+      [*] --> m_s_g_g1
+      state "g1" as m_s_g_g1
+      state "g2" as m_s_g_g2
+    }
+    state "k" as m_s_k
+  }
+  state "out" as m_out
+}
+[*] --> m_s
+m_s --> m_out : OUT
+m_s_g --> m_s_k : TOK
+m_s_g_g1 --> m_s_g_g2 : NEXT
+m_s_k --> m_s_h : BACK
+m_out --> m_s_h : IN
+@enduml

@@ -1,0 +1,27 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_p
+  state "p" as m_p {
+    state "r1" as m_p_r1 {
+      [*] --> m_p_r1_a
+      state "a" as m_p_r1_a
+      state "b" as m_p_r1_b
+    }
+    --
+    state "r2" as m_p_r2 {
+      [*] --> m_p_r2_c
+      state "c" as m_p_r2_c
+      state "d" as m_p_r2_d
+    }
+  }
+  state "x" as m_x
+  state "y" as m_y
+}
+[*] --> m_p
+m --> m_p : RESET
+m_p_r1_a --> m_p_r1_b : E
+m_p_r1_b --> m_x : always [and]
+m_p_r2_c --> m_p_r2_d : F
+m_p_r2_d --> m_y : always [and]
+@enduml
