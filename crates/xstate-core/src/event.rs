@@ -79,10 +79,13 @@ impl Event {
     /// a string nor an object with a string `type`.
     pub fn from_json(value: Value) -> crate::Result<Self> {
         match value {
-            Value::String(ty) => Ok(Self::new(ty)),
+            Value::String(ty) if !ty.is_empty() => Ok(Self::new(ty)),
+            Value::String(ty) if ty.is_empty() => {
+                Err(crate::Error::InvalidEvent("event type must be a non-empty string".into()))
+            }
             Value::Object(mut map) => {
                 let ty = match map.remove("type") {
-                    Some(Value::String(ty)) => ty,
+                    Some(Value::String(ty)) if !ty.is_empty() => ty,
                     Some(other) => {
                         return Err(crate::Error::InvalidEvent(format!(
                             "event `type` must be a string, got {other}"

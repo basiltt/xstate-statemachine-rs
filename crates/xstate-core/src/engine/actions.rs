@@ -12,23 +12,36 @@ use crate::machine::{ActionDef, Builtin, Guard, SendTarget};
 
 /// Execute an action list in order. Under `actionErrorPolicy: "continue"` a failing action
 /// aborts the rest of *this* list and the step goes on; otherwise the error propagates as
-/// [`Error::TransitionFailed`] for the caller to roll back or fail.
+/// [`Error::TransitionFailed`] for the caller to roll back or fail. A failure inside a nested
+/// list (`choose`) counts as a failure of the action that holds it, so the policy applies to
+/// it exactly as to a top-level one.
 pub(super) fn run_actions<C: Context>(
     cx: &mut Ctx<'_, C>,
     actions: &[ActionDef],
     event: &Event,
 ) -> Result<()> {
+    let Err(err) = run_list(cx, actions, event) else { return Ok(()) };
+    match cx.machine.policies().action_error_policy {
+        ActionErrorPolicy::Continue => {
+            tracing::warn!(target: "xstate", error = %err, "action failed; continuing");
+            Ok(())
+        }
+        ActionErrorPolicy::Rollback | ActionErrorPolicy::Fail => Err(err),
+    }
+}
+
+/// Run a list, stopping at the first failure, which comes back as
+/// [`Error::TransitionFailed`] naming the innermost failing action.
+fn run_list<C: Context>(cx: &mut Ctx<'_, C>, actions: &[ActionDef], event: &Event) -> Result<()> {
     for action in actions {
-        if let Err(err) = run_action(cx, action, event) {
-            let name = action_name(action);
-            match cx.machine.policies().action_error_policy {
-                ActionErrorPolicy::Continue => {
-                    tracing::warn!(target: "xstate", action = %name, error = %err, "action failed; continuing");
-                    return Ok(());
-                }
-                ActionErrorPolicy::Rollback | ActionErrorPolicy::Fail => {
-                    return Err(Error::TransitionFailed { action: name, source: Box::new(err) });
-                }
+        match run_action(cx, action, event) {
+            Ok(()) => {}
+            Err(err @ Error::TransitionFailed { .. }) => return Err(err),
+            Err(err) => {
+                return Err(Error::TransitionFailed {
+                    action: action_name(action),
+                    source: Box::new(err),
+                });
             }
         }
     }
@@ -60,39 +73,47 @@ fn builtin_name(b: &Builtin) -> &'static str {
 
 fn run_action<C: Context>(cx: &mut Ctx<'_, C>, action: &ActionDef, event: &Event) -> Result<()> {
     match action {
-        ActionDef::User { name, params } => {
-            if cx.pure {
-                cx.report.planned.push(crate::pure::PlannedAction {
-                    name: std::sync::Arc::clone(name),
-                    params: params.clone(),
-                });
-                cx.report.actions.push(std::sync::Arc::clone(name));
-                return Ok(());
-            }
-            let logic = cx.logic;
-            let f = logic.get_action(name)?;
-            let mut local: Vec<Effect> = Vec::new();
-            {
-                let mut scope = ActionScope {
-                    context: &mut cx.state.context,
-                    event,
-                    params,
-                    effects: &mut local,
-                };
-                f(&mut scope)?;
-            }
-            cx.report.actions.push(std::sync::Arc::clone(name));
-            cx.report.changed = true;
-            for effect in local {
-                match effect {
-                    Effect::Raise(ev) => cx.state.internal_queue.push_back(ev),
-                    other => cx.effects.push(other),
-                }
-            }
-            Ok(())
+        ActionDef::User { name, params } => run_user(cx, name, params, event),
+        // A user action spelled like a built-in wins over it (XState: a string action type
+        // names an implementation).
+        ActionDef::Builtin { name, params, .. } if cx.logic.builtin_override(name).is_some() => {
+            run_user(cx, name, params, event)
         }
         ActionDef::Builtin { builtin, .. } => run_builtin(cx, builtin, event),
     }
+}
+
+fn run_user<C: Context>(
+    cx: &mut Ctx<'_, C>,
+    name: &std::sync::Arc<str>,
+    params: &Value,
+    event: &Event,
+) -> Result<()> {
+    if cx.pure {
+        cx.report.planned.push(crate::pure::PlannedAction {
+            name: std::sync::Arc::clone(name),
+            params: params.clone(),
+        });
+        cx.report.actions.push(std::sync::Arc::clone(name));
+        return Ok(());
+    }
+    let logic = cx.logic;
+    let f = logic.get_action(name)?;
+    let mut local: Vec<Effect> = Vec::new();
+    {
+        let mut scope =
+            ActionScope { context: &mut cx.state.context, event, params, effects: &mut local };
+        f(&mut scope)?;
+    }
+    cx.report.actions.push(std::sync::Arc::clone(name));
+    cx.report.changed = true;
+    for effect in local {
+        match effect {
+            Effect::Raise(ev) => cx.state.internal_queue.push_back(ev),
+            other => cx.effects.push(other),
+        }
+    }
+    Ok(())
 }
 
 fn run_builtin<C: Context>(cx: &mut Ctx<'_, C>, b: &Builtin, event: &Event) -> Result<()> {
@@ -107,7 +128,10 @@ fn run_builtin<C: Context>(cx: &mut Ctx<'_, C>, b: &Builtin, event: &Event) -> R
             match delay {
                 None => cx.state.internal_queue.push_back(raised),
                 Some(d) => {
-                    let delay_ms = super::resolve_delay(cx.logic, d, &cx.state.context, event)?;
+                    // An unusable delay disables this one send (logged), like an `after` timer.
+                    let Some(delay_ms) = super::usable_delay(cx, d, event)? else {
+                        return Ok(());
+                    };
                     cx.effects.push(Effect::DelayedRaise {
                         event: raised,
                         delay_ms,
@@ -120,7 +144,10 @@ fn run_builtin<C: Context>(cx: &mut Ctx<'_, C>, b: &Builtin, event: &Event) -> R
             let sent = event_from_value(ev, EventOrigin::External)?;
             let delay_ms = match delay {
                 None => None,
-                Some(d) => Some(super::resolve_delay(cx.logic, d, &cx.state.context, event)?),
+                Some(d) => match super::usable_delay(cx, d, event)? {
+                    Some(ms) => Some(ms),
+                    None => return Ok(()),
+                },
             };
             if *to == SendTarget::SelfActor && delay_ms.is_none() {
                 cx.state.internal_queue.push_back(Event { origin: EventOrigin::Internal, ..sent });
@@ -168,7 +195,7 @@ fn run_builtin<C: Context>(cx: &mut Ctx<'_, C>, b: &Builtin, event: &Event) -> R
                     Some(g) => evaluate_guard(cx, g, event)?,
                 };
                 if taken {
-                    return run_actions(cx, &branch.actions, event);
+                    return run_list(cx, &branch.actions, event);
                 }
             }
         }

@@ -1,0 +1,13 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_a
+  state "a" as m_a
+  state "b" as m_b
+  state "c" as m_c
+  m_c --> [*]
+}
+[*] --> m_a
+m_a --> m_b : after 1000ms
+m_b --> m_c : after 500ms
+@enduml

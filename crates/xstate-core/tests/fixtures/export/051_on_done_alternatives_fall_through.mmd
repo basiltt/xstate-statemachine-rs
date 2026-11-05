@@ -1,0 +1,18 @@
+stateDiagram-v2
+[*] --> m
+state "m" as m {
+    [*] --> job
+    state "job" as job {
+        [*] --> work
+        state "work" as work
+        state "finished" as finished
+        finished --> [*]
+    }
+    state "first" as first
+    state "second" as second
+    state "fallback" as fallback
+}
+job --> first : onDone
+job --> second : onDone
+job --> fallback : onDone
+work --> finished : FINISH

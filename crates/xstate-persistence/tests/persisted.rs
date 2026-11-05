@@ -155,6 +155,79 @@ fn verify_hash_rejects_a_changed_structure_unless_disabled() {
     persisted(&store, KEY, &changed, &counter_logic(), &lax, |_, _| Ok(())).unwrap();
 }
 
+#[test]
+fn expected_machine_hash_is_checked_against_the_machine_on_a_new_key() {
+    let store = MemoryStore::new();
+    let machine = counter_machine(None);
+    let good = PersistedOptions {
+        expected_machine_hash: Some(machine.structure_hash().to_owned()),
+        ..opts()
+    };
+    persisted(&store, KEY, &machine, &counter_logic(), &good, |_, _| Ok(())).unwrap();
+
+    let fresh = MemoryStore::new();
+    let bad = PersistedOptions { expected_machine_hash: Some("deadbeef".into()), ..opts() };
+    let err = persisted(&fresh, KEY, &machine, &counter_logic(), &bad, |_, _| Ok(())).unwrap_err();
+    assert!(matches!(err, StoreError::Engine(EngineError::Snapshot(_))), "{err:?}");
+    assert!(fresh.load(KEY).unwrap().is_none(), "nothing was created");
+}
+
+#[test]
+fn expected_machine_hash_forces_the_drift_check_even_without_verify_hash() {
+    let store = MemoryStore::new();
+    seed(&store);
+    let machine = counter_machine(None);
+    let stored_hash = machine.structure_hash().to_owned();
+    // matching expectation restores fine, verify_hash off or on
+    let ok =
+        PersistedOptions { verify_hash: false, expected_machine_hash: Some(stored_hash), ..opts() };
+    persisted(&store, KEY, &machine, &counter_logic(), &ok, |_, _| Ok(())).unwrap();
+    // a wrong expectation is refused although `verify_hash` is off
+    let wrong = PersistedOptions {
+        verify_hash: false,
+        expected_machine_hash: Some("not-the-hash".into()),
+        ..opts()
+    };
+    let err =
+        persisted(&store, KEY, &machine, &counter_logic(), &wrong, |_, _| Ok(())).unwrap_err();
+    assert!(matches!(err, StoreError::Engine(EngineError::Snapshot(_))), "{err:?}");
+    // the expectation also catches a changed machine that `verify_hash: false` would let through
+    let changed = xstate_core::Machine::from_value(&json!({
+        "id": "counter", "initial": "idle", "context": { "count": 0 },
+        "states": { "idle": { "on": { "INC": { "actions": "inc" }, "RESET": "idle" } } }
+    }))
+    .unwrap();
+    let guarded = PersistedOptions {
+        verify_hash: false,
+        expected_machine_hash: Some(machine.structure_hash().to_owned()),
+        ..opts()
+    };
+    let err = persisted(&store, KEY, &changed, &counter_logic(), &guarded, |_, _| Ok(()));
+    assert!(err.is_err());
+}
+
+#[test]
+fn a_snapshot_whose_event_lanes_are_not_lists_is_corrupt() {
+    for lane in ["pending_events", "deferred"] {
+        let store = MemoryStore::new();
+        seed(&store);
+        let mut doc: Value =
+            serde_json::from_str(&store.load(KEY).unwrap().unwrap().snapshot).unwrap();
+        doc[lane] = json!("not a list");
+        store.save(KEY, &doc.to_string(), &SaveOptions::default()).unwrap();
+        let err = persisted(
+            &store,
+            KEY,
+            &counter_machine(None),
+            &counter_logic(),
+            &opts(),
+            |_, _| Ok(()),
+        )
+        .unwrap_err();
+        assert!(matches!(err, StoreError::Engine(EngineError::Snapshot(_))), "{lane}: {err:?}");
+    }
+}
+
 // -------------------------------------------------------------------- optimistic strategy
 
 #[test]

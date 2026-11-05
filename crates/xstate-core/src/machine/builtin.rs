@@ -14,18 +14,64 @@ pub enum Delay {
 }
 
 impl Delay {
-    /// Parse an `after` key or a `delay` param: numbers (or numeric strings) are fixed
-    /// milliseconds, anything else is a delay name.
+    /// Parse a `delay` param: a number, or a numeric string (`"500"`, `"1e3"`), is fixed
+    /// milliseconds; any other string is a delay name. Anything else (`true`, an object) is
+    /// refused.
     #[must_use]
     pub fn parse(value: &Value) -> Option<Self> {
         match value {
-            Value::Number(n) => n.as_f64().map(Self::Fixed),
-            Value::String(s) => {
-                Some(s.parse::<f64>().map_or_else(|_| Self::Named(s.clone()), Self::Fixed))
-            }
+            Value::Number(n) => n.as_f64().filter(|ms| ms.is_finite()).map(Self::Fixed),
+            Value::String(s) => Some(
+                numeric_ms(s)
+                    .filter(|ms| ms.is_finite())
+                    .map_or_else(|| Self::Named(s.clone()), Self::Fixed),
+            ),
             _ => None,
         }
     }
+
+    /// Parse an `after` key: whole, non-negative milliseconds (an integer or a numeric string
+    /// such as `" 100"` or `"1e3"`) or a delay name. Returns the delay and its normalised key
+    /// (`"1000"` for `"1e3"`), which names the timer event and enters the structure hash, as
+    /// in XState (`xstate.after.1000.<id>`) and the Python library.
+    ///
+    /// # Errors
+    /// The reason, for a fractional, negative or non-finite number and an empty name.
+    pub fn parse_after_key(key: &str) -> std::result::Result<(Self, String), String> {
+        let Some(ms) = numeric_ms(key) else {
+            if key.trim().is_empty() {
+                return Err("an empty delay name".to_owned());
+            }
+            return Ok((Self::Named(key.to_owned()), key.to_owned()));
+        };
+        if !ms.is_finite() || ms < 0.0 || ms.fract() != 0.0 || ms >= 9.0e15 {
+            return Err(format!("{ms} is not a whole, non-negative number of milliseconds"));
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let whole = ms as i64;
+        Ok((Self::Fixed(ms), whole.to_string()))
+    }
+}
+
+/// The value of a numeric-looking string, in the grammar the Python library accepts for delay
+/// keys (`[+-]?(digits[.digits]|.digits)([eE][+-]?digits)?`, surrounding whitespace allowed):
+/// `"inf"` and `"NaN"` are names, not numbers.
+fn numeric_ms(s: &str) -> Option<f64> {
+    let t = s.trim();
+    let body = t.strip_prefix(['+', '-']).unwrap_or(t);
+    let (mantissa, exponent) = match body.find(['e', 'E']) {
+        Some(i) => (&body[..i], Some(&body[i + 1..])),
+        None => (body, None),
+    };
+    let digits = |x: &str| !x.is_empty() && x.bytes().all(|b| b.is_ascii_digit());
+    let mantissa_ok = match mantissa.split_once('.') {
+        Some((int, frac)) => {
+            (digits(int) && (frac.is_empty() || digits(frac))) || (int.is_empty() && digits(frac))
+        }
+        None => digits(mantissa),
+    };
+    let exponent_ok = exponent.is_none_or(|e| digits(e.strip_prefix(['+', '-']).unwrap_or(e)));
+    if mantissa_ok && exponent_ok { t.parse::<f64>().ok() } else { None }
 }
 
 /// Recipient of a `sendTo`.
@@ -122,6 +168,25 @@ pub(crate) fn canonical(name: &str) -> Option<&'static str> {
         "emit" | "xstate.emit" => "emit",
         "assign" | "xstate.assign" => "assign",
         "choose" | "xstate.choose" => "choose",
+        _ => return None,
+    })
+}
+
+/// Parameter keys a built-in reads: `(required, optional)`. `assign` and `choose` are
+/// validated by their own compilers and are absent.
+pub(crate) fn param_spec(
+    canonical: &str,
+) -> Option<(&'static [&'static str], &'static [&'static str])> {
+    Some(match canonical {
+        "raise" | "sendParent" => (&["event"], &["delay", "id"]),
+        "sendTo" => (&["to", "event"], &["delay", "id"]),
+        "forwardTo" => (&["to"], &[]),
+        "escalate" => (&["error"], &[]),
+        "cancel" => (&["sendId"], &[]),
+        "stopChild" => (&["id"], &[]),
+        "spawnChild" => (&["src"], &["id", "systemId", "input"]),
+        "emit" => (&["event"], &[]),
+        "log" => (&[], &["expr", "label"]),
         _ => return None,
     })
 }

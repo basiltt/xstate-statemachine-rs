@@ -348,7 +348,18 @@ impl OutboxPlugin {
         };
         let mut out = Vec::new();
         if let Some((ty, fields)) = spec {
-            out.extend(self.envelope(machine, &ty, spec_data(fields, ctx)));
+            let (data, missing) = spec_data(fields, ctx);
+            if !missing.is_empty() {
+                // a misspelled field would publish `null` and nobody would know
+                tracing::warn!(
+                    target: "xstate::eda",
+                    machine = machine.id(),
+                    ty = %ty,
+                    ?missing,
+                    "meta.publish: context has no such field(s); published as null"
+                );
+            }
+            out.extend(self.envelope(machine, &ty, data));
         }
         for &sid in states {
             let data = if ctx.is_object() { self.redact_keys.redact(ctx) } else { Value::Null };
@@ -381,19 +392,20 @@ impl OutboxPlugin {
     }
 }
 
-/// `data` of a transition envelope: the listed context fields, or absent.
-fn spec_data(fields: Option<Vec<String>>, ctx: &Value) -> Value {
-    fields.map_or(Value::Null, |fields| {
-        Value::Object(
-            fields
-                .into_iter()
-                .map(|f| {
-                    let v = ctx.get(&f).cloned().unwrap_or(Value::Null);
-                    (f, v)
-                })
-                .collect::<Map<_, _>>(),
-        )
-    })
+/// `data` of a transition envelope: the listed context fields (or absent), and the listed
+/// fields the context does not have.
+fn spec_data(fields: Option<Vec<String>>, ctx: &Value) -> (Value, Vec<String>) {
+    let Some(fields) = fields else { return (Value::Null, Vec::new()) };
+    let mut missing = Vec::new();
+    let mut data = Map::new();
+    for f in fields {
+        let value = ctx.get(&f).cloned().unwrap_or_else(|| {
+            missing.push(f.clone());
+            Value::Null
+        });
+        data.insert(f, value);
+    }
+    (Value::Object(data), missing)
 }
 
 impl<C: Context> Observer<C> for OutboxPlugin {

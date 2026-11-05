@@ -20,8 +20,8 @@
 //!   timer's transition idempotent or pair it with the idempotency inbox.
 
 use std::fmt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use xstate_core::clock::Clock;
@@ -33,6 +33,9 @@ use crate::store::{LockGuard, Result, StateStore, StoreError, StoredSnapshot, wa
 
 /// The fallback scan must see every key to pick the earliest `limit`.
 const ALL_KEYS: usize = 1 << 62;
+/// A remaining time is clamped to this many milliseconds (about 31 years), like Python's
+/// `Deadline.remaining_ms`.
+pub const MAX_REMAINING_MS: f64 = 1e15;
 /// Longest single sleep inside [`DueTimerScanner::run_until`], so `stop` is noticed promptly.
 const STOP_POLL: Duration = Duration::from_millis(25);
 
@@ -40,7 +43,9 @@ const STOP_POLL: Duration = Duration::from_millis(25);
 
 /// Helpers on a persisted [`Deadline`].
 pub trait DeadlineExt {
-    /// Milliseconds left at wall time `now_wall` (epoch seconds), never negative.
+    /// Milliseconds left at wall time `now_wall` (epoch seconds), clamped to
+    /// `0..=`[`MAX_REMAINING_MS`]: an overdue deadline is `0`, and a huge (but finite)
+    /// `due_at_wall` that would overflow to infinity in the multiplication is capped.
     fn remaining_ms(&self, now_wall: f64) -> f64;
 
     /// `true` when the deadline has matured at `horizon` (epoch seconds, inclusive).
@@ -49,7 +54,12 @@ pub trait DeadlineExt {
 
 impl DeadlineExt for Deadline {
     fn remaining_ms(&self, now_wall: f64) -> f64 {
-        ((self.due_at_wall - now_wall) * 1000.0).max(0.0)
+        let remaining = (self.due_at_wall - now_wall) * 1000.0;
+        if remaining.is_nan() || remaining <= 0.0 {
+            0.0
+        } else {
+            remaining.min(MAX_REMAINING_MS).round()
+        }
     }
 
     fn is_due(&self, horizon: f64) -> bool {
@@ -152,6 +162,44 @@ pub struct ScanResult {
     pub unmapped: usize,
 }
 
+/// A copy of the last scan's counters (the scan's own [`ScanResult`] is returned to its caller
+/// and holds non-cloneable errors; this is what a health endpoint can keep reading).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[non_exhaustive]
+pub struct ScanSummary {
+    /// See [`ScanResult::scanned`].
+    pub scanned: usize,
+    /// See [`ScanResult::due`].
+    pub due: usize,
+    /// See [`ScanResult::woken`].
+    pub woken: usize,
+    /// See [`ScanResult::skipped_stale`].
+    pub skipped_stale: usize,
+    /// Number of entries in [`ScanResult::errors`].
+    pub errors: usize,
+    /// See [`ScanResult::max_lag_s`].
+    pub max_lag_s: f64,
+    /// See [`ScanResult::locked`].
+    pub locked: usize,
+    /// See [`ScanResult::unmapped`].
+    pub unmapped: usize,
+}
+
+impl From<&ScanResult> for ScanSummary {
+    fn from(r: &ScanResult) -> Self {
+        Self {
+            scanned: r.scanned,
+            due: r.due,
+            woken: r.woken,
+            skipped_stale: r.skipped_stale,
+            errors: r.errors.len(),
+            max_lag_s: r.max_lag_s,
+            locked: r.locked,
+            unmapped: r.unmapped,
+        }
+    }
+}
+
 enum Outcome {
     Woken { lag_s: f64 },
     Stale,
@@ -168,8 +216,10 @@ pub type NowFn = Arc<dyn Fn() -> f64 + Send + Sync>;
 
 /// Wakes machines whose persisted `after` deadlines have passed.
 ///
-/// All settings are public fields; [`new`](Self::new) fills in the defaults. Values are clamped
-/// where used (`skew_tolerance_s >= 0`, `limit >= 1`).
+/// All settings are public fields; [`new`](Self::new) fills in the defaults. Invalid values
+/// (`skew_tolerance_s` negative or not finite, `limit == 0`) are refused by
+/// [`validate`](Self::validate), which every scan and [`run_until_checked`](Self::run_until_checked)
+/// calls first.
 pub struct DueTimerScanner<C: Context> {
     /// The store holding the snapshots (open your own handle per process: the scanner is
     /// "another process").
@@ -187,6 +237,7 @@ pub struct DueTimerScanner<C: Context> {
     pub limit: usize,
     /// Epoch-seconds source (default the system clock); inject a fixed value in tests.
     pub now: Option<NowFn>,
+    last: Mutex<Option<ScanSummary>>,
 }
 
 impl<C: Context> fmt::Debug for DueTimerScanner<C> {
@@ -213,7 +264,32 @@ impl<C: Context> DueTimerScanner<C> {
             prefix: String::new(),
             limit: 1000,
             now: None,
+            last: Mutex::new(None),
         }
+    }
+
+    /// Check the settings.
+    ///
+    /// # Errors
+    /// [`StoreError::Other`] when `skew_tolerance_s` is negative or not finite (a negative one
+    /// would make the scanner fire late, an infinite one fire everything) or `limit` is `0` (a
+    /// scan that can never find anything).
+    pub fn validate(&self) -> Result<()> {
+        if !(self.skew_tolerance_s.is_finite() && self.skew_tolerance_s >= 0.0) {
+            return Err(StoreError::Other(
+                "DueTimerScanner: skew_tolerance_s must be finite and >= 0".to_owned(),
+            ));
+        }
+        if self.limit < 1 {
+            return Err(StoreError::Other("DueTimerScanner: limit must be >= 1".to_owned()));
+        }
+        Ok(())
+    }
+
+    /// The counters of the most recent [`scan`](Self::scan); `None` before the first one.
+    #[must_use]
+    pub fn last_result(&self) -> Option<ScanSummary> {
+        *self.last.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn now_wall(&self) -> f64 {
@@ -234,6 +310,7 @@ impl<C: Context> DueTimerScanner<C> {
     /// # Errors
     /// Backend failures while listing or loading.
     pub fn due_keys(&self) -> Result<Vec<String>> {
+        self.validate()?;
         Ok(self.find_due(self.now_wall() + self.skew())?.0)
     }
 
@@ -290,6 +367,7 @@ impl<C: Context> DueTimerScanner<C> {
     /// # Errors
     /// As [`scan`](Self::scan).
     pub fn scan_at(&self, now: f64) -> Result<ScanResult> {
+        self.validate()?;
         let horizon = now + self.skew();
         let (keys, scanned) = self.find_due(horizon)?;
         let mut result = ScanResult { scanned, ..ScanResult::default() };
@@ -317,6 +395,8 @@ impl<C: Context> DueTimerScanner<C> {
                 }
             }
         }
+        *self.last.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some(ScanSummary::from(&result));
         if result.woken > 0 {
             tracing::info!(
                 target: "xstate::persistence",
@@ -335,9 +415,25 @@ impl<C: Context> DueTimerScanner<C> {
         Ok(self.scan()?.woken)
     }
 
+    /// [`run_until_checked`](Self::run_until_checked) for callers that cannot return an error:
+    /// invalid settings or a zero `interval` are logged and the loop does not start.
+    pub fn run_until(&self, stop: &AtomicBool, interval: Duration) {
+        if let Err(error) = self.run_until_checked(stop, interval) {
+            tracing::error!(target: "xstate::persistence", %error, "timer scanner not started");
+        }
+    }
+
     /// Call [`run_once`](Self::run_once) every `interval` until `stop` is set. A failing scan
     /// is logged and the loop continues.
-    pub fn run_until(&self, stop: &AtomicBool, interval: Duration) {
+    ///
+    /// # Errors
+    /// [`StoreError::Other`] for a zero `interval` (it would spin) or invalid settings
+    /// ([`validate`](Self::validate)); nothing is scanned in that case.
+    pub fn run_until_checked(&self, stop: &AtomicBool, interval: Duration) -> Result<()> {
+        if interval.is_zero() {
+            return Err(StoreError::Other("DueTimerScanner: interval must be > 0".to_owned()));
+        }
+        self.validate()?;
         while !stop.load(Ordering::Acquire) {
             if let Err(error) = self.run_once() {
                 tracing::error!(target: "xstate::persistence", %error, "timer scanner: scan failed");
@@ -351,6 +447,7 @@ impl<C: Context> DueTimerScanner<C> {
                 std::thread::sleep(left.min(STOP_POLL));
             }
         }
+        Ok(())
     }
 
     /// Lock, re-check and fire one key.

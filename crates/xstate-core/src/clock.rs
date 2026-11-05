@@ -62,18 +62,53 @@ impl SimulatedClock {
         Self::default()
     }
 
-    /// Move time forward by `ms`.
+    /// Move time forward by `ms`. NaN and infinity are ignored (logged); see
+    /// [`try_increment`](Self::try_increment) to be told.
     pub fn increment(&self, ms: f64) {
+        if let Err(err) = self.try_increment(ms) {
+            tracing::error!(target: "xstate", %err, "SimulatedClock::increment ignored");
+        }
+    }
+
+    /// Move time forward by `ms` (negative values do not move it).
+    ///
+    /// # Errors
+    /// [`Error::Logic`](crate::Error::Logic) for NaN or infinity: a clock at infinity would
+    /// fire every timer at once and never move again.
+    pub fn try_increment(&self, ms: f64) -> crate::Result<()> {
+        finite(ms, "increment")?;
         let mut now = self.now.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         *now += ms.max(0.0);
+        Ok(())
+    }
+
+    /// Set the absolute time (never moves backwards). NaN and infinity are ignored (logged);
+    /// see [`try_set`](Self::try_set).
+    pub fn set(&self, ms: f64) {
+        if let Err(err) = self.try_set(ms) {
+            tracing::error!(target: "xstate", %err, "SimulatedClock::set ignored");
+        }
     }
 
     /// Set the absolute time (never moves backwards).
-    pub fn set(&self, ms: f64) {
+    ///
+    /// # Errors
+    /// [`Error::Logic`](crate::Error::Logic) for NaN or infinity.
+    pub fn try_set(&self, ms: f64) -> crate::Result<()> {
+        finite(ms, "set")?;
         let mut now = self.now.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if ms > *now {
             *now = ms;
         }
+        Ok(())
+    }
+}
+
+fn finite(ms: f64, what: &str) -> crate::Result<()> {
+    if ms.is_finite() {
+        Ok(())
+    } else {
+        Err(crate::Error::logic(format!("SimulatedClock::{what} needs a finite time, got {ms}")))
     }
 }
 

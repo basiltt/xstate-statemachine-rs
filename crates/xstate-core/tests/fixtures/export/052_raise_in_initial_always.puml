@@ -1,0 +1,14 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_a
+  state "a" as m_a
+  state "b" as m_b
+  state "c" as m_c
+}
+[*] --> m_a
+m_a --> m_b : always
+m_b --> m_c : GO
+m_b --> m_a : BACK
+m_c --> m_a : BACK
+@enduml

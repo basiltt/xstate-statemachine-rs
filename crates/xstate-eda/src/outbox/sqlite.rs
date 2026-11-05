@@ -32,6 +32,12 @@ const OUTBOX_UPGRADES: [(&str, &str); 2] = [
     ("claimed_until", "ALTER TABLE xsm_outbox ADD COLUMN claimed_until REAL"),
 ];
 
+/// Lease owner that parks an undecodable row so no relay claims it again (Python
+/// `POISON_OWNER`).
+pub const POISON_OWNER: &str = "xsm:poison";
+/// The parked rows' lease expiry (Python `_POISON_UNTIL`): never.
+const POISON_UNTIL: f64 = 1e18;
+
 /// Outbox in the `xsm_outbox` table, on its own connection.
 ///
 /// Python's store can share the `SQLiteStore` connection so rows commit with the snapshot;
@@ -97,16 +103,43 @@ impl SqliteOutboxStore {
         self.conn.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn decode(rows: Vec<(i64, String, String)>) -> Result<Vec<OutboxRecord>> {
-        rows.into_iter()
-            .map(|(seq, topic, text)| {
-                Ok(OutboxRecord {
-                    seq,
-                    topic,
-                    envelope: Envelope::from_json(&text, DEFAULT_MAX_SNAPSHOT_BYTES)?,
-                })
-            })
-            .collect()
+    /// Decode rows one by one; a corrupt row is logged and skipped, never fatal (Python
+    /// `_decode`). With `quarantine` (a claim) the bad rows are parked under
+    /// [`POISON_OWNER`] so no relay selects them again; they stay unsent in the table for an
+    /// operator to inspect.
+    fn decode(
+        &self,
+        rows: Vec<(i64, String, String)>,
+        quarantine: bool,
+    ) -> Result<Vec<OutboxRecord>> {
+        let mut out = Vec::with_capacity(rows.len());
+        let mut bad = Vec::new();
+        for (seq, topic, text) in rows {
+            match Envelope::from_json(&text, DEFAULT_MAX_SNAPSHOT_BYTES) {
+                Ok(envelope) => out.push(OutboxRecord { seq, topic, envelope }),
+                Err(e) => {
+                    tracing::error!(target: "xstate::eda", seq, error = %e, "outbox row is undecodable; skipped");
+                    bad.push(seq);
+                }
+            }
+        }
+        if quarantine && !bad.is_empty() {
+            self.park(&bad)?;
+        }
+        Ok(out)
+    }
+
+    fn park(&self, seqs: &[i64]) -> Result<()> {
+        let sql = format!(
+            "UPDATE xsm_outbox SET claimed_by = ?, claimed_until = ? WHERE seq IN ({})",
+            marks(seqs.len())
+        );
+        let mut values: Vec<rusqlite::types::Value> =
+            vec![POISON_OWNER.to_owned().into(), POISON_UNTIL.into()];
+        values.extend(seqs.iter().map(|s| rusqlite::types::Value::Integer(*s)));
+        sqlite_util::immediate(&mut self.conn(), |tx| {
+            tx.execute(&sql, params_from_iter(values)).map(|_| ()).map_err(sql_err)
+        })
     }
 
     /// Delete relayed rows older than `older_than_s` seconds (retention); returns how many.
@@ -168,7 +201,7 @@ impl OutboxStore for SqliteOutboxStore {
                 .collect::<rusqlite::Result<Vec<_>>>()
                 .map_err(sql_err)?
         };
-        Self::decode(rows)
+        self.decode(rows, false)
     }
 
     fn mark_sent(&self, seqs: &[i64]) -> Result<usize> {
@@ -219,7 +252,7 @@ impl OutboxStore for SqliteOutboxStore {
             }
             Ok(rows)
         })?;
-        Self::decode(rows).map(Some)
+        self.decode(rows, true).map(Some)
     }
 
     fn release(&self, seqs: &[i64], owner: &str) -> Result<Option<usize>> {

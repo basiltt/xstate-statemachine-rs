@@ -107,6 +107,8 @@ struct Core<C: Context> {
     effects: Vec<Effect>,
     stopping: bool,
     finished_notified: bool,
+    /// Soft error recorded while executing the current step's effects.
+    soft_error: Option<Arc<Error>>,
 }
 
 pub(crate) fn spawn_root<C: Context>(
@@ -151,6 +153,7 @@ fn spawn_actor<C: Context>(
         effects: Vec::with_capacity(8),
         stopping: false,
         finished_notified: false,
+        soft_error: None,
     };
     for obs in &core.observers {
         obs.on_start(&core.machine, &core.state, &report);
@@ -207,6 +210,7 @@ async fn run<C: Context>(
         }
     }
     core.publish();
+    core.strand(&mut rx);
 }
 
 impl<C: Context> Core<C> {
@@ -219,7 +223,40 @@ impl<C: Context> Core<C> {
         self.timers.iter().filter(|t| !self.cancelled.contains(&t.seq)).map(|t| t.due).min()
     }
 
+    /// Answer what is still in the mailbox once the actor stopped: events are reported as
+    /// dropped (`stopped`) and their waiters get an error.
+    fn strand(&self, rx: &mut mpsc::Receiver<Msg>) {
+        rx.close();
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                Msg::Event(event, reply) => {
+                    for obs in &self.observers {
+                        obs.on_event_dropped(&self.machine, &event, "stopped");
+                    }
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(Error::InvalidLifecycle {
+                            status: self.state.status().as_str(),
+                            message: format!(
+                                "event '{}' arrived after the actor stopped",
+                                event.ty
+                            ),
+                        }));
+                    }
+                }
+                Msg::Snapshot(reply) => {
+                    let _ = reply.send(self.snapshot());
+                }
+                Msg::Stop(reply) => {
+                    let _ = reply.send(());
+                }
+            }
+        }
+    }
+
     fn process(&mut self, event: Event) -> Result<Receipt> {
+        if event.ty.is_empty() {
+            return Err(Error::InvalidEvent("event type must be a non-empty string".into()));
+        }
         if self.state.status() != Status::Running {
             let report = StepReport { unhandled: true, ..StepReport::default() };
             for obs in &self.observers {
@@ -232,25 +269,13 @@ impl<C: Context> Core<C> {
                 self.state.status(),
             ));
         }
-        if self.machine.policies().strict
-            && event.origin == EventOrigin::External
-            && self
-                .machine
-                .declared_events()
-                .binary_search_by(|d| d.as_str().cmp(&event.ty))
-                .is_err()
-        {
-            return Err(Error::UnknownEvent {
-                event: event.ty.to_string(),
-                machine: self.machine.id().to_owned(),
-            });
-        }
+        self.check_strict(&event)?;
         let kept = event.clone();
         let mut effects = std::mem::take(&mut self.effects);
         effects.clear();
         let outcome =
             engine::step(&self.machine, &self.logic, &mut self.state, event, &mut effects);
-        let report = match outcome {
+        let mut report = match outcome {
             Ok(report) => report,
             Err(err) => {
                 self.effects = effects;
@@ -266,7 +291,10 @@ impl<C: Context> Core<C> {
             obs.on_event(&self.machine, &kept, &report, &self.state);
         }
         self.unhandled_policy(&kept, &report);
+        // A soft error from executing the effects (an unresolved `sendTo`) reaches the
+        // observers as `on_event_dropped` and the caller through the receipt.
         self.apply_effects(effects);
+        report.soft_error = self.soft_error.take();
         let receipt = Receipt::from_parts(
             self.machine.clone(),
             self.state.leaves(&self.machine),
@@ -276,6 +304,24 @@ impl<C: Context> Core<C> {
         self.publish();
         self.check_finished();
         Ok(receipt)
+    }
+
+    /// `strict`: an external event no state declares is refused before processing.
+    fn check_strict(&self, event: &Event) -> Result<()> {
+        if self.machine.policies().strict
+            && event.origin == EventOrigin::External
+            && self
+                .machine
+                .declared_events()
+                .binary_search_by(|d| d.as_str().cmp(&event.ty))
+                .is_err()
+        {
+            return Err(Error::UnknownEvent {
+                event: event.ty.to_string(),
+                machine: self.machine.id().to_owned(),
+            });
+        }
+        Ok(())
     }
 
     fn unhandled_policy(&mut self, event: &Event, report: &StepReport) {
@@ -474,6 +520,9 @@ impl<C: Context> Core<C> {
                             id: parent.invoke_id.clone(),
                             error: error.to_string(),
                         });
+                    } else {
+                        let event = Event::error_actor(self.machine.id(), error);
+                        self.unresolved("escalate", "<no parent>".to_owned(), &event);
                     }
                 }
                 Effect::Emit(value) => {
@@ -563,49 +612,77 @@ impl<C: Context> Core<C> {
             if let Some(system_id) = &child.system_id {
                 self.system.unregister(system_id);
             }
-            let tx = child.handle.sender();
-            tokio::spawn(async move {
-                let (reply, _rx) = oneshot::channel();
-                let _ = tx.send(Msg::Stop(reply)).await;
-            });
+            let (reply, _rx) = oneshot::channel();
+            deliver(child.handle.sender(), Msg::Stop(reply));
         }
     }
 
     fn send_to(&mut self, to: SendTarget, event: Event, delay_ms: Option<f64>, id: Option<&str>) {
         if let Some(ms) = delay_ms {
-            // Delayed sends to other actors are scheduled locally, then routed on expiry; `id`
-            // based cancellation of cross-actor sends is not supported yet.
-            let _ = id;
-            let tx = self.route(&to);
-            let delay = std::time::Duration::from_secs_f64(ms.max(0.0) / 1000.0);
-            tokio::spawn(async move {
-                tokio::time::sleep(delay).await;
-                if let Some(tx) = tx {
-                    let _ = tx.send(Msg::Event(event, None)).await;
-                }
-            });
+            self.send_later(to, event, ms, id);
             return;
         }
         match to {
-            SendTarget::Parent => {
-                if let Some(parent) = &self.parent {
+            SendTarget::Parent => match &self.parent {
+                Some(parent) => {
                     let _ = parent.tx.send(Internal::FromChild(event));
-                } else {
-                    tracing::warn!(target: "xstate", machine = self.machine.id(), "sendParent on a root actor; dropped");
                 }
-            }
+                None => self.unresolved("sendParent", "<no parent>".to_owned(), &event),
+            },
             SendTarget::SelfActor => {
                 let _ = self.process(event);
             }
-            SendTarget::Named(name) => {
-                if let Some(tx) = self.route(&SendTarget::Named(name.clone())) {
+            SendTarget::Named(name) => match self.route(&SendTarget::Named(name.clone())) {
+                // Enqueued now, so an exit action's `sendTo` reaches its own invoke before the
+                // `StopActor` that follows it in the same step.
+                Some(tx) => deliver(tx, Msg::Event(event, None)),
+                None => self.unresolved("sendTo", name, &event),
+            },
+        }
+    }
+
+    /// A delayed send: to itself it is a local timer (cancellable by `id`); to another actor
+    /// the target is resolved now and the event routed on expiry. `id` based cancellation of
+    /// cross-actor sends is not supported yet.
+    fn send_later(&mut self, to: SendTarget, event: Event, ms: f64, id: Option<&str>) {
+        let delay = std::time::Duration::from_secs_f64(ms.max(0.0) / 1000.0);
+        match to {
+            SendTarget::SelfActor => {
+                let event = Event { origin: EventOrigin::Internal, ..event };
+                self.arm(ms, event, None, id.map(str::to_owned));
+            }
+            SendTarget::Parent => match &self.parent {
+                Some(parent) => {
+                    let tx = parent.tx.clone();
                     tokio::spawn(async move {
+                        tokio::time::sleep(delay).await;
+                        let _ = tx.send(Internal::FromChild(event));
+                    });
+                }
+                None => self.unresolved("sendParent", "<no parent>".to_owned(), &event),
+            },
+            SendTarget::Named(name) => match self.route(&SendTarget::Named(name.clone())) {
+                Some(tx) => {
+                    tokio::spawn(async move {
+                        tokio::time::sleep(delay).await;
                         let _ = tx.send(Msg::Event(event, None)).await;
                     });
-                } else {
-                    tracing::warn!(target: "xstate", machine = self.machine.id(), actor = %name, "sendTo: unknown actor; dropped");
                 }
-            }
+                None => self.unresolved("sendTo", name, &event),
+            },
+        }
+    }
+
+    /// An addressed event reached no live actor: dropped, reported to the observers
+    /// (`unresolved_target`) and recorded as the step's soft error.
+    fn unresolved(&mut self, action: &'static str, target: String, event: &Event) {
+        tracing::warn!(target: "xstate", machine = self.machine.id(), action, %target, event = %event.ty, "target did not resolve to a live actor; event dropped");
+        for obs in &self.observers {
+            obs.on_event_dropped(&self.machine, event, "unresolved_target");
+        }
+        if self.soft_error.is_none() {
+            let error = Error::UnresolvedTarget { action, target, event: event.ty.to_string() };
+            self.soft_error = Some(Arc::new(error));
         }
     }
 
@@ -658,6 +735,19 @@ impl<C: Context> Core<C> {
             .map(|e| serde_json::json!({"kind": "event", "type": e.ty, "payload": e.payload}))
             .collect();
         Ok(snap)
+    }
+}
+
+/// Put a message in an actor's mailbox now, keeping it ordered before anything sent after it;
+/// only a full mailbox waits (on a task).
+fn deliver(tx: mpsc::Sender<Msg>, msg: Msg) {
+    match tx.try_send(msg) {
+        Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
+        Err(mpsc::error::TrySendError::Full(msg)) => {
+            tokio::spawn(async move {
+                let _ = tx.send(msg).await;
+            });
+        }
     }
 }
 

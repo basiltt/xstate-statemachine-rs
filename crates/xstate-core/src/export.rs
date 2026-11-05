@@ -19,7 +19,7 @@
 //!   `[*] --> <initial child>` in `PlantUML`, after the declarations).
 //! * Edges are emitted per state in document (pre-)order. Per state: `on` events (labelled with
 //!   the v4 spelling of engine events, e.g. `done.invoke.x`), eventless transitions (`always`),
-//!   the compound `onDone` (only the first alternative, unguarded label `onDone`), `after`
+//!   the compound `onDone` (every alternative, unguarded label `onDone`), `after`
 //!   transitions (`after 500ms`, or `after NAME` for a named delay), then invoke completions
 //!   (`invoke onDone`, `invoke onError`). Everything but `on` and `onDone` labels gets a
 //!   ` [guard]` suffix when guarded (composite guards show as `and` / `or` / `not`).
@@ -190,16 +190,8 @@ fn node_edges(machine: &Machine, sid: StateId, transitions: &[&Transition]) -> V
         ranked.push((rank, t, label));
     }
     ranked.sort_by_key(|(rank, _, _)| *rank);
-    let mut seen_on_done = false;
     let mut edges = Vec::new();
-    for ((rank, _), t, label) in ranked {
-        // Python keeps a single `onDone` transition: the first alternative.
-        if rank == 2 {
-            if seen_on_done {
-                continue;
-            }
-            seen_on_done = true;
-        }
+    for (_, t, label) in ranked {
         if let Some(&target) = t.targets.first() {
             edges.push(Edge { target, label });
         }

@@ -26,7 +26,7 @@ pub use plugin::{DEFAULT_MAX_BUFFERED, OutboxFailure, OutboxPlugin};
 pub use relay::OutboxRelay;
 pub use specs::{PublishSource, PublishSpec, publish_specs};
 #[cfg(feature = "sqlite")]
-pub use sqlite::SqliteOutboxStore;
+pub use sqlite::{POISON_OWNER, SqliteOutboxStore};
 
 /// The state tag that marks "entering this state is an integration event".
 pub const PUBLISH_TAG: &str = "publish";

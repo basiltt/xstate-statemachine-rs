@@ -155,6 +155,7 @@ impl<H: EnvelopeHandler> InboundDispatcher<H> {
                 ("InterpreterStoppedError", &message),
                 Some(&machine),
             ),
+            Err(HandlerError::Requeue { message }) => Err(Flow::Requeue(message)),
             Err(HandlerError::Failed { error_type, message }) => {
                 self.failed(env, topic, (&error_type, &message), &machine)
             }

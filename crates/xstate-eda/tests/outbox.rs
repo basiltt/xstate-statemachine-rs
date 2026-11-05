@@ -371,3 +371,57 @@ fn a_clean_chart_drains_without_failures() {
     assert_eq!(plugin.try_drain().unwrap().len(), 1);
     assert_eq!(plugin.failures().len(), 0);
 }
+
+#[test]
+fn a_corrupt_sqlite_row_is_parked_and_later_rows_still_relay() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("poison.sqlite");
+    let store = Arc::new(SqliteOutboxStore::open(&path).unwrap());
+    store.add("orders", &env(1)).unwrap();
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO xsm_outbox(id, topic, envelope, created_at) VALUES ('x', 'orders', 'not json', 1.0)",
+            [],
+        )
+        .unwrap();
+    }
+    store.add("orders", &env(3)).unwrap();
+    // the read path skips the corrupt row without parking it
+    assert_eq!(store.pending(10).unwrap().len(), 2);
+    let relay =
+        OutboxRelay::new(store.clone() as Arc<dyn OutboxStore>, SyncFakeBrokerAdapter::new());
+    assert_eq!(relay.relay_once_sync().unwrap(), 2, "the rows around the corrupt one went out");
+    assert_eq!(relay.broker().published_on("orders").len(), 2);
+    // the corrupt row stays unsent, parked under the poison lease: nobody claims it again
+    assert_eq!(store.count(true).unwrap(), 1);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let owner: String = conn
+        .query_row("SELECT claimed_by FROM xsm_outbox WHERE sent_at IS NULL", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(owner, xstate_eda::POISON_OWNER);
+    let claimed = store.claim(10, "other", 30.0).unwrap().unwrap();
+    assert_eq!(claimed, Vec::new(), "parked rows are not claimable");
+}
+
+#[test]
+fn a_publish_field_missing_from_the_context_is_published_as_null() {
+    let machine = Machine::from_value(&json!({
+        "id": "m", "initial": "a", "context": {"total": 5},
+        "states": {
+            "a": {"on": {"GO": {"target": "b",
+                "meta": {"publish": {"type": "m.went", "data": ["total", "totl"]}}}}},
+            "b": {},
+        }
+    }))
+    .unwrap();
+    let plugin = Arc::new(OutboxPlugin::new());
+    let mut interp = SyncInterpreter::new(machine, MachineLogic::dynamic());
+    interp.observe(plugin.clone() as Arc<dyn Observer<Value>>);
+    interp.start().unwrap();
+    interp.send("GO").unwrap();
+    let sent = plugin.try_drain().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].data, json!({"total": 5, "totl": null}));
+    assert!(plugin.failures().is_empty(), "a warning, not a failure");
+}

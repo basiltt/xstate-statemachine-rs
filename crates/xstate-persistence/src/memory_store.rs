@@ -265,9 +265,13 @@ impl KeyLocks {
         slot.is_some_and(|s| *relock(&s.owner) == Some(thread::current().id()))
     }
 
-    /// Drop the bookkeeping for `key` (an existing holder keeps its guard).
+    /// Drop the bookkeeping for `key`, unless the lock is still held or being waited on: a
+    /// removed slot would let a second holder in through a fresh one.
     pub(crate) fn forget(&self, key: &str) {
-        relock(&self.slots).remove(key);
+        let mut slots = relock(&self.slots);
+        if slots.get(key).is_some_and(|slot| Arc::strong_count(slot) == 1) {
+            slots.remove(key);
+        }
     }
 }
 

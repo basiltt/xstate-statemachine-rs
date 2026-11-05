@@ -485,6 +485,28 @@ fn file_store_has_no_deadline_index() {
 }
 
 #[test]
+fn memory_forget_does_not_discard_a_held_lock() {
+    let s = MemoryStore::new();
+    put(&s, "k", "{}");
+    let guard = s.lock("k", Duration::from_secs(1)).unwrap();
+    s.forget("k").unwrap();
+    assert!(
+        matches!(s.lock("k", Duration::from_millis(50)), Err(StoreError::LockTimeout { .. })),
+        "a second holder must not get in while the first still holds the lock"
+    );
+    drop(guard);
+    s.lock("k", Duration::from_millis(50)).unwrap();
+}
+
+#[test]
+fn memory_forget_works_when_the_lock_is_free() {
+    let s = MemoryStore::new();
+    put(&s, "k", "{}");
+    drop(s.lock("k", Duration::from_secs(1)).unwrap());
+    assert_eq!(s.forget("k").unwrap().snapshots, 1);
+}
+
+#[test]
 fn memory_forget_reports_deadlines() {
     let s = MemoryStore::new();
     let deadlines = [dl("m.a", 1, 1.0, 1), dl("m.b", 2, 2.0, 1)];

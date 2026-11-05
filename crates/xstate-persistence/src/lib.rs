@@ -58,4 +58,4 @@ pub use store::{
     DEFAULT_MAX_SNAPSHOT_BYTES, ForgetReport, Health, LockGuard, MAX_KEY_LEN, Result, SaveOptions,
     StateStore, StoreError, StoredSnapshot, validate_key,
 };
-pub use timers::{DueTimerScanner, ScanResult};
+pub use timers::{DueTimerScanner, ScanResult, ScanSummary};

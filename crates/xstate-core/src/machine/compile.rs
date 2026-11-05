@@ -28,7 +28,10 @@ struct Raw<'c> {
     depth: u32,
 }
 
-pub(super) fn compile(config: MachineConfig) -> Result<MachineData> {
+pub(super) fn compile(
+    config: MachineConfig,
+    user_actions: Option<&HashSet<String>>,
+) -> Result<MachineData> {
     let mut raws: Vec<Raw<'_>> = Vec::new();
     flatten(&config.root, &config.root.key, None, 0, &mut raws);
 
@@ -59,6 +62,8 @@ pub(super) fn compile(config: MachineConfig) -> Result<MachineData> {
         custom_ids: &custom_ids,
         machine_id: &config.root.key,
         strict_targets: config.policies.strict_targets,
+        strict_config: config.policies.strict_config,
+        user_actions,
         transitions: Vec::new(),
         warnings: config.warnings.clone(),
         declared_events: HashSet::new(),
@@ -149,6 +154,9 @@ struct Compiler<'a, 'c> {
     custom_ids: &'a HashMap<String, StateId>,
     machine_id: &'a str,
     strict_targets: bool,
+    strict_config: bool,
+    /// Action names the logic implements (user logic wins over a same-named built-in).
+    user_actions: Option<&'a HashSet<String>>,
     transitions: Vec<Transition>,
     warnings: Vec<ConfigWarning>,
     declared_events: HashSet<String>,
@@ -228,9 +236,15 @@ impl Compiler<'_, '_> {
                     .as_deref()
                     .ok_or_else(|| Error::config(&*raw.id, "compound state needs `initial`"))?;
                 let initial = self.child_by_key(sid, key).ok_or_else(|| {
+                    let children = cfg.states.iter().map(|c| c.key.as_str());
+                    let hint = closest_key(key, children)
+                        .map_or_else(String::new, |h| format!(" Did you mean '{h}'?"));
                     Error::config(
                         format!("{}.initial", raw.id),
-                        format!("`initial` names unknown child `{key}`"),
+                        format!(
+                            "State '{}': 'initial' '{key}' is not one of its child states.{hint}",
+                            raw.id
+                        ),
                     )
                 })?;
                 NodeKind::Compound { initial }
@@ -261,15 +275,7 @@ impl Compiler<'_, '_> {
         for (descriptor, list) in &cfg.on {
             self.add_event(sid, raw, descriptor, list, out)?;
         }
-        // Delayed transitions become ordinary transitions on their timer event.
-        for (key, list) in &cfg.after {
-            let delay = Delay::parse(&Value::String(key.clone())).ok_or_else(|| {
-                Error::config(format!("{}.after.{key}", raw.id), "invalid delay key")
-            })?;
-            let event = names::after(key, &raw.id);
-            self.add_event(sid, raw, &event, list, out)?;
-            out.after.push(AfterDef { key: key.clone(), delay, event });
-        }
+        self.compile_after(sid, raw, out)?;
         if !cfg.on_done.is_empty() {
             if matches!(kind, NodeKind::Atomic | NodeKind::Final | NodeKind::History { .. }) {
                 return Err(Error::config(
@@ -279,6 +285,45 @@ impl Compiler<'_, '_> {
             }
             self.add_event(sid, raw, &names::done_state(&raw.id), &cfg.on_done, out)?;
         }
+        self.compile_invokes_and_always(sid, raw, out)
+    }
+
+    /// Delayed transitions become ordinary transitions on their (normalised) timer event.
+    fn compile_after(&mut self, sid: StateId, raw: &Raw<'_>, out: &mut Handlers) -> Result<()> {
+        for (raw_key, list) in &raw.cfg.after {
+            let (delay, key) = Delay::parse_after_key(raw_key).map_err(|why| {
+                Error::config(
+                    format!("{}.after.{raw_key}", raw.id),
+                    format!(
+                        "State '{}': 'after' key '{raw_key}' is not a valid delay ({why}); use a \
+                         whole, non-negative number of milliseconds or the name of a delay",
+                        raw.id
+                    ),
+                )
+            })?;
+            if let Some(clash) = out.after.iter().find(|a| a.key == key) {
+                return Err(Error::config(
+                    format!("{}.after.{raw_key}", raw.id),
+                    format!(
+                        "State '{}': 'after' keys '{}' and '{raw_key}' both name the delay '{key}'",
+                        raw.id, clash.raw_key
+                    ),
+                ));
+            }
+            let event = names::after(&key, &raw.id);
+            self.add_event(sid, raw, &event, list, out)?;
+            out.after.push(AfterDef { key, delay, event, raw_key: raw_key.clone() });
+        }
+        Ok(())
+    }
+
+    fn compile_invokes_and_always(
+        &mut self,
+        sid: StateId,
+        raw: &Raw<'_>,
+        out: &mut Handlers,
+    ) -> Result<()> {
+        let cfg = raw.cfg;
         for (i, inv) in cfg.invoke.iter().enumerate() {
             let id = inv.id.clone().unwrap_or_else(|| {
                 if i == 0 { raw.id.to_string() } else { format!("{}:{i}", raw.id) }
@@ -401,7 +446,8 @@ impl Compiler<'_, '_> {
         action: &ActionConfig,
         path: &str,
     ) -> Result<ActionDef> {
-        let Some(canonical) = builtin::canonical(&action.name) else {
+        let user = self.user_actions.is_some_and(|names| names.contains(&action.name));
+        let Some(canonical) = builtin::canonical(&action.name).filter(|_| !user) else {
             return Ok(ActionDef::User {
                 name: Arc::from(action.name.as_str()),
                 params: action.params.clone(),
@@ -418,29 +464,34 @@ impl Compiler<'_, '_> {
                 let bp = format!("{path}.branches[{i}]");
                 let obj =
                     b.as_object().ok_or_else(|| Error::config(&bp, "branch must be an object"))?;
+                let strict = self.strict_config;
                 let guard = match obj.get("guard").or_else(|| obj.get("cond")) {
                     None => None,
-                    Some(g) => Some(self.compile_guard(
-                        source,
-                        &crate::config::parse_guard_value(g, &bp)?,
-                        &bp,
-                    )?),
+                    Some(g) => {
+                        let parsed =
+                            crate::config::parse_guard_value(g, &bp, strict, &mut self.warnings)?;
+                        Some(self.compile_guard(source, &parsed, &bp)?)
+                    }
                 };
-                let actions = self.compile_actions(
-                    source,
-                    &crate::config::parse_actions_value(obj.get("actions"), &bp)?,
+                let parsed = crate::config::parse_actions_value(
+                    obj.get("actions"),
                     &bp,
+                    strict,
+                    &mut self.warnings,
                 )?;
+                let actions = self.compile_actions(source, &parsed, &bp)?;
                 out.push(ChooseBranch { guard, actions });
             }
             return Ok(ActionDef::Builtin {
                 name: Arc::from(action.name.as_str()),
                 builtin: builtin::Builtin::Choose(out),
+                params: action.params.clone(),
             });
         }
         Ok(ActionDef::Builtin {
             name: Arc::from(action.name.as_str()),
             builtin: builtin::compile_builtin(canonical, &action.params, path)?,
+            params: action.params.clone(),
         })
     }
 
@@ -484,10 +535,10 @@ impl Compiler<'_, '_> {
             return Err(Error::config(path, "empty target"));
         }
         if let Some(rest) = target.strip_prefix('#') {
-            if let Some(&sid) = self.custom_ids.get(rest) {
-                return Ok(sid);
-            }
-            return self.ids.get(rest).copied().ok_or_else(not_found);
+            return resolve_hash_id(self.ids, self.custom_ids, rest, |scope, path| {
+                self.descend(scope, path)
+            })
+            .ok_or_else(not_found);
         }
         if let Some(rest) = target.strip_prefix('.') {
             if rest.is_empty() {
@@ -566,4 +617,50 @@ impl Compiler<'_, '_> {
         }
         Ok(())
     }
+}
+
+/// Resolve the part of a `#id` reference after the `#`: a full state id, a custom id, or a
+/// custom id followed by a relative path (`#my.id.child`). Ids may themselves contain dots, so
+/// the longest dotted prefix naming a custom id wins, as in the Python library.
+pub(super) fn resolve_hash_id(
+    ids: &FastMap<Arc<str>, StateId>,
+    custom_ids: &HashMap<String, StateId>,
+    reference: &str,
+    descend: impl Fn(StateId, &str) -> Option<StateId>,
+) -> Option<StateId> {
+    if let Some(&sid) = custom_ids.get(reference).or_else(|| ids.get(reference)) {
+        return Some(sid);
+    }
+    let mut cut = reference.len();
+    while let Some(dot) = reference[..cut].rfind('.') {
+        if let Some(&scope) = custom_ids.get(&reference[..dot])
+            && let Some(sid) = descend(scope, &reference[dot + 1..])
+        {
+            return Some(sid);
+        }
+        cut = dot;
+    }
+    None
+}
+
+/// Closest candidate by edit distance, for "did you mean" hints.
+fn closest_key<'a>(key: &str, candidates: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    candidates
+        .map(|c| (edit_distance(key, c), c))
+        .filter(|(d, _)| *d <= 2)
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, c)| c)
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            cur.push((prev[j] + usize::from(ca != *cb)).min(prev[j + 1] + 1).min(cur[j] + 1));
+        }
+        prev = cur;
+    }
+    prev[b.len()]
 }

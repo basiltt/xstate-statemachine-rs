@@ -25,7 +25,7 @@ pub trait Context: Serialize + DeserializeOwned + Clone + Send + Sync + 'static 
     /// does not deserialise back into `Self`.
     fn assign_json(&mut self, patch: &Map<String, Value>) -> crate::Result<()> {
         let mut value = serde_json::to_value(&*self)?;
-        assign_into_value(&mut value, patch);
+        assign_into_value(&mut value, patch)?;
         *self = serde_json::from_value(value)?;
         Ok(())
     }
@@ -40,21 +40,27 @@ pub trait Context: Serialize + DeserializeOwned + Clone + Send + Sync + 'static 
     }
 }
 
-fn assign_into_value(value: &mut Value, patch: &Map<String, Value>) {
-    if !value.is_object() {
+/// Merge `patch` into an object context. A `null` context starts as `{}`; any other
+/// non-object context (an array, a number) cannot take named fields, and is an action error
+/// rather than being silently replaced.
+fn assign_into_value(value: &mut Value, patch: &Map<String, Value>) -> crate::Result<()> {
+    if value.is_null() {
         *value = Value::Object(Map::new());
     }
-    if let Value::Object(map) = value {
-        for (k, v) in patch {
-            map.insert(k.clone(), v.clone());
-        }
+    let Value::Object(map) = value else {
+        return Err(crate::Error::logic(format!(
+            "assign needs an object context, but the context is {value}"
+        )));
+    };
+    for (k, v) in patch {
+        map.insert(k.clone(), v.clone());
     }
+    Ok(())
 }
 
 impl Context for Value {
     fn assign_json(&mut self, patch: &Map<String, Value>) -> crate::Result<()> {
-        assign_into_value(self, patch);
-        Ok(())
+        assign_into_value(self, patch)
     }
 
     fn from_initial(value: &Value, _input: &Value) -> crate::Result<Self> {

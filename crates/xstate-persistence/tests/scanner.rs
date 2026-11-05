@@ -9,13 +9,14 @@ use std::time::Duration;
 
 use common::{stored_snapshot, version_of};
 use serde_json::{Value, json};
+use xstate_core::snapshot::Deadline;
 use xstate_core::{Clock, Machine, MachineLogic, SimulatedClock};
 use xstate_persistence::locking::{
     LockStrategy, NoLock, OptimisticLock, PersistedOptions, PessimisticLock, persisted,
 };
 use xstate_persistence::memory_store::MemoryStore;
 use xstate_persistence::timers::{
-    DeadlineExt, DueTimerScanner, FixedWallClock, MachineFactory, check_record,
+    DeadlineExt, DueTimerScanner, FixedWallClock, MAX_REMAINING_MS, MachineFactory, check_record,
 };
 use xstate_persistence::{Health, LockGuard, SaveOptions, StateStore, StoreError, StoredSnapshot};
 
@@ -467,6 +468,43 @@ fn run_until_returns_promptly_even_with_a_long_interval() {
     assert!(*handle.lock().unwrap());
 }
 
+#[test]
+fn last_result_exists_before_the_first_scan_and_follows_each_scan() {
+    let store = Arc::new(MemoryStore::new());
+    seed_timer(&store, "t:1");
+    let s = scanner(&store);
+    assert_eq!(s.last_result(), None, "nothing scanned yet");
+    s.scan_at(T0 + 2.0).unwrap();
+    let last = s.last_result().expect("a scan ran");
+    assert_eq!((last.due, last.woken, last.errors), (1, 1, 0));
+    s.scan_at(T0 + 3.0).unwrap();
+    assert_eq!(s.last_result().map(|r| r.woken), Some(0));
+}
+
+#[test]
+fn invalid_settings_are_refused_not_clamped() {
+    let store = Arc::new(MemoryStore::new());
+    for (skew, limit) in [(-1.0, 1), (f64::NAN, 1), (f64::INFINITY, 1), (0.0, 0)] {
+        let mut s = scanner(&store);
+        s.skew_tolerance_s = skew;
+        s.limit = limit;
+        assert!(matches!(s.validate(), Err(StoreError::Other(_))), "{skew} {limit}");
+        assert!(matches!(s.scan_at(T0), Err(StoreError::Other(_))));
+        assert!(matches!(s.due_keys(), Err(StoreError::Other(_))));
+    }
+    assert!(scanner(&store).validate().is_ok());
+}
+
+#[test]
+fn a_zero_interval_is_refused_instead_of_spinning() {
+    let store = Arc::new(MemoryStore::new());
+    let s = scanner(&store);
+    let stop = AtomicBool::new(false);
+    assert!(matches!(s.run_until_checked(&stop, Duration::ZERO), Err(StoreError::Other(_))));
+    s.run_until(&stop, Duration::ZERO); // logs and returns; must not hang
+    assert!(s.last_result().is_none(), "nothing was scanned");
+}
+
 // ----------------------------------------------------------------------------- unit helpers
 
 #[test]
@@ -481,6 +519,24 @@ fn deadline_helpers() {
     assert!(d.is_due(T0 + 1.0) && !d.is_due(T0 + 0.999));
     assert_eq!(check_record(&record, T0 + 1.0), Some(d.due_at_wall));
     assert_eq!(check_record(&record, T0), None);
+}
+
+#[test]
+fn remaining_ms_clamps_a_huge_due_time_instead_of_overflowing() {
+    let mut d = Deadline {
+        state_id: "m.a".into(),
+        entry_seq: 1,
+        due_at_wall: f64::MAX,
+        delay_ms: json!(1),
+        event_type: "after.1.m.a".into(),
+    };
+    let huge = d.remaining_ms(0.0);
+    assert!(huge.is_finite());
+    assert!((huge - MAX_REMAINING_MS).abs() < f64::EPSILON);
+    d.due_at_wall = 1e300;
+    assert!((d.remaining_ms(-1e300) - MAX_REMAINING_MS).abs() < f64::EPSILON);
+    d.due_at_wall = 10.0;
+    assert!(d.remaining_ms(f64::NAN).abs() < f64::EPSILON, "NaN now reads as overdue");
 }
 
 #[test]

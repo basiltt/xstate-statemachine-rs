@@ -1,12 +1,21 @@
 //! Redaction of sensitive keys (the Python `redact()` helper), shared by the inspector, the
 //! dead-letter stores and the outbox.
 //!
-//! Keys are matched by case-insensitive substring with `-` treated as `_` on both sides, so
-//! `apiKey`, `API_KEY` and `x-api-key` all match the denylist entry `api_key`. Matching
-//! values are replaced by `"***"`; objects and arrays are walked recursively; everything else
-//! is returned unchanged. The input is never mutated.
+//! Keys are normalised to `snake_case` on both sides (camelCase boundaries split, `-` treated
+//! as `_`, case-insensitive), so `apiKey`, `API_KEY` and `x-api-key` all match the denylist
+//! entry `api_key`. A denylist entry of at most [`SHORT_KEY_MAX`] characters (`pin`, `pan`,
+//! `otp`, `card`, `auth`, `seed`, ...) matches only a whole `_`-separated word of the key, so
+//! `user_pin` redacts but `shipping`, `company`, `author` and `spinner` do not; longer entries
+//! match as substrings (`session` redacts `sessionId`). Matching values are replaced by
+//! `"***"`; objects and arrays are walked recursively; everything else is returned unchanged.
+//! The input is never mutated.
+
+use std::collections::BTreeSet;
 
 use serde_json::Value;
+
+/// Denylist entries of at most this many characters match only a whole word of the key.
+pub const SHORT_KEY_MAX: usize = 4;
 
 /// Key substrings redacted by default: credentials, payment and banking identifiers, crypto
 /// material and personal identifiers. Identical to the Python `DEFAULT_REDACT_KEYS`.
@@ -55,10 +64,12 @@ pub const DEFAULT_REDACT_KEYS: &[&str] = &[
 /// Placeholder written over redacted values.
 pub const REDACTED: &str = "***";
 
-/// A compiled denylist: every entry lower-cased with `-` normalised to `_`.
+/// A compiled denylist: every entry normalised to lower `snake_case`, split into whole-word
+/// (short) and substring (long) entries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RedactKeys {
-    normalised: Vec<String>,
+    short: BTreeSet<String>,
+    long: Vec<String>,
 }
 
 impl Default for RedactKeys {
@@ -68,23 +79,29 @@ impl Default for RedactKeys {
 }
 
 impl RedactKeys {
-    /// Compile a denylist from key substrings.
+    /// Compile a denylist from key entries (short ones match whole words, long ones substrings).
     pub fn new<I, S>(keys: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        Self { normalised: keys.into_iter().map(|k| normalise(k.as_ref())).collect() }
+        let (short, long): (Vec<String>, Vec<String>) = keys
+            .into_iter()
+            .map(|k| normalise(k.as_ref()))
+            .partition(|k| k.chars().count() <= SHORT_KEY_MAX);
+        Self { short: short.into_iter().collect(), long }
     }
 
-    /// `true` when `key` contains any denylist entry (after normalisation).
+    /// `true` when a whole word of `key` is a short entry, or `key` contains a long entry
+    /// (after normalisation).
     #[must_use]
     pub fn matches(&self, key: &str) -> bool {
-        if self.normalised.is_empty() {
+        if self.short.is_empty() && self.long.is_empty() {
             return false;
         }
         let key = normalise(key);
-        self.normalised.iter().any(|needle| key.contains(needle.as_str()))
+        key.split('_').any(|word| self.short.contains(word))
+            || self.long.iter().any(|needle| key.contains(needle.as_str()))
     }
 
     /// Return `value` with every sensitive key replaced by [`REDACTED`].
@@ -123,8 +140,20 @@ impl RedactKeys {
     }
 }
 
+/// Split camelCase boundaries (`[a-z0-9]` followed by `[A-Z]`), lower-case, map `-` to `_`.
 fn normalise(key: &str) -> String {
-    key.to_lowercase().replace('-', "_")
+    let mut out = String::with_capacity(key.len() + 4);
+    let mut prev: Option<char> = None;
+    for c in key.chars() {
+        if c.is_ascii_uppercase()
+            && prev.is_some_and(|p| p.is_ascii_lowercase() || p.is_ascii_digit())
+        {
+            out.push('_');
+        }
+        out.push(c);
+        prev = Some(c);
+    }
+    out.to_lowercase().replace('-', "_")
 }
 
 /// Redact `value` with the [`DEFAULT_REDACT_KEYS`].
@@ -147,6 +176,40 @@ mod tests {
         for key in ["name", "count", "user", "id"] {
             assert!(!keys.matches(key), "{key} should not match");
         }
+    }
+
+    #[test]
+    fn short_entries_match_whole_words_only() {
+        let keys = RedactKeys::default();
+        for key in ["shipping", "company", "footprint", "discard", "author", "spinner"] {
+            assert!(!keys.matches(key), "{key} must not be redacted");
+        }
+        for key in ["pin", "user_pin", "userPin", "cardNumber", "credit_card", "OTP", "auth"] {
+            assert!(keys.matches(key), "{key} must be redacted");
+        }
+        // long entries keep substring matching
+        assert!(keys.matches("sessionId"));
+        assert!(keys.matches("x-api-key"));
+        assert!(keys.matches("AUTHORIZATION"));
+    }
+
+    #[test]
+    fn camel_boundaries_split_like_python() {
+        // `[a-z0-9]` followed by `[A-Z]` splits; an acronym run does not.
+        assert!(RedactKeys::default().matches("pinCode"));
+        assert!(RedactKeys::default().matches("user2Pin"));
+        assert!(!RedactKeys::default().matches("PINCODE"));
+        // user entries are camel-split too: `apiKey` becomes `api_key`
+        assert!(RedactKeys::new(["apiKey"]).matches("my-api-key"));
+    }
+
+    #[test]
+    fn redacts_shipping_but_not_pin_in_a_document() {
+        let v = json!({"shipping": "x", "company": "y", "pin": "1", "user_pin": "2"});
+        assert_eq!(
+            redact(&v),
+            json!({"shipping": "x", "company": "y", "pin": "***", "user_pin": "***"})
+        );
     }
 
     #[test]

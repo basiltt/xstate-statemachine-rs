@@ -69,12 +69,12 @@ pub use error::{BrokerError, EdaError, EnvelopeError, Result};
 pub use fake::{DEFAULT_DRAIN_LIMIT, FakeBrokerAdapter, SyncFakeBrokerAdapter};
 #[cfg(feature = "nats")]
 pub use nats::{NatsBroker, NatsOptions};
-#[cfg(feature = "sqlite")]
-pub use outbox::SqliteOutboxStore;
 pub use outbox::{
     DEFAULT_CLAIM_LEASE_S, DEFAULT_MAX_BUFFERED, MemoryOutboxStore, OutboxFailure, OutboxPlugin,
     OutboxRecord, OutboxRelay, OutboxStore, PUBLISH_TAG, PublishSource, PublishSpec, publish_specs,
 };
+#[cfg(feature = "sqlite")]
+pub use outbox::{POISON_OWNER, SqliteOutboxStore};
 pub use py::{WallClock, now_iso, wall_now};
 #[cfg(feature = "rabbitmq")]
 pub use rabbitmq::{RabbitMqBroker, RabbitMqOptions};

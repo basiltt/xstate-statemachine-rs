@@ -180,12 +180,15 @@ fn decorrelated_logic_chains_previous_delays_within_bounds() {
 }
 
 #[test]
-fn a_misbehaving_rng_surfaces_as_a_logic_error() {
+fn a_misbehaving_rng_disables_the_retry_timer_without_failing_the_step() {
+    // A delay function that errors is contained like a named delay (0.12.0 parity): the
+    // timer it would have armed is disabled and the machine stays in `retrying`.
     let policy = policy(3, 10.0, 100.0, JitterMode::Full).with_rng(|| 7.0);
     let logic = policy.logic().service("work", |_ctx, _input| Err(Error::logic("down")));
     let mut interp = SyncInterpreter::new(chart(json!({ "attempt": 0 })), logic);
-    let result = interp.start();
-    assert!(result.is_err(), "entering `retrying` evaluates the delay: {result:?}");
+    interp.start().unwrap_or_else(|e| panic!("entering `retrying` must not fail the step: {e}"));
+    assert_eq!(interp.status(), xstate_core::Status::Running);
+    assert_eq!(interp.pending_timers(), 0, "the unusable delay arms no timer");
 }
 
 #[test]

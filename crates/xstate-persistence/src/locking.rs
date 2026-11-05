@@ -319,6 +319,12 @@ pub struct PersistedOptions<C: Context> {
     pub create_if_missing: bool,
     /// Refuse a snapshot whose structural hash differs from the machine's (default `true`).
     pub verify_hash: bool,
+    /// The structural hash the caller holds for the machine (record
+    /// [`Machine::structure_hash`] when you persist). Checked against the machine itself, so it
+    /// also guards a **new** key, and against the stored snapshot's own hash on a restore, where
+    /// it forces the drift check on even with `verify_hash == false`. A mismatch is
+    /// [`StoreError::Engine`] wrapping a snapshot error.
+    pub expected_machine_hash: Option<String>,
     /// How persisted `after` timers are re-armed (default [`RestartTimers::Resume`]).
     pub restart_timers: RestartTimers,
     /// Machine-version policy (default [`VersionMismatch::Error`]).
@@ -335,6 +341,7 @@ impl<C: Context> Default for PersistedOptions<C> {
             clock: Arc::new(RealClock::new()),
             create_if_missing: true,
             verify_hash: true,
+            expected_machine_hash: None,
             restart_timers: RestartTimers::Resume,
             on_version_mismatch: VersionMismatch::Error,
             observers: Vec::new(),
@@ -349,6 +356,7 @@ impl<C: Context> fmt::Debug for PersistedOptions<C> {
             .field("clock", &self.clock)
             .field("create_if_missing", &self.create_if_missing)
             .field("verify_hash", &self.verify_hash)
+            .field("expected_machine_hash", &self.expected_machine_hash)
             .field("restart_timers", &self.restart_timers)
             .field("on_version_mismatch", &self.on_version_mismatch)
             .field("observers", &self.observers.len())
@@ -407,7 +415,8 @@ struct Target<'a, C: Context> {
 /// record version (`0` for a new key), the value to pass as `expected_version` when saving.
 ///
 /// `clock` drives the interpreter (`options.clock` is not consulted). The version policy,
-/// `verify_hash`, `restart_timers` and `observers` of `options` apply; `options.lock` does not
+/// `verify_hash`, `expected_machine_hash`, `restart_timers` and `observers` of `options` apply
+/// (the hash expectation on a new key too: it is checked against the machine itself); `options.lock` does not
 /// (no lock is taken here).
 ///
 /// # Errors
@@ -426,6 +435,11 @@ pub fn load_interpreter<C: Context>(
         if !options.create_if_missing {
             return Err(StoreError::NotFound(key.to_owned()));
         }
+        check_expected_hash(
+            machine,
+            options.expected_machine_hash.as_deref(),
+            machine.structure_hash(),
+        )?;
         let mut interp = SyncInterpreter::with_clock(machine.clone(), logic.clone(), clock);
         for observer in &options.observers {
             interp.observe(Arc::clone(observer));
@@ -435,9 +449,11 @@ pub fn load_interpreter<C: Context>(
         return Ok((interp, 0));
     };
     let snapshot = Snapshot::from_json(&record.snapshot)?;
+    let expected = options.expected_machine_hash.as_deref();
+    check_expected_hash(machine, expected, &snapshot.machine_hash)?;
     let snapshot = apply_version_policy(snapshot, machine, &options.on_version_mismatch)?;
     let restore = RestoreOptions {
-        verify_hash: Some(options.verify_hash),
+        verify_hash: Some(options.verify_hash || expected.is_some()),
         restart_timers: options.restart_timers,
     };
     let mut interp =
@@ -446,6 +462,19 @@ pub fn load_interpreter<C: Context>(
         interp.observe(Arc::clone(observer));
     }
     Ok((interp, record.version))
+}
+
+/// Refuse when the caller's `expected` fingerprint is not `actual` (the machine's own hash for a
+/// new key, the payload's for a restore).
+fn check_expected_hash(machine: &Machine, expected: Option<&str>, actual: &str) -> Result<()> {
+    match expected {
+        Some(want) if want != actual => Err(EngineError::Snapshot(format!(
+            "caller's expected_machine_hash {want:?} does not match machine '{}' ({actual})",
+            machine.id()
+        ))
+        .into()),
+        _ => Ok(()),
+    }
 }
 
 /// Persist `interp`'s snapshot under `key` and return the new version.

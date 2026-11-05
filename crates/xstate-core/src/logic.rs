@@ -15,7 +15,7 @@ use crate::context::Context;
 use crate::engine::Effect;
 use crate::error::{Error, Result};
 use crate::event::Event;
-use crate::machine::{ActionDef, Guard, Machine};
+use crate::machine::{ActionDef, Delay, Guard, Machine};
 
 /// What an action implementation can see and do.
 pub struct ActionScope<'a, C> {
@@ -129,6 +129,9 @@ fn sorted_names<V>(map: &HashMap<String, V>) -> Vec<&str> {
 /// Registry of implementations for one machine.
 pub struct MachineLogic<C> {
     actions: HashMap<String, ActionFn<C>>,
+    /// Some registered action is spelled like a built-in (`log`, `cancel`, ...): the engine
+    /// then looks the built-in's name up here first (user logic wins over built-ins).
+    shadows_builtin: bool,
     guards: HashMap<String, GuardFn<C>>,
     services: HashMap<String, ServiceImpl<C>>,
     delays: HashMap<String, DelayImpl<C>>,
@@ -138,6 +141,7 @@ impl<C> Default for MachineLogic<C> {
     fn default() -> Self {
         Self {
             actions: HashMap::new(),
+            shadows_builtin: false,
             guards: HashMap::new(),
             services: HashMap::new(),
             delays: HashMap::new(),
@@ -149,6 +153,7 @@ impl<C> Clone for MachineLogic<C> {
     fn clone(&self) -> Self {
         Self {
             actions: self.actions.clone(),
+            shadows_builtin: self.shadows_builtin,
             guards: self.guards.clone(),
             services: self.services.clone(),
             delays: self.delays.clone(),
@@ -160,6 +165,7 @@ impl<C> fmt::Debug for MachineLogic<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MachineLogic")
             .field("actions", &sorted_names(&self.actions))
+            .field("shadows_builtin", &self.shadows_builtin)
             .field("guards", &sorted_names(&self.guards))
             .field("services", &sorted_names(&self.services))
             .field("delays", &sorted_names(&self.delays))
@@ -190,8 +196,15 @@ impl<C: Context> MachineLogic<C> {
         name: impl Into<String>,
         f: impl Fn(&mut ActionScope<'_, C>) -> Result<()> + Send + Sync + 'static,
     ) -> Self {
-        self.actions.insert(name.into(), Arc::new(f));
+        let name = name.into();
+        self.shadows_builtin |= crate::machine::builtin::canonical(&name).is_some();
+        self.actions.insert(name, Arc::new(f));
         self
+    }
+
+    /// Names of the registered actions, in no particular order.
+    pub fn action_names(&self) -> impl Iterator<Item = &str> + '_ {
+        self.actions.keys().map(String::as_str)
     }
 
     /// Register a guard.
@@ -271,6 +284,13 @@ impl<C: Context> MachineLogic<C> {
             .ok_or_else(|| Error::ImplementationMissing { kind: "action", name: name.to_owned() })
     }
 
+    /// The user action overriding the built-in spelled `name`, if one is registered. Cheap
+    /// when no registered action is spelled like a built-in.
+    #[inline]
+    pub(crate) fn builtin_override(&self, name: &str) -> Option<&ActionFn<C>> {
+        if self.shadows_builtin { self.actions.get(name) } else { None }
+    }
+
     pub(crate) fn get_guard(&self, name: &str) -> Result<&GuardFn<C>> {
         self.guards
             .get(name)
@@ -311,6 +331,15 @@ impl<C: Context> MachineLogic<C> {
                             walk_actions(logic, &b.actions)?;
                         }
                     }
+                    ActionDef::Builtin { name, .. } if logic.builtin_override(name).is_some() => {}
+                    ActionDef::Builtin {
+                        builtin:
+                            crate::machine::Builtin::Raise { delay: Some(Delay::Named(d)), .. }
+                            | crate::machine::Builtin::SendTo { delay: Some(Delay::Named(d)), .. },
+                        ..
+                    } => {
+                        logic.get_delay(d)?;
+                    }
                     ActionDef::Builtin { .. } => {}
                 }
             }
@@ -333,7 +362,7 @@ impl<C: Context> MachineLogic<C> {
                 self.get_service(&inv.src)?;
             }
             for after in &node.after {
-                if let crate::machine::Delay::Named(name) = &after.delay {
+                if let Delay::Named(name) = &after.delay {
                     self.get_delay(name)?;
                 }
             }

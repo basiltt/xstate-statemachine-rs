@@ -14,7 +14,7 @@ use crate::config::{ConfigWarning, MachineConfig, ParseOptions, Policies};
 use crate::error::Result;
 use crate::ids::{StateId, TransitionId};
 
-mod builtin;
+pub(crate) mod builtin;
 mod compile;
 
 pub use builtin::{Builtin, Delay, SendTarget};
@@ -167,6 +167,9 @@ pub enum ActionDef {
         name: Arc<str>,
         /// Compiled built-in.
         builtin: Builtin,
+        /// `params` as written (or `null`), handed to a user action of the same name, which
+        /// wins over the built-in when the logic implements it.
+        params: Value,
     },
 }
 
@@ -211,8 +214,10 @@ pub struct InvokeDef {
 /// A compiled `after` entry.
 #[derive(Debug, Clone)]
 pub struct AfterDef {
-    /// Raw key as written (`"500"` or `"BACKOFF"`).
+    /// Normalised key: whole milliseconds (`"1000"` for `"1e3"`) or the delay name.
     pub key: String,
+    /// The key as written in the configuration.
+    pub raw_key: String,
     /// Fixed or named delay.
     pub delay: Delay,
     /// Event type the timer raises (`xstate.after.<key>.<state id>`).
@@ -250,7 +255,25 @@ impl Machine {
     /// # Errors
     /// Unresolved targets, root targets, duplicate ids and other structural rules.
     pub fn from_config(config: MachineConfig) -> Result<Self> {
-        Ok(Self { inner: Arc::new(compile::compile(config)?) })
+        Ok(Self { inner: Arc::new(compile::compile(config, None)?) })
+    }
+
+    /// Parse and compile for a known logic registry: an action the logic implements is the
+    /// user's action even when it is spelled like a built-in (`log`, `cancel`, `stop`, ...),
+    /// so its own `params` are not checked against the built-in's (user logic wins over
+    /// built-ins, as in XState, where a string action type names an implementation).
+    ///
+    /// # Errors
+    /// Shape errors from parsing and structural errors from compilation.
+    pub fn from_value_with_logic<C: crate::Context>(
+        value: &Value,
+        options: &ParseOptions,
+        logic: &crate::MachineLogic<C>,
+    ) -> Result<Self> {
+        let names: std::collections::HashSet<String> =
+            logic.action_names().map(str::to_owned).collect();
+        let config = MachineConfig::from_value_for(value, options, &names)?;
+        Ok(Self { inner: Arc::new(compile::compile(config, Some(&names))?) })
     }
 
     /// The configuration document this machine was compiled from: the input verbatim for
@@ -341,10 +364,20 @@ impl Machine {
         &self.inner.transitions
     }
 
-    /// Look a state up by its full dotted id (`machine.a.b`) or custom `#id` (without `#`).
+    /// Look a state up by its full dotted id (`machine.a.b`) or custom `#id` (without `#`),
+    /// optionally followed by a relative path (`my.id.child`). Ids may contain dots; the
+    /// longest dotted prefix naming a custom id wins.
     #[must_use]
     pub fn state_by_id(&self, id: &str) -> Option<StateId> {
-        self.inner.ids.get(id).or_else(|| self.inner.custom_ids.get(id)).copied()
+        if let Some(&sid) = self.inner.ids.get(id) {
+            return Some(sid);
+        }
+        let descend = |scope: StateId, path: &str| {
+            path.split('.').try_fold(scope, |cur, key| {
+                self.node(cur).children.iter().copied().find(|&c| self.node(c).key == key)
+            })
+        };
+        compile::resolve_hash_id(&self.inner.ids, &self.inner.custom_ids, id, descend)
     }
 
     /// Python-compatible structure hash (16 hex chars), computed once per machine. See

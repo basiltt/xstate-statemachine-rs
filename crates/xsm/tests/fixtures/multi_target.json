@@ -1,0 +1,19 @@
+{
+  "id": "fork",
+  "initial": "idle",
+  "states": {
+    "idle": {
+      "on": {
+        "FORK": { "target": ["#fork.work.a.run", "#fork.work.b.run"] },
+        "ENTER": "work"
+      }
+    },
+    "work": {
+      "type": "parallel",
+      "states": {
+        "a": { "initial": "wait", "states": { "wait": {}, "run": {} } },
+        "b": { "initial": "wait", "states": { "wait": {}, "run": {} } }
+      }
+    }
+  }
+}

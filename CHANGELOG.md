@@ -11,6 +11,107 @@ raised only in a minor release.
 
 ### Fixed
 
+- `xstate-core`: a state `type` outside `atomic`/`compound`/`parallel`/`final`/`history`
+  (`"Final"`, `"paralel"`) and a `compound` / `parallel` state without child states are
+  `InvalidConfig` errors naming the state and value; an `atomic` / `final` / `history` state
+  that declares children is built as compound with a `ConfigWarning` (a `final` one used to be an
+  error, a `compound` one without children silently became atomic).
+- `xstate-core`: a history state's default `target` must be a non-empty string; an invalid
+  `history` value names the state.
+- `xstate-core`: `strict`, `strictTargets`, `strictConfig` and the transition flags `reenter` /
+  `internal` accept only `true`, `false` or `null` ("not set"); a non-boolean `strictConfig` was
+  silently ignored and `null` was refused.
+- `xstate-core`: configuration errors from action, guard and transition parsing name the state
+  and key (`State 'm.a' entry: ...`, `Transition 'GO' on state 'm.a': invalid 'guard': ...`,
+  `State 'm.a' on 'GO': invalid transition item ...`).
+- `xstate-core`: action `params` must be an object (or `null`) for every action, not only
+  built-ins. Unknown keys of action objects, of guard objects and of a built-in's `params`
+  (`"delya"`) are warnings, or errors under `strictConfig` (an unknown action-object key was
+  always an error); a built-in written flat (`{"type": "raise", "event": ...}`) is refused with a
+  hint to nest its parameters under `params`.
+- `xstate-core`: `maxIterations` accepts an integral float (`5.0`) and still refuses `0`,
+  negatives, `2.9`, `true` and `null`; `spawnBlockingTimeout` must be a finite number `>= 0`.
+- `xstate-core`: an `initial` naming no child is refused at parse time with the list of children
+  and a "did you mean" hint, as XState's `createMachine` does.
+- `xstate-core`: `after` keys must be whole, non-negative milliseconds or a delay name. Numeric
+  strings are normalised (`"1e3"` is 1000 ms, `" 100"` is 100 ms) and the timer event, the
+  structure hash, snapshots and diagrams use the normalised value (`xstate.after.1000.<id>`, as
+  XState and Python do); `"1.5"`, `"-5"` and an empty key are refused, and two keys naming the
+  same delay are an error. `"inf"` / `"NaN"` are delay names, no longer numbers.
+  `AfterDef::raw_key` keeps the key as written. Pinned by conformance case 053.
+- `xstate-core`: invoke `id` / `systemId` must be non-empty strings and an invoke `description`
+  a string; an empty-string `target` is refused at parse time with the state named.
+- `xstate-core`: a user action named like a built-in (`log`, `cancel`, `stop`, `emit`, ...)
+  wins over the built-in: when the logic implements it, the engine runs the user action, and
+  the new `Machine::from_value_with_logic` exempts such names from the built-in's `params`
+  check. `MachineLogic::action_names` lists the registered actions; `MachineLogic::validate`
+  now also checks named delays of delayed `raise` / `sendTo`.
+- `xstate-core`: dotted ids resolve: a custom state id `"my.id"` can be targeted as `#my.id` and
+  `#my.id.child` (longest dotted prefix), and `Machine::state_by_id` accepts the same forms.
+- `xstate-core`: restoring a snapshot whose pending or deferred event record has an unknown
+  `kind`, a non-object `payload`, no `type` or a non-numeric timer timestamp fails with
+  `Error::Snapshot` instead of restoring it as user traffic; `done` / `error` / `after` records
+  marked `"engine": true` restore as engine events.
+- `xstate-core`: an action failing inside `choose` follows `actionErrorPolicy` exactly like a
+  top-level one (under `continue` the rest of the enclosing list is skipped as well), and the
+  `TransitionFailed` error names the innermost failing action instead of wrapping it twice.
+- `xstate-core`: a delay that resolves to NaN or infinity, or whose delay function fails,
+  disables that one timer with an error log on every path (`after`, delayed `raise`, delayed
+  `sendTo`) instead of failing the step; an unregistered delay name is still
+  `ImplementationMissing`.
+- `xstate-core`: a JSON `assign` on a context that is not an object (an array, a number) is an
+  action error handled by `actionErrorPolicy` instead of silently replacing the context with
+  `{}`.
+- `xstate-core`: `sendTo` / `forwardTo` with no live target and `sendParent` / `escalate`
+  without a parent drop the event with `on_event_dropped("unresolved_target")` and mark the step
+  failed: the transition commits, `Receipt::error` / `StepReport::soft_error` carry the new
+  `Error::UnresolvedTarget` (`ErrorKind::UnresolvedTarget`). `SyncInterpreter` has no actor
+  system, so every such send is unresolved there; a delayed `sendTo` to `self` is now a timer of
+  the machine instead of being dropped.
+- `xstate-core`: `send("")` and `Event::from_json` with an empty type are `InvalidEvent`.
+- `xstate-core`: `SyncInterpreter::stop` reports every queued event with
+  `on_event_dropped("stopped")` instead of discarding it.
+- `xstate-core`: `SimulatedClock::try_increment` / `try_set` refuse NaN and infinity
+  (`increment` / `set` ignore them with an error log) and `SyncInterpreter::advance` returns the
+  error; the interpreter module's snapshot and restore code moved to `interpreter/restore.rs`.
+- `xstate-core`: Mermaid / PlantUML exports draw every alternative of a state-level `onDone`,
+  as Python 0.12.0 does (conformance case 051 pins that every alternative is a candidate).
+- `xstate-tokio`: a `sendTo` to a child and a child's stop are put in its mailbox at once, in
+  effect order, so an exit action's `sendTo` reaches the state's own invoke before it is stopped
+  (XState `exitStates`); they were two racing tasks.
+- `xstate-tokio`: unresolved `sendTo` / `sendParent` / `escalate` (delayed ones included) are
+  reported like on `SyncInterpreter` (`unresolved_target`, `Receipt::error`); a delayed `sendTo`
+  to `self` is a cancellable local timer and a delayed `sendParent` reaches the parent (both were
+  dropped); `send("")` is `InvalidEvent`; events still in the mailbox when the actor stops are
+  reported as dropped (`stopped`) and their waiters get an error.
+- `xstate-core`: `redact` / `RedactKeys` follow the Python 0.12.0 matching rule: keys are
+  normalised to `snake_case` (camelCase boundaries split, `-` as `_`, case-insensitive) on both
+  sides, and denylist entries of at most four characters (`pin`, `pan`, `otp`, `card`, `auth`,
+  `seed`, ...) match only a whole word of the key, so `shipping`, `company`, `author` and
+  `spinner` are no longer redacted while `user_pin`, `userPin` and `cardNumber` still are;
+  longer entries keep substring matching (`sessionId`).
+- `xstate-persistence`: `receipts::STATUS_NO_OP` (HTTP 200, Python's renamed
+  `STATUS_NOT_MODIFIED_OK`) names the clean no-op status; `ReceiptErrorKind::UnresolvedTarget`
+  (Python's new `UnresolvedTargetError`, a subclass of `ActorSpawningError`) maps to HTTP 500.
+- `xstate-persistence`: `ReceiptJson::to_value_with` / `to_json_with(include_messages)` write
+  error messages as `""` for receipts shown to untrusted clients; `to_value` / `to_json` keep the
+  message.
+- `xstate-persistence`: `FileStore::delete` / `forget` take the key's lock, so a concurrent save
+  can no longer resurrect a deleted record; `list_keys` only returns keys `load` would accept
+  (and fills `limit` with them); a save fsyncs the directory after the rename on Unix.
+- `xstate-persistence`: `MemoryStore::forget` no longer discards a lock that is still held or
+  awaited, which let a second holder in.
+- `xstate-persistence`: `SqliteStoreOptions::busy_timeout` above `i32::MAX` ms is refused at
+  open; `JournalMode` offers only `Wal` and `Delete` (the other modes are removed).
+- `xstate-persistence`: `PersistedOptions::expected_machine_hash` is checked against the machine
+  itself on a new key and against the stored snapshot on a restore, where it also forces the
+  drift check on when `verify_hash` is `false`.
+- `xstate-persistence`: `DeadlineExt::remaining_ms` clamps to `0..=MAX_REMAINING_MS` (`1e15`)
+  instead of returning infinity for a huge finite `due_at_wall`.
+- `xstate-persistence`: `DueTimerScanner` gained `validate()` (negative or non-finite
+  `skew_tolerance_s`, `limit == 0` are refused instead of clamped; called by every scan),
+  `last_result()` (`None` before the first scan) and `run_until_checked`, which rejects a zero
+  interval; `run_until` logs and returns instead of spinning.
 - `xstate-core`: `start()` landing directly in a top-level final state now runs the exit actions
   of the final state and the root, as XState v5 does (`e_root, e_done, x_done, x_root`).
 - `xstate-core`: `always` transitions are selected in the order their atomic states were entered,
@@ -30,6 +131,19 @@ raised only in a minor release.
 - `xstate-core`: a parallel state with a `history` child now completes (`done.state.*`, `onDone`)
   when its regions are final: `isInFinalState` skipped no child, and a history pseudo-state is
   never final.
+- `xstate-eda`: `replay_dead_letter` refuses a dead letter whose stored envelope `data` holds the
+  redaction sentinel `"***"` as a leaf (it would have replayed masked values and resolved the
+  record), with `EdaError::ReplayRefused` unless `ReplayOptions::force` is set (Python 0.12.0).
+- `xstate-eda`: a `StoreError` that is an outage (`Unavailable`, `Conflict`, `LockTimeout`,
+  `SnapshotTooLarge`, `InvalidKey`) returned by an `EnvelopeHandler` converts to the new
+  `HandlerError::Requeue`, which the dispatcher requeues without counting an attempt instead of
+  dead-lettering the envelope as poison after `max_attempts`; `Corrupt` and engine errors still
+  count (Python 0.12.0).
+- `xstate-eda`: `SqliteOutboxStore` logs and skips a row whose envelope no longer decodes instead
+  of failing the whole read, and `claim` parks it under the new `POISON_OWNER` lease so no relay
+  selects it again; later rows keep relaying (Python 0.12.0).
+- `xstate-eda`: `OutboxPlugin` logs a warning when a `meta.publish` `data` field is missing from
+  the context (the field is still published as `null`).
 
 ### Changed
 

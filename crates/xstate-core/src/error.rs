@@ -31,6 +31,9 @@ pub enum ErrorKind {
     RunawayChain,
     /// A service or actor could not be started.
     ActorSpawning,
+    /// An addressed event (`sendTo`, `forwardTo`, `sendParent`, `escalate`) reached no live
+    /// actor. Python: `UnresolvedTargetError`, a subclass of `ActorSpawningError`.
+    UnresolvedTarget,
     /// Payload size, depth or count limit exceeded.
     LimitExceeded,
     /// Snapshot problems (version, drift, corruption).
@@ -52,6 +55,7 @@ impl fmt::Display for ErrorKind {
             Self::TransitionFailed => "transition_failed",
             Self::RunawayChain => "runaway_chain",
             Self::ActorSpawning => "actor_spawning",
+            Self::UnresolvedTarget => "unresolved_target",
             Self::LimitExceeded => "limit_exceeded",
             Self::Snapshot => "snapshot",
             Self::Logic => "logic",
@@ -140,6 +144,19 @@ pub enum Error {
         /// Reason.
         message: String,
     },
+    /// An addressed event reached no live actor; it was dropped. The step that sent it still
+    /// committed (its other actions ran), but is reported as failed with this error.
+    #[error(
+        "{action} target '{target}' did not resolve to a live actor; '{event}' was not delivered"
+    )]
+    UnresolvedTarget {
+        /// `sendTo`, `forwardTo`, `sendParent` or `escalate`.
+        action: &'static str,
+        /// The addressed actor (`<no parent>` for `sendParent` / `escalate` on a root).
+        target: String,
+        /// Type of the dropped event.
+        event: String,
+    },
     /// A size, depth or count limit was exceeded.
     #[error("limit exceeded: {0}")]
     LimitExceeded(String),
@@ -169,6 +186,7 @@ impl Error {
             Self::TransitionFailed { .. } => ErrorKind::TransitionFailed,
             Self::RunawayChain { .. } => ErrorKind::RunawayChain,
             Self::ActorSpawning { .. } => ErrorKind::ActorSpawning,
+            Self::UnresolvedTarget { .. } => ErrorKind::UnresolvedTarget,
             Self::LimitExceeded(_) => ErrorKind::LimitExceeded,
             Self::Snapshot(_) => ErrorKind::Snapshot,
             Self::Logic(_) => ErrorKind::Logic,

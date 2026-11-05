@@ -1,0 +1,153 @@
+{
+  "name": "on_done_alternatives_fall_through",
+  "description": "A state-level onDone given as a list of guarded transitions: every alternative is a candidate for xstate.done.state.*, so a failing guard falls through to the next entry (the Python library read only the first before 0.12.0).",
+  "tags": [
+    "onDone",
+    "final",
+    "guards"
+  ],
+  "machine": {
+    "id": "m",
+    "initial": "job",
+    "states": {
+      "job": {
+        "initial": "work",
+        "onDone": [
+          {
+            "target": "first",
+            "guard": "isFirst",
+            "actions": "tookFirst"
+          },
+          {
+            "target": "second",
+            "guard": "isSecond",
+            "actions": "tookSecond"
+          },
+          {
+            "target": "fallback",
+            "actions": "tookFallback"
+          }
+        ],
+        "states": {
+          "work": {
+            "on": {
+              "FINISH": "finished"
+            }
+          },
+          "finished": {
+            "type": "final"
+          }
+        }
+      },
+      "first": {},
+      "second": {},
+      "fallback": {}
+    }
+  },
+  "logic": {
+    "guards": {
+      "isFirst": false,
+      "isSecond": true
+    },
+    "record_guards": true
+  },
+  "steps": [
+    {
+      "send": "FINISH"
+    }
+  ],
+  "expected": {
+    "xstate": {
+      "initial": {
+        "state_ids": [
+          "m.job.work"
+        ],
+        "context": {},
+        "actions": [],
+        "status": "running",
+        "guards": []
+      },
+      "steps": [
+        {
+          "state_ids": [
+            "m.second"
+          ],
+          "context": {},
+          "actions": [
+            "tookSecond"
+          ],
+          "status": "running",
+          "guards": [
+            "isFirst",
+            "isSecond"
+          ]
+        }
+      ],
+      "oracle": {
+        "name": "xstate",
+        "version": "5.33.3"
+      }
+    },
+    "python": {
+      "oracle": {
+        "name": "xstate-statemachine",
+        "version": "0.12.0"
+      },
+      "initial": {
+        "state_ids": [
+          "m.job.work"
+        ],
+        "context": {},
+        "actions": [],
+        "status": "running",
+        "guards": []
+      },
+      "steps": [
+        {
+          "state_ids": [
+            "m.second"
+          ],
+          "context": {},
+          "actions": [
+            "tookSecond"
+          ],
+          "status": "running",
+          "guards": [
+            "isFirst",
+            "isSecond"
+          ]
+        }
+      ],
+      "machine_hash": "c929dc65c708f06c",
+      "snapshot": {
+        "version": 4,
+        "machine_id": "m",
+        "machine_hash": "c929dc65c708f06c",
+        "machine_version": null,
+        "taken_at": 0.0,
+        "status": "running",
+        "context": {},
+        "state_ids": [
+          "m.second"
+        ],
+        "value": "second",
+        "configuration": [
+          "m",
+          "m.second"
+        ],
+        "output": null,
+        "error": null,
+        "chain_trips": 0,
+        "last_chain_error": null,
+        "deferred": [],
+        "pending_events": [],
+        "scheduled_sends": [],
+        "deadlines": [],
+        "history": {},
+        "actors": {},
+        "system": {}
+      },
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"m\",\n  \"machine_hash\": \"c929dc65c708f06c\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"running\",\n  \"context\": {},\n  \"state_ids\": [\n    \"m.second\"\n  ],\n  \"value\": \"second\",\n  \"configuration\": [\n    \"m\",\n    \"m.second\"\n  ],\n  \"output\": null,\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
+    }
+  }
+}

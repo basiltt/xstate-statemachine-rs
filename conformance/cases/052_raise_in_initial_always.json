@@ -1,0 +1,157 @@
+{
+  "name": "raise_in_initial_always",
+  "description": "A raise inside an eventless transition taken while the machine starts is processed after the start-up microstep, exactly as when the same always is reached by an event: the raised GO moves from b to c, and the entry actions run in that order.",
+  "tags": [
+    "always",
+    "raise",
+    "start"
+  ],
+  "machine": {
+    "id": "m",
+    "initial": "a",
+    "states": {
+      "a": {
+        "entry": "enterA",
+        "always": {
+          "target": "b",
+          "actions": [
+            {
+              "type": "raise",
+              "params": {
+                "event": {
+                  "type": "GO"
+                }
+              }
+            },
+            "alwaysRan"
+          ]
+        }
+      },
+      "b": {
+        "entry": "enterB",
+        "on": {
+          "GO": {
+            "target": "c",
+            "actions": "go"
+          },
+          "BACK": "a"
+        }
+      },
+      "c": {
+        "entry": "enterC",
+        "on": {
+          "BACK": "a"
+        }
+      }
+    }
+  },
+  "steps": [
+    {
+      "send": "BACK"
+    }
+  ],
+  "expected": {
+    "xstate": {
+      "initial": {
+        "state_ids": [
+          "m.c"
+        ],
+        "context": {},
+        "actions": [
+          "enterA",
+          "alwaysRan",
+          "enterB",
+          "go",
+          "enterC"
+        ],
+        "status": "running"
+      },
+      "steps": [
+        {
+          "state_ids": [
+            "m.c"
+          ],
+          "context": {},
+          "actions": [
+            "enterA",
+            "alwaysRan",
+            "enterB",
+            "go",
+            "enterC"
+          ],
+          "status": "running"
+        }
+      ],
+      "oracle": {
+        "name": "xstate",
+        "version": "5.33.3"
+      }
+    },
+    "python": {
+      "oracle": {
+        "name": "xstate-statemachine",
+        "version": "0.12.0"
+      },
+      "initial": {
+        "state_ids": [
+          "m.c"
+        ],
+        "context": {},
+        "actions": [
+          "enterA",
+          "alwaysRan",
+          "enterB",
+          "go",
+          "enterC"
+        ],
+        "status": "running"
+      },
+      "steps": [
+        {
+          "state_ids": [
+            "m.c"
+          ],
+          "context": {},
+          "actions": [
+            "enterA",
+            "alwaysRan",
+            "enterB",
+            "go",
+            "enterC"
+          ],
+          "status": "running"
+        }
+      ],
+      "machine_hash": "4d0204094df151cb",
+      "snapshot": {
+        "version": 4,
+        "machine_id": "m",
+        "machine_hash": "4d0204094df151cb",
+        "machine_version": null,
+        "taken_at": 0.0,
+        "status": "running",
+        "context": {},
+        "state_ids": [
+          "m.c"
+        ],
+        "value": "c",
+        "configuration": [
+          "m",
+          "m.c"
+        ],
+        "output": null,
+        "error": null,
+        "chain_trips": 0,
+        "last_chain_error": null,
+        "deferred": [],
+        "pending_events": [],
+        "scheduled_sends": [],
+        "deadlines": [],
+        "history": {},
+        "actors": {},
+        "system": {}
+      },
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"m\",\n  \"machine_hash\": \"4d0204094df151cb\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"running\",\n  \"context\": {},\n  \"state_ids\": [\n    \"m.c\"\n  ],\n  \"value\": \"c\",\n  \"configuration\": [\n    \"m\",\n    \"m.c\"\n  ],\n  \"output\": null,\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
+    }
+  }
+}

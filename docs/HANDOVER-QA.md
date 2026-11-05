@@ -203,10 +203,12 @@ cd crates/xstate-py && "<venv python>" -m maturin develop --release && "<venv py
 
 ### Local quirks you will hit
 
-- **Windows Application Control intermittently blocks freshly built executables and proc-macro
-  DLLs** (`os error 4551`, "Permission denied", "An Application Control policy has blocked this
-  file", `can't find crate for tokio_macros`). It is not a code failure. Touch a source file in that
-  crate (or delete the offending artefact under `target/debug/deps`) and rebuild; the new hash runs.
+- **Smart App Control was switched off on 2026-11-06.** Until then, Windows' Smart App Control
+  (Code Integrity policy `{0283AC0F-...}`) intermittently blocked freshly built executables and
+  proc-macro DLLs (`os error 4551`, "Permission denied", "An Application Control policy has
+  blocked this file", `can't find crate for tokio_macros`); older notes and commit messages in this
+  repository that mention touching a file and rebuilding refer to that. On a machine where it is
+  still on, that workaround applies; it is never a code failure.
 - **`target/` grows very large** (it reached 83 GB during development). The dev profile now uses
   `debug = "line-tables-only"`; still, run `cargo clean` periodically. A full `--all-features`
   build + tests + docs is ~17 GB.

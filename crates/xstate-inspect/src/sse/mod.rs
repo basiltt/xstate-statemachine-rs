@@ -515,4 +515,44 @@ mod tests {
             format!("{:?}", SseOptions { token: Some("sekrit".into()), ..SseOptions::default() });
         assert!(!rendered.contains("sekrit"));
     }
+
+    #[test]
+    fn close_returns_promptly_with_a_stalled_client_and_a_full_queue() {
+        use std::io::Write;
+        use std::time::Instant;
+        let tuning = Tuning { keepalive: KEEPALIVE, max_queue: 2 };
+        let sink =
+            SseSink::bind_tuned(SseOptions::default(), tuning).unwrap_or_else(|e| panic!("{e}"));
+        let mut tcp =
+            std::net::TcpStream::connect(sink.local_addr()).unwrap_or_else(|e| panic!("{e}"));
+        let request = format!(
+            "GET /events HTTP/1.1\r\nHost: {}\r\nX-XSM-Token: {}\r\n\r\n",
+            sink.local_addr(),
+            sink.token()
+        );
+        tcp.write_all(request.as_bytes()).unwrap_or_else(|e| panic!("{e}"));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while sink.client_count() == 0 {
+            assert!(Instant::now() < deadline, "the client never subscribed");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // the client never reads: the socket buffers fill and the queue behind them overflows
+        let big = json!({"pad": "x".repeat(1 << 20)});
+        for _ in 0..40 {
+            sink.send(&big).unwrap_or_else(|e| panic!("{e}"));
+        }
+        let started = Instant::now();
+        sink.close();
+        assert!(started.elapsed() < Duration::from_secs(5), "close hung on a stalled client");
+        assert!(sink.is_closed());
+    }
+
+    #[test]
+    fn encoding_precedes_recording_and_a_non_finite_float_encodes_as_null() {
+        let shared = new_shared(4, 4);
+        let sink_line = encode_line(&json!({"n": f64::NAN, "k": [1, 2]}));
+        assert_eq!(sink_line, r#"{"n":null,"k":[1,2]}"#);
+        shared.publish(&sink_line).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(shared.messages_json(), format!("[{sink_line}]"));
+    }
 }

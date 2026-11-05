@@ -289,6 +289,14 @@ pub struct StepReport {
     pub failed: Option<String>,
     /// Pure mode only: the user actions that would have run, with their params.
     pub planned: Vec<crate::pure::PlannedAction>,
+    /// A failure that did not undo the step: the transition committed, but something it asked
+    /// for did not happen -- an addressed event (`sendTo`, `forwardTo`, `sendParent`,
+    /// `escalate`) that reached no live actor ([`Error::UnresolvedTarget`]). Set by the
+    /// interpreter once it has executed the effects, so it reaches the receipt; observers are
+    /// told through `on_event_dropped("unresolved_target")` instead.
+    ///
+    /// [`Error::UnresolvedTarget`]: crate::Error::UnresolvedTarget
+    pub soft_error: Option<std::sync::Arc<crate::Error>>,
 }
 
 /// Everything the algorithm needs for one macrostep.
@@ -456,5 +464,32 @@ pub(crate) fn resolve_delay<C: Context>(
             crate::logic::DelayImpl::Fixed(ms) => Ok(*ms),
             crate::logic::DelayImpl::Dynamic(f) => f(context, event),
         },
+    }
+}
+
+/// A delay as usable milliseconds for `after`, a delayed `raise` and a delayed `sendTo`
+/// alike, or `None` when it cannot be used: the delay function failed, or the value is NaN or
+/// infinite. The failure is logged and only that one timer is disabled; a misbehaving delay
+/// never fails the step (it runs during state entry). A negative delay fires at once.
+///
+/// # Errors
+/// Only [`crate::Error::ImplementationMissing`] for an unregistered delay name (a broken
+/// logic registry, normally refused by `MachineLogic::validate` before the machine starts).
+pub(crate) fn usable_delay<C: Context>(
+    cx: &Ctx<'_, C>,
+    delay: &Delay,
+    event: &Event,
+) -> Result<Option<f64>> {
+    match resolve_delay(cx.logic, delay, &cx.state.context, event) {
+        Ok(ms) if ms.is_finite() => Ok(Some(ms.max(0.0))),
+        Ok(ms) => {
+            tracing::error!(target: "xstate", ?delay, value = ms, "delay is not a finite number of milliseconds; ignoring this timer");
+            Ok(None)
+        }
+        Err(err @ crate::Error::ImplementationMissing { .. }) => Err(err),
+        Err(err) => {
+            tracing::error!(target: "xstate", ?delay, error = %err, "delay function failed; ignoring this timer");
+            Ok(None)
+        }
     }
 }

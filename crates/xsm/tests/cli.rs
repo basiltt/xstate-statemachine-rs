@@ -655,3 +655,73 @@ fn info_json_has_versions_and_features() {
     }
     assert!(value["features"]["stores"].as_array().unwrap().iter().any(|s| s == "sqlite"));
 }
+
+// ------------------------------------------------------------------ multi-target transitions
+
+#[test]
+fn validate_does_not_warn_about_regions_a_multi_target_transition_enters() {
+    let value = run_json(xsm().args(["validate", "--json"]).arg(fixture("multi_target.json")));
+    let file = &value[0];
+    assert_eq!(file["ok"], true, "{file}");
+    assert_eq!(file["unreachable_states"], serde_json::json!([]), "{file}");
+    assert_eq!(file["findings"], serde_json::json!([]), "{file}");
+}
+
+#[test]
+fn inspect_docs_and_diagram_list_every_target_of_a_multi_target_transition() {
+    let fixture = fixture("multi_target.json");
+    xsm()
+        .arg("inspect")
+        .arg(&fixture)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("work.a.run, work.b.run"));
+    let value = run_json(xsm().args(["inspect", "--json"]).arg(&fixture));
+    let row = &value["transitions"][0];
+    assert_eq!(row["to"], "fork.work.a.run, fork.work.b.run", "{row}");
+    xsm()
+        .arg("docs")
+        .arg(&fixture)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("work.a.run, work.b.run"));
+    let mermaid = xsm().arg("diagram").arg(&fixture).output().unwrap();
+    let text = String::from_utf8_lossy(&mermaid.stdout).into_owned();
+    assert!(text.contains("run"), "{text}");
+    assert!(text.matches("idle").count() >= 2, "both edges leave idle: {text}");
+}
+
+#[test]
+fn paths_and_simulate_enter_both_regions_of_a_multi_target_transition() {
+    let value = run_json(xsm().args(["paths", "--json"]).arg(fixture("multi_target.json")));
+    let both = serde_json::json!(["fork.work.a.run", "fork.work.b.run"]);
+    let reached = value["paths"].as_array().unwrap().iter().any(|p| {
+        p["final_states"].as_array().is_some_and(|f| {
+            f.iter().all(|s| both.as_array().unwrap().contains(s)) && !f.is_empty()
+        })
+    });
+    assert!(reached, "{value}");
+    xsm()
+        .args(["simulate", "-e", "FORK"])
+        .arg(fixture("multi_target.json"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("a.run"))
+        .stdout(predicate::str::contains("b.run"));
+}
+
+// ------------------------------------------------------ engine configuration errors, with path
+
+#[test]
+fn validate_json_surfaces_the_engine_error_for_an_invalid_state_type_with_its_path() {
+    let mut cmd = xsm();
+    cmd.args(["validate", "--json"]).arg(fixture("bad_state_type.json"));
+    let out = cmd.output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value[0]["ok"], false);
+    let finding = &value[0]["findings"][0];
+    assert_eq!(finding["level"], "error");
+    assert!(finding["path"].as_str().unwrap().contains('a'), "{finding}");
+    assert!(finding["message"].as_str().unwrap().contains("sideways"), "{finding}");
+}

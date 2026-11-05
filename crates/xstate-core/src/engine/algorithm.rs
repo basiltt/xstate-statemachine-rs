@@ -630,16 +630,13 @@ fn enter_states<C: Context>(
 fn arm_entry_effects<C: Context>(cx: &mut Ctx<'_, C>, s: StateId, event: &Event) -> Result<()> {
     let node = cx.machine.node(s);
     for (index, after) in node.after.iter().enumerate() {
-        let delay_ms = super::resolve_delay(cx.logic, &after.delay, &cx.state.context, event)?;
-        if !delay_ms.is_finite() {
-            continue;
-        }
+        let Some(delay_ms) = super::usable_delay(cx, &after.delay, event)? else { continue };
         let ev = Event::after(&after.key, &node.id);
         cx.effects.push(Effect::ArmTimer {
             state: s,
             index,
             entry_seq: cx.state.entry_seq,
-            delay_ms: delay_ms.max(0.0),
+            delay_ms,
             event: ev,
         });
     }

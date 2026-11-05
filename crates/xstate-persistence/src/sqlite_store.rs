@@ -55,7 +55,8 @@ fn upgrade_steps(from: i64) -> &'static [&'static str] {
     }
 }
 
-/// SQLite `journal_mode` for a file database.
+/// SQLite `journal_mode` for a file database. Only the two modes the store supports (and
+/// Python's `SQLiteStore` accepts) exist: the unsafe or in-memory modes are not offered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum JournalMode {
     /// Write-ahead log (default; readers do not block the writer).
@@ -63,14 +64,6 @@ pub enum JournalMode {
     Wal,
     /// Rollback journal deleted after each transaction.
     Delete,
-    /// Rollback journal truncated after each transaction.
-    Truncate,
-    /// Rollback journal header zeroed after each transaction.
-    Persist,
-    /// Rollback journal kept in memory.
-    Memory,
-    /// No journal (unsafe; for tests).
-    Off,
 }
 
 impl JournalMode {
@@ -78,10 +71,6 @@ impl JournalMode {
         match self {
             Self::Wal => "WAL",
             Self::Delete => "DELETE",
-            Self::Truncate => "TRUNCATE",
-            Self::Persist => "PERSIST",
-            Self::Memory => "MEMORY",
-            Self::Off => "OFF",
         }
     }
 }
@@ -90,7 +79,9 @@ impl JournalMode {
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct SqliteStoreOptions {
-    /// How long a connection waits on a busy database before failing (default 5 s).
+    /// How long a connection waits on a busy database before failing (default 5 s). Must be
+    /// representable as SQLite milliseconds (at most `i32::MAX` ms); larger values are refused
+    /// by [`SqliteStore::open_with`].
     pub busy_timeout: Duration,
     /// Journal mode of a file database (default WAL; forced to `DELETE` on a UNC / network
     /// path). Ignored for `:memory:`.
@@ -179,6 +170,18 @@ impl Fail {
 type FailResult<T> = std::result::Result<T, Fail>;
 
 // Connection setup and schema
+
+/// A `Duration` is finite and non-negative by construction; the remaining invalid case is a
+/// timeout SQLite cannot express (it takes `i32` milliseconds).
+fn validate_busy_timeout(timeout: Duration) -> Result<()> {
+    if timeout.as_millis() > u128::from(i32::MAX.unsigned_abs()) {
+        return Err(StoreError::Other(format!(
+            "SQLiteStoreOptions: busy_timeout {timeout:?} exceeds {} ms",
+            i32::MAX
+        )));
+    }
+    Ok(())
+}
 
 fn looks_like_network_path(path: &str) -> bool {
     path.starts_with("\\\\") || path.starts_with("//")
@@ -375,6 +378,7 @@ impl SqliteStore {
     /// # Errors
     /// As [`SqliteStore::open`].
     pub fn open_with(path: impl AsRef<Path>, options: SqliteStoreOptions) -> Result<Self> {
+        validate_busy_timeout(options.busy_timeout)?;
         let path = path.as_ref().to_string_lossy().into_owned();
         let memory = path == ":memory:";
         let mut journal_mode = options.journal_mode;

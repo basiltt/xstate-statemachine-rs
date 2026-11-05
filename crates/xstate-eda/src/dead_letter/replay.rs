@@ -50,6 +50,9 @@ pub struct ReplayResult {
 /// * Reuses the envelope id (attempt counter reset) so an inbox dedups a double replay.
 /// * Refuses when the record's `machine_hash` / `machine_version` differ from the machine the
 ///   dispatcher would use, unless `force`.
+/// * Refuses when the stored envelope data holds the redaction sentinel (`"***"`) as a leaf:
+///   dead letters are redacted at rest, so replaying one would send masked values; unless
+///   `force`.
 /// * A dry run (the default) only reports; otherwise the record is marked resolved on success
 ///   and the action is audited.
 ///
@@ -79,6 +82,12 @@ pub fn replay_dead_letter<H: EnvelopeHandler>(
                 .into(),
         ));
     };
+    if !options.force && holds_redacted(raw.get("data").unwrap_or(&Value::Null)) {
+        return Err(EdaError::ReplayRefused(
+            "the stored envelope data was redacted at capture ('***'); replaying it would send masked values (use --force to replay anyway)"
+                .into(),
+        ));
+    }
     let mut env = Envelope::from_dict(raw)?;
     env.extensions.shift_remove(ATTEMPT_EXTENSION);
     let warnings = mismatches(&rec, dispatcher.machine_for(&env.ty).as_ref());
@@ -112,6 +121,23 @@ pub fn replay_dead_letter<H: EnvelopeHandler>(
         options.actor,
     )?;
     Ok(ReplayResult { record_id: rec.id, dry_run: false, outcome, warnings })
+}
+
+/// The redaction sentinel the capture side writes in place of a secret.
+const REDACTED: &str = "***";
+
+/// Whether `value` holds the redaction sentinel as a leaf (iterative, like Python's walk).
+fn holds_redacted(value: &Value) -> bool {
+    let mut stack = vec![value];
+    while let Some(item) = stack.pop() {
+        match item {
+            Value::Object(m) => stack.extend(m.values()),
+            Value::Array(a) => stack.extend(a),
+            Value::String(s) if s == REDACTED => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn mismatches(rec: &DeadLetter, machine: Option<&Machine>) -> Vec<String> {

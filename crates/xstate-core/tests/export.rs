@@ -30,7 +30,7 @@ const NO_GOLDEN: &[&str] = &[];
 const MERMAID_RESERVED_ID: &[(&str, &str, &str)] =
     &[("024_done_state_queue_order", "end", "end_3")];
 /// Conformance cases in `conformance/cases`.
-const EXPECTED_CASES: usize = 50;
+const EXPECTED_CASES: usize = 53;
 /// Golden files in `tests/fixtures/export`: one `.mmd` and one `.puml` per case with a golden.
 const EXPECTED_GOLDEN_FILES: usize = 2 * (EXPECTED_CASES - NO_GOLDEN.len());
 

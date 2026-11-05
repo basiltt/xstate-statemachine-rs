@@ -3,10 +3,10 @@
 //! `send`, and timers fire from `tick` / `advance`.
 
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::collections::{BinaryHeap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::clock::{Clock, RealClock, SimulatedClock};
 use crate::config::UnhandledPolicy;
@@ -16,9 +16,8 @@ use crate::error::{Error, Result};
 use crate::event::{Event, EventOrigin};
 use crate::ids::StateId;
 use crate::logic::{MachineLogic, ServiceImpl};
-use crate::machine::Machine;
+use crate::machine::{Machine, SendTarget};
 use crate::observer::Observer;
-use crate::snapshot::{self, Deadline, ScheduledSend, Snapshot};
 
 /// Upper bound on events parked by `onUnhandled: "defer"` (oldest are evicted).
 pub const MAX_DEFERRED: usize = 1000;
@@ -36,6 +35,9 @@ pub struct Receipt {
     pub actions: Vec<Arc<str>>,
     /// Status after processing.
     pub status: Status,
+    /// A failure that did not undo the step (see [`StepReport::soft_error`]): the event was
+    /// processed, but an addressed event it sent reached no live actor.
+    pub error: Option<Arc<Error>>,
 }
 
 impl Receipt {
@@ -79,6 +81,7 @@ impl Receipt {
             unhandled: report.unhandled,
             actions: report.actions.clone(),
             status,
+            error: report.soft_error.clone(),
         }
     }
 
@@ -135,6 +138,8 @@ pub struct SyncInterpreter<C: Context = DynContext> {
     effects: Vec<Effect>,
     observers: Vec<Arc<dyn Observer<C>>>,
     deferred: VecDeque<Event>,
+    /// Soft error recorded while executing the current step's effects.
+    soft_error: Option<Arc<Error>>,
 }
 
 impl<C: Context> std::fmt::Debug for SyncInterpreter<C> {
@@ -174,6 +179,7 @@ impl<C: Context> SyncInterpreter<C> {
             effects: Vec::with_capacity(8),
             observers: Vec::new(),
             deferred: VecDeque::new(),
+            soft_error: None,
         }
     }
 
@@ -212,6 +218,7 @@ impl<C: Context> SyncInterpreter<C> {
             engine::start(&self.machine, &self.logic, &self.input)?;
         self.state = Some(state);
         self.apply_effects(&mut effects);
+        report.soft_error = self.soft_error.take();
         let rest = self.drain()?;
         report.actions.extend(rest.actions);
         report.changed = true;
@@ -231,6 +238,9 @@ impl<C: Context> SyncInterpreter<C> {
     /// an undeclared event; logic errors according to the machine's policies.
     pub fn send(&mut self, event: impl Into<Event>) -> Result<Receipt> {
         let event = event.into();
+        if event.ty.is_empty() {
+            return Err(Error::InvalidEvent("event type must be a non-empty string".into()));
+        }
         let state = self.state.as_ref().ok_or_else(|| Error::InvalidLifecycle {
             status: "uninitialized",
             message: "send before start".into(),
@@ -277,7 +287,7 @@ impl<C: Context> SyncInterpreter<C> {
     /// # Errors
     /// Logic errors raised while processing the timer events.
     pub fn advance(&mut self, clock: &SimulatedClock, ms: f64) -> Result<Receipt> {
-        clock.increment(ms);
+        clock.try_increment(ms)?;
         self.tick()
     }
 
@@ -286,7 +296,11 @@ impl<C: Context> SyncInterpreter<C> {
         if let Some(state) = self.state.as_mut().filter(|s| s.status == Status::Running) {
             state.status = Status::Stopped;
         }
-        self.queue.clear();
+        for event in self.queue.drain(..) {
+            for obs in &self.observers {
+                obs.on_event_dropped(&self.machine, &event, "stopped");
+            }
+        }
         self.deferred.clear();
         self.timers.clear();
         self.cancelled.clear();
@@ -360,6 +374,7 @@ impl<C: Context> SyncInterpreter<C> {
             unhandled: report.unhandled,
             actions: report.actions,
             status: self.status(),
+            error: report.soft_error,
         }
     }
 
@@ -401,7 +416,7 @@ impl<C: Context> SyncInterpreter<C> {
             let mut effects = std::mem::take(&mut self.effects);
             effects.clear();
             let stepped = engine::step(&self.machine, &self.logic, state, event, &mut effects);
-            let report = match stepped {
+            let mut report = match stepped {
                 Ok(report) => report,
                 Err(err) => {
                     self.effects = effects;
@@ -414,6 +429,12 @@ impl<C: Context> SyncInterpreter<C> {
             if let Some(ev) = kept.as_ref() {
                 self.after_step(ev, &report);
             }
+            // Observers saw the report before the effects ran (as before); a soft error from
+            // executing them (an unresolved `sendTo`) reaches them as `on_event_dropped` and
+            // the caller through the receipt.
+            self.apply_effects(&mut effects);
+            self.effects = effects;
+            report.soft_error = self.soft_error.take();
             if first {
                 merged.changed = report.changed;
                 merged.unhandled = report.unhandled;
@@ -427,8 +448,9 @@ impl<C: Context> SyncInterpreter<C> {
             if report.failed.is_some() {
                 merged.failed = report.failed;
             }
-            self.apply_effects(&mut effects);
-            self.effects = effects;
+            if merged.soft_error.is_none() {
+                merged.soft_error = report.soft_error;
+            }
         }
         Ok(merged)
     }
@@ -544,16 +566,41 @@ impl<C: Context> SyncInterpreter<C> {
                     tracing::info!(target: "xstate", label = label.as_deref().unwrap_or(""), value = %expr, "log");
                     self.logs.push((label, expr));
                 }
+                // A delayed self-send is a timer of this machine.
+                Effect::SendTo { to: SendTarget::SelfActor, event, delay_ms, id } => {
+                    let event = Event { origin: EventOrigin::Internal, ..event };
+                    self.arm(delay_ms.unwrap_or(0.0), event, None, id);
+                }
+                // No actor system: no child, parent or `systemId` actor is ever live here.
                 Effect::SendTo { to, event, .. } => {
-                    tracing::warn!(target: "xstate", ?to, event = %event.ty, "sendTo without an actor system; dropped");
+                    let (action, target) = match to {
+                        SendTarget::Parent => ("sendParent", "<no parent>".to_owned()),
+                        SendTarget::Named(name) => ("sendTo", name),
+                        SendTarget::SelfActor => ("sendTo", "self".to_owned()),
+                    };
+                    self.unresolved(action, target, &event);
                 }
                 Effect::Spawn { id, .. } => {
                     tracing::warn!(target: "xstate", id = %id, "spawnChild is not supported by SyncInterpreter yet; dropped");
                 }
                 Effect::Escalate(err) => {
-                    tracing::warn!(target: "xstate", error = %err, "escalate without a parent; dropped");
+                    let event = Event::error_actor(self.machine.id(), err);
+                    self.unresolved("escalate", "<no parent>".to_owned(), &event);
                 }
             }
+        }
+    }
+
+    /// An addressed event reached no live actor: dropped, reported to the observers
+    /// (`unresolved_target`) and recorded as the step's soft error.
+    fn unresolved(&mut self, action: &'static str, target: String, event: &Event) {
+        tracing::warn!(target: "xstate", action, %target, event = %event.ty, "target did not resolve to a live actor; event dropped");
+        for obs in &self.observers {
+            obs.on_event_dropped(&self.machine, event, "unresolved_target");
+        }
+        if self.soft_error.is_none() {
+            let error = Error::UnresolvedTarget { action, target, event: event.ty.to_string() };
+            self.soft_error = Some(Arc::new(error));
         }
     }
 
@@ -577,213 +624,9 @@ impl<C: Context> SyncInterpreter<C> {
     }
 }
 
-/// How `after` timers found in a snapshot are re-armed on restore.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RestartTimers {
-    /// Leave them parked (nothing fires).
-    Parked,
-    /// Re-arm with the declared delay from now.
-    Restart,
-    /// Re-arm with the remaining time (`due_at_wall - now`), clamped to the declared delay.
-    #[default]
-    Resume,
-    /// Like `Resume`, and fire everything already due before `from_snapshot` returns, so a
-    /// scanner that woke the instance sees the timer's effects immediately.
-    FireDue,
-}
+mod restore;
 
-/// Options for [`SyncInterpreter::from_snapshot`].
-#[derive(Debug, Clone, Default)]
-pub struct RestoreOptions {
-    /// Refuse a snapshot whose `machine_hash` differs from this machine's (default `true`).
-    pub verify_hash: Option<bool>,
-    /// Timer policy.
-    pub restart_timers: RestartTimers,
-}
-
-impl<C: Context> SyncInterpreter<C> {
-    /// Capture the runtime state in the Python-compatible layout v4.
-    ///
-    /// # Errors
-    /// [`Error::InvalidLifecycle`] before `start`.
-    pub fn snapshot(&self) -> Result<Snapshot> {
-        let state = self.state.as_ref().ok_or_else(|| Error::InvalidLifecycle {
-            status: "uninitialized",
-            message: "snapshot before start".into(),
-        })?;
-        let machine = &self.machine;
-        let now_ms = self.clock.now_ms();
-        let wall = self.clock.wall_now();
-        let mut deadlines = Vec::new();
-        let mut scheduled_sends = Vec::new();
-        let mut live: Vec<&Timer> =
-            self.timers.iter().filter(|t| !self.cancelled.contains(&t.seq)).collect();
-        live.sort_by(|a, b| a.due_ms.total_cmp(&b.due_ms).then(a.seq.cmp(&b.seq)));
-        for t in live {
-            let remaining = (t.due_ms - now_ms).max(0.0);
-            match (t.owner, t.entry_seq) {
-                (Some(owner), Some(entry_seq)) => deadlines.push(Deadline {
-                    state_id: machine.node(owner).id.to_string(),
-                    entry_seq,
-                    due_at_wall: wall + remaining / 1000.0,
-                    delay_ms: json_number(t.delay_ms),
-                    event_type: snapshot::python_event_name(&t.event.ty),
-                }),
-                _ => scheduled_sends.push(ScheduledSend {
-                    kind: "event".into(),
-                    ty: t.event.ty.to_string(),
-                    payload: if t.event.payload.is_null() {
-                        Value::Object(Map::new())
-                    } else {
-                        t.event.payload.clone()
-                    },
-                    remaining_ms: remaining,
-                    send_id: t.id.clone(),
-                }),
-            }
-        }
-        let mut snap = Snapshot::from_state(machine, state)?;
-        snap.taken_at = wall;
-        snap.deferred = self.deferred.iter().map(event_record).collect();
-        snap.pending_events = self.queue.iter().map(event_record).collect();
-        snap.scheduled_sends = scheduled_sends;
-        snap.deadlines = deadlines;
-        Ok(snap)
-    }
-
-    /// [`snapshot`](Self::snapshot) serialised to JSON text.
-    ///
-    /// # Errors
-    /// See [`snapshot`](Self::snapshot).
-    pub fn snapshot_json(&self) -> Result<String> {
-        self.snapshot()?.to_json()
-    }
-
-    /// Rebuild an interpreter from a snapshot. Entry actions, invokes and timers do **not**
-    /// re-run; timers follow `options.restart_timers`.
-    ///
-    /// # Errors
-    /// [`Error::Snapshot`] when the snapshot belongs to another machine, its hash differs
-    /// (unless `verify_hash` is `false`), or its configuration is illegal for this machine.
-    pub fn from_snapshot(
-        machine: Machine,
-        logic: MachineLogic<C>,
-        snapshot: &Snapshot,
-        clock: Arc<dyn Clock>,
-        options: &RestoreOptions,
-    ) -> Result<Self> {
-        if snapshot.machine_id != machine.id() {
-            return Err(Error::Snapshot(format!(
-                "snapshot belongs to machine '{}', not '{}'",
-                snapshot.machine_id,
-                machine.id()
-            )));
-        }
-        if options.verify_hash.unwrap_or(true) && snapshot.machine_hash != machine.structure_hash()
-        {
-            return Err(Error::Snapshot(format!(
-                "machine structure changed since the snapshot was taken (hash {} vs {})",
-                snapshot.machine_hash,
-                machine.structure_hash()
-            )));
-        }
-        let configuration = snapshot::resolve_configuration(&machine, &snapshot.configuration)?;
-        let mut history = HashMap::new();
-        for (parent, ids) in &snapshot.history {
-            let p = machine.state_by_id(parent).ok_or_else(|| Error::StateNotFound {
-                target: parent.clone(),
-                from: "snapshot.history".into(),
-            })?;
-            let mut states = Vec::with_capacity(ids.len());
-            for id in ids {
-                states.push(machine.state_by_id(id).ok_or_else(|| Error::StateNotFound {
-                    target: id.clone(),
-                    from: "snapshot.history".into(),
-                })?);
-            }
-            states.sort();
-            history.insert(p, states);
-        }
-        let context: C = serde_json::from_value(snapshot.context.clone())
-            .map_err(|e| Error::Snapshot(format!("context does not fit the context type: {e}")))?;
-        let state = ActiveState::restore(&machine, &configuration, context, history, snapshot);
-
-        let mut interp = Self::with_clock(machine, logic, clock);
-        interp.logic.validate(&interp.machine)?;
-        interp.state = Some(state);
-        for ev in &snapshot.pending_events {
-            if let Some(event) = event_from_record(ev) {
-                interp.queue.push_back(event);
-            }
-        }
-        for ev in &snapshot.deferred {
-            if let Some(event) = event_from_record(ev) {
-                interp.deferred.push_back(event);
-            }
-        }
-        let now_wall = interp.clock.wall_now();
-        for d in &snapshot.deadlines {
-            let Some(owner) = interp.machine.state_by_id(&d.state_id) else {
-                return Err(Error::StateNotFound {
-                    target: d.state_id.clone(),
-                    from: "snapshot.deadlines".into(),
-                });
-            };
-            let delay_ms = d.delay_ms.as_f64().unwrap_or(0.0);
-            let remaining = match options.restart_timers {
-                RestartTimers::Parked => continue,
-                RestartTimers::Restart => delay_ms,
-                RestartTimers::Resume | RestartTimers::FireDue => {
-                    ((d.due_at_wall - now_wall) * 1000.0).clamp(0.0, delay_ms)
-                }
-            };
-            let event = Event::engine(
-                snapshot::engine_event_name(&d.event_type),
-                Value::Null,
-                EventOrigin::After,
-            );
-            interp.arm_with(remaining, delay_ms, event, Some(owner), None, Some(d.entry_seq));
-        }
-        for s in &snapshot.scheduled_sends {
-            let payload = if s.payload.as_object().is_some_and(Map::is_empty) {
-                Value::Null
-            } else {
-                s.payload.clone()
-            };
-            let event = Event::engine(s.ty.clone(), payload, EventOrigin::Internal);
-            interp.arm_with(s.remaining_ms, s.remaining_ms, event, None, s.send_id.clone(), None);
-        }
-        if options.restart_timers == RestartTimers::FireDue {
-            interp.tick()?;
-        }
-        Ok(interp)
-    }
-}
-
-fn json_number(ms: f64) -> Value {
-    if ms.fract() == 0.0 && ms.abs() < 9.0e15 {
-        #[allow(clippy::cast_possible_truncation)]
-        Value::from(ms as i64)
-    } else {
-        Value::from(ms)
-    }
-}
-
-fn event_record(event: &Event) -> Value {
-    let mut map = Map::new();
-    map.insert("kind".into(), Value::String("event".into()));
-    map.insert("type".into(), Value::String(event.ty.to_string()));
-    if !event.payload.is_null() {
-        map.insert("payload".into(), event.payload.clone());
-    }
-    Value::Object(map)
-}
-
-fn event_from_record(record: &Value) -> Option<Event> {
-    let ty = record.get("type")?.as_str()?;
-    let payload = record.get("payload").cloned().unwrap_or(Value::Null);
-    Some(Event::engine(snapshot::engine_event_name(ty), payload, EventOrigin::External))
-}
+pub use restore::{RestartTimers, RestoreOptions};
 
 impl From<&str> for Event {
     fn from(ty: &str) -> Self {

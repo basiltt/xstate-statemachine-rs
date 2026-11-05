@@ -242,7 +242,18 @@ impl MachineConfig {
     /// Returns [`Error::InvalidConfig`](crate::Error::InvalidConfig) for shape problems, including unknown keys when
     /// `strictConfig` is in force.
     pub fn from_value_with(value: &Value, options: &ParseOptions) -> Result<Self> {
-        parse::parse_machine(value, options)
+        parse::parse_machine(value, options, None)
+    }
+
+    /// Parse, treating every name in `user_actions` as the user's own action even when it is
+    /// spelled like a built-in (`log`, `cancel`, ...): its `params` are not held to the
+    /// built-in's signature, since user logic wins over built-ins.
+    pub(crate) fn from_value_for(
+        value: &Value,
+        options: &ParseOptions,
+        user_actions: &std::collections::HashSet<String>,
+    ) -> Result<Self> {
+        parse::parse_machine(value, options, Some(user_actions))
     }
 
     /// Parse from JSON text.
@@ -280,11 +291,21 @@ impl StateConfig {
 }
 
 /// Parse a guard value (string or object form). Used by the `choose` built-in compiler.
-pub(crate) fn parse_guard_value(value: &Value, path: &str) -> Result<GuardConfig> {
-    parse::parse_guard_at(value, path)
+pub(crate) fn parse_guard_value(
+    value: &Value,
+    path: &str,
+    strict: bool,
+    warnings: &mut Vec<ConfigWarning>,
+) -> Result<GuardConfig> {
+    parse::parse_guard_at(value, path, strict, warnings)
 }
 
 /// Parse an action list value. Used by the `choose` built-in compiler.
-pub(crate) fn parse_actions_value(value: Option<&Value>, path: &str) -> Result<Vec<ActionConfig>> {
-    parse::parse_actions_at(value, path)
+pub(crate) fn parse_actions_value(
+    value: Option<&Value>,
+    path: &str,
+    strict: bool,
+    warnings: &mut Vec<ConfigWarning>,
+) -> Result<Vec<ActionConfig>> {
+    parse::parse_actions_at(value, path, strict, warnings)
 }

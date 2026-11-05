@@ -1,0 +1,175 @@
+{
+  "name": "after_key_normalisation",
+  "description": "Numeric after keys are normalised to whole milliseconds: \" 100\" and \"1e3\" fire after 100 ms and 1000 ms, and the timer event is named with the normalised value (xstate.after.1000.<id>, Python after.1000.<id>). The run ends with a pending \"5e2\" timer, so the snapshot vector pins the normalised deadline event name and delay, and the structure hash the normalised keys.",
+  "tags": [
+    "after",
+    "snapshot"
+  ],
+  "machine": {
+    "id": "m",
+    "initial": "a",
+    "states": {
+      "a": {
+        "after": {
+          " 100": {
+            "actions": "early"
+          },
+          "1e3": {
+            "target": "b",
+            "actions": "late"
+          }
+        }
+      },
+      "b": {
+        "entry": "enterB",
+        "after": {
+          "5e2": "c"
+        }
+      },
+      "c": {
+        "type": "final"
+      }
+    }
+  },
+  "steps": [
+    {
+      "advance_ms": 100
+    },
+    {
+      "advance_ms": 900
+    },
+    {
+      "advance_ms": 100
+    }
+  ],
+  "expected": {
+    "xstate": {
+      "initial": {
+        "state_ids": [
+          "m.a"
+        ],
+        "context": {},
+        "actions": [],
+        "status": "running"
+      },
+      "steps": [
+        {
+          "state_ids": [
+            "m.a"
+          ],
+          "context": {},
+          "actions": [
+            "early"
+          ],
+          "status": "running"
+        },
+        {
+          "state_ids": [
+            "m.b"
+          ],
+          "context": {},
+          "actions": [
+            "late",
+            "enterB"
+          ],
+          "status": "running"
+        },
+        {
+          "state_ids": [
+            "m.b"
+          ],
+          "context": {},
+          "actions": [],
+          "status": "running"
+        }
+      ],
+      "oracle": {
+        "name": "xstate",
+        "version": "5.33.3"
+      }
+    },
+    "python": {
+      "oracle": {
+        "name": "xstate-statemachine",
+        "version": "0.12.0"
+      },
+      "initial": {
+        "state_ids": [
+          "m.a"
+        ],
+        "context": {},
+        "actions": [],
+        "status": "running"
+      },
+      "steps": [
+        {
+          "state_ids": [
+            "m.a"
+          ],
+          "context": {},
+          "actions": [
+            "early"
+          ],
+          "status": "running"
+        },
+        {
+          "state_ids": [
+            "m.b"
+          ],
+          "context": {},
+          "actions": [
+            "late",
+            "enterB"
+          ],
+          "status": "running"
+        },
+        {
+          "state_ids": [
+            "m.b"
+          ],
+          "context": {},
+          "actions": [],
+          "status": "running"
+        }
+      ],
+      "machine_hash": "910e24717c94acc4",
+      "snapshot": {
+        "version": 4,
+        "machine_id": "m",
+        "machine_hash": "910e24717c94acc4",
+        "machine_version": null,
+        "taken_at": 0.0,
+        "status": "running",
+        "context": {},
+        "state_ids": [
+          "m.b"
+        ],
+        "value": "b",
+        "configuration": [
+          "m",
+          "m.b"
+        ],
+        "output": null,
+        "error": null,
+        "chain_trips": 0,
+        "last_chain_error": null,
+        "deferred": [],
+        "pending_events": [],
+        "scheduled_sends": [],
+        "deadlines": [
+          {
+            "state_id": "m.b",
+            "entry_seq": 2,
+            "due_at_wall": 0.0,
+            "delay_ms": 500,
+            "event_type": "after.500.m.b"
+          }
+        ],
+        "history": {},
+        "actors": {},
+        "system": {}
+      },
+      "snapshot_text": "{\n  \"version\": 4,\n  \"machine_id\": \"m\",\n  \"machine_hash\": \"910e24717c94acc4\",\n  \"machine_version\": null,\n  \"taken_at\": 0.0,\n  \"status\": \"running\",\n  \"context\": {},\n  \"state_ids\": [\n    \"m.b\"\n  ],\n  \"value\": \"b\",\n  \"configuration\": [\n    \"m\",\n    \"m.b\"\n  ],\n  \"output\": null,\n  \"error\": null,\n  \"chain_trips\": 0,\n  \"last_chain_error\": null,\n  \"deferred\": [],\n  \"pending_events\": [],\n  \"scheduled_sends\": [],\n  \"deadlines\": [\n    {\n      \"state_id\": \"m.b\",\n      \"entry_seq\": 2,\n      \"due_at_wall\": 0.0,\n      \"delay_ms\": 500,\n      \"event_type\": \"after.500.m.b\"\n    }\n  ],\n  \"history\": {},\n  \"actors\": {},\n  \"system\": {}\n}"
+    }
+  }
+}

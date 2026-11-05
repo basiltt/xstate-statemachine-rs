@@ -577,11 +577,30 @@ impl FileStore {
                 {
                     thread::sleep(WRITE_RETRY_SLEEP);
                 }
+                Ok(()) => break,
                 other => return other,
             }
         }
+        self.fsync_directory();
         Ok(())
     }
+
+    /// Make the rename itself durable (POSIX): the temp file's `fsync` protects its content, but
+    /// the directory entry the rename swapped lives in the directory, so without this a power
+    /// loss after `save` returned can resurrect the previous record. Windows cannot open a
+    /// directory for `fsync` (NTFS journals the rename). Best effort: the rename already
+    /// happened, so a filesystem that refuses a directory `fsync` must not turn a committed
+    /// write into a reported failure.
+    #[cfg(unix)]
+    fn fsync_directory(&self) {
+        if self.fsync {
+            let _ = File::open(&self.dir).and_then(|dir| dir.sync_all());
+        }
+    }
+
+    #[cfg(not(unix))]
+    #[allow(clippy::unused_self)]
+    fn fsync_directory(&self) {}
 
     /// Run `f` under the key's write lock unless this thread already holds it via
     /// [`StateStore::lock`] (the OS lock is not reentrant).
@@ -668,11 +687,14 @@ impl StateStore for FileStore {
     }
 
     fn delete(&self, key: &str) -> Result<bool> {
-        match fs::remove_file(self.path(key)?) {
+        let path = self.path(key)?;
+        // Under the key's lock, like `save`: unlocked, a save that already read version 3 could
+        // replace the file just unlinked and resurrect the record at version 4.
+        self.with_write_lock(key, || match fs::remove_file(&path) {
             Ok(()) => Ok(true),
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(false),
             Err(e) => Err(e.into()),
-        }
+        })
     }
 
     fn forget(&self, key: &str) -> Result<ForgetReport> {
@@ -694,15 +716,16 @@ impl StateStore for FileStore {
             let entry = entry?;
             let file_name = entry.file_name();
             let Some(name) = file_name.to_str() else { continue };
-            if let Some(key) =
-                self.key_from_name(&entry.path(), name).filter(|k| k.starts_with(prefix))
+            // only advertise keys `load` would accept (valid, and the name `encode_key` writes)
+            if let Some(key) = self
+                .key_from_name(&entry.path(), name)
+                .filter(|k| k.starts_with(prefix) && validate_file_key(k).is_ok())
             {
                 keys.push(key);
             }
         }
         keys.sort_unstable();
         keys.truncate(limit);
-        keys.retain(|k| validate_file_key(k).is_ok());
         Ok(keys)
     }
 

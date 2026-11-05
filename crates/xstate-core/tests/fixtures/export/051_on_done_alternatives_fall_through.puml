@@ -1,0 +1,20 @@
+@startuml
+hide empty description
+state "m" as m {
+  [*] --> m_job
+  state "job" as m_job {
+    [*] --> m_job_work
+    state "work" as m_job_work
+    state "finished" as m_job_finished
+    m_job_finished --> [*]
+  }
+  state "first" as m_first
+  state "second" as m_second
+  state "fallback" as m_fallback
+}
+[*] --> m_job
+m_job --> m_first : onDone
+m_job --> m_second : onDone
+m_job --> m_fallback : onDone
+m_job_work --> m_job_finished : FINISH
+@enduml

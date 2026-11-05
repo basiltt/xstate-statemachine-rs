@@ -345,3 +345,19 @@ impl<C: Context> Observer<C> for InspectorObserver {
         ));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sinks::MemorySink;
+    use serde_json::json;
+
+    #[test]
+    fn a_non_object_context_is_sent_as_an_empty_object() {
+        let observer = InspectorObserver::new(MemorySink::new()).context_allowlist(["a"]);
+        for context in [json!(5), json!([1, 2]), json!("text"), Value::Null] {
+            assert_eq!(observer.shape_context(&context), json!({}), "{context}");
+        }
+        assert_eq!(observer.shape_context(&json!({"a": 1, "b": 2})), json!({"a": 1}));
+    }
+}

@@ -23,6 +23,9 @@ use crate::store::{Result, StoreError};
 
 /// HTTP 200: a transition was taken, or the event was a clean no-op.
 pub const STATUS_OK: u16 = 200;
+/// HTTP 200: the event was handled nowhere in the current state, a clean no-op (not a 304).
+/// Python `STATUS_NO_OP`, historically `STATUS_NOT_MODIFIED_OK`.
+pub const STATUS_NO_OP: u16 = 200;
 /// HTTP 202: the event was deferred by `onUnhandled: "defer"` (held, not run).
 pub const STATUS_ACCEPTED: u16 = 202;
 /// HTTP 409: a guard refused it, the first delivery is still in flight, or the instance is
@@ -50,6 +53,10 @@ pub enum ReceiptErrorKind {
     InboxUnavailable,
     /// Python `InterpreterStoppedError`: the instance is finished or stopped (HTTP 409).
     InterpreterStopped,
+    /// Python `UnresolvedTargetError` (a subclass of `ActorSpawningError`): a `sendTo`,
+    /// `forwardTo`, `sendParent` or `escalate` reached no live actor (HTTP 500: it is not in
+    /// the client-error table, so the MRO fallback ends at the default).
+    UnresolvedTarget,
     /// Any other error, carrying the exception class name as written in the JSON `type`.
     Other(String),
 }
@@ -63,6 +70,7 @@ impl ReceiptErrorKind {
             Self::IdempotencyInFlight => "IdempotencyInFlightError",
             Self::InboxUnavailable => "InboxUnavailableError",
             Self::InterpreterStopped => "InterpreterStoppedError",
+            Self::UnresolvedTarget => "UnresolvedTargetError",
             Self::Other(name) => name,
         }
     }
@@ -75,6 +83,7 @@ impl ReceiptErrorKind {
             "IdempotencyInFlightError" => Self::IdempotencyInFlight,
             "InboxUnavailableError" => Self::InboxUnavailable,
             "InterpreterStoppedError" => Self::InterpreterStopped,
+            "UnresolvedTargetError" => Self::UnresolvedTarget,
             other => Self::Other(other.to_owned()),
         }
     }
@@ -93,6 +102,7 @@ impl ReceiptErrorKind {
             ErrorKind::TransitionFailed => "TransitionFailedError",
             ErrorKind::RunawayChain => "RunawayChainError",
             ErrorKind::ActorSpawning => "ActorSpawningError",
+            ErrorKind::UnresolvedTarget => "UnresolvedTargetError",
             ErrorKind::LimitExceeded => "LimitExceededError",
             ErrorKind::Snapshot => "SnapshotCorruptError",
             ErrorKind::Logic => "LogicError",
@@ -201,12 +211,22 @@ impl ReceiptJson {
     /// The JSON value, with `state_ids` sorted and the key order Python writes.
     #[must_use]
     pub fn to_value(&self) -> Value {
+        self.to_value_with(true)
+    }
+
+    /// Like [`to_value`](Self::to_value), but with `include_messages == false` each error's
+    /// message is written as `""` (type only), for a receipt shown to an untrusted client
+    /// (Python `receipt_to_json(include_messages=False)`). The default keeps the message
+    /// because the idempotency cache must replay the original answer faithfully.
+    #[must_use]
+    pub fn to_value_with(&self, include_messages: bool) -> Value {
         let mut ids = self.state_ids.clone();
         ids.sort();
         let error = self.error.as_ref().map_or(Value::Null, |e| {
+            let message = if include_messages { e.message.clone() } else { String::new() };
             let mut m = Map::new();
             m.insert("type".into(), Value::String(e.kind.type_name().to_owned()));
-            m.insert("message".into(), Value::String(e.message.clone()));
+            m.insert("message".into(), Value::String(message));
             Value::Object(m)
         });
         let mut map = Map::new();
@@ -224,6 +244,13 @@ impl ReceiptJson {
     #[must_use]
     pub fn to_json(&self) -> String {
         pyjson::dumps(&self.to_value(), false, false)
+    }
+
+    /// [`to_json`](Self::to_json) with optional error-message omission; see
+    /// [`to_value_with`](Self::to_value_with).
+    #[must_use]
+    pub fn to_json_with(&self, include_messages: bool) -> String {
+        pyjson::dumps(&self.to_value_with(include_messages), false, false)
     }
 
     /// Validate and decode a receipt object (Python `receipt_from_json`).
@@ -310,7 +337,7 @@ pub fn receipt_to_status(receipt: &ReceiptJson) -> u16 {
                 STATUS_CONFLICT
             }
             ReceiptErrorKind::InboxUnavailable => STATUS_UNAVAILABLE,
-            ReceiptErrorKind::Other(_) => STATUS_ERROR,
+            ReceiptErrorKind::UnresolvedTarget | ReceiptErrorKind::Other(_) => STATUS_ERROR,
         };
     }
     if receipt.deferred {
@@ -319,7 +346,7 @@ pub fn receipt_to_status(receipt: &ReceiptJson) -> u16 {
     if receipt.denied {
         return STATUS_CONFLICT;
     }
-    STATUS_OK
+    STATUS_NO_OP
 }
 
 /// Python-compatible JSON text (`json.dumps`), shared by the receipt, inbox and log codecs so

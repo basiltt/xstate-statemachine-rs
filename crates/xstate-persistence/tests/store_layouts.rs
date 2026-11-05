@@ -337,6 +337,17 @@ fn lock_is_held_across_instances() {
 }
 
 #[test]
+fn a_fractional_record_version_is_corrupt_not_truncated() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = quick(dir.path());
+    put(&s, "k", "{}");
+    let path = dir.path().join("k.xsm.json");
+    let text = fs::read_to_string(&path).unwrap().replace("\"version\":1,", "\"version\":1.9,");
+    fs::write(&path, text).unwrap();
+    assert!(matches!(s.load("k"), Err(StoreError::Corrupt(_))));
+}
+
+#[test]
 fn forget_removes_record_and_lock_file() {
     let dir = tempfile::tempdir().unwrap();
     let s = quick(dir.path());
@@ -345,6 +356,45 @@ fn forget_removes_record_and_lock_file() {
     assert_eq!(report.snapshots, 1);
     assert_eq!(report.other, [("locks".to_owned(), 1)]);
     assert_eq!(names(dir.path()), Vec::<String>::new());
+}
+
+#[test]
+fn delete_waits_for_the_key_lock_so_a_save_cannot_resurrect_the_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = quick(dir.path());
+    put(&s, "k", "{}");
+    let guard = s.lock("k", Duration::from_secs(1)).unwrap();
+    let finished = std::sync::atomic::AtomicBool::new(false);
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            assert!(s.delete("k").unwrap());
+            finished.store(true, Ordering::SeqCst);
+        });
+        thread::sleep(Duration::from_millis(150));
+        assert!(!finished.load(Ordering::SeqCst), "delete must wait for the key's lock");
+        assert!(s.load("k").unwrap().is_some());
+        drop(guard);
+    });
+    assert!(finished.load(Ordering::SeqCst));
+    assert!(s.load("k").unwrap().is_none());
+    // the holder itself may delete without deadlocking on its own lock
+    put(&s, "k", "{}");
+    let own = s.lock("k", Duration::from_secs(1)).unwrap();
+    assert!(s.delete("k").unwrap());
+    drop(own);
+}
+
+#[test]
+fn list_keys_hides_files_load_would_reject() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = quick(dir.path());
+    put(&s, "good", "{}");
+    // decodes to a key `load` refuses (a path separator), and a name `encode_key` never writes
+    fs::write(dir.path().join("a%2fb.xsm.json"), "{}").unwrap();
+    fs::write(dir.path().join("Upper.xsm.json"), "{}").unwrap();
+    // a hashed-name file whose body is not a record of that key
+    fs::write(dir.path().join(format!("~{}.xsm.json", "0".repeat(64))), "garbage").unwrap();
+    assert_eq!(s.list_keys("", 10).unwrap(), ["good"]);
 }
 
 #[test]
@@ -500,12 +550,63 @@ mod sqlite {
     }
 
     #[test]
+    fn a_fractional_record_version_is_corrupt_not_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("x.db");
+        let s = SqliteStore::open(&db).unwrap();
+        put(&s, "k", "{}");
+        raw(&db).execute("UPDATE statecharts SET version = 1.9 WHERE key = 'k'", []).unwrap();
+        assert!(matches!(s.load("k"), Err(StoreError::Corrupt(_))));
+    }
+
+    #[test]
     fn journal_mode_option_is_honoured() {
         let dir = tempfile::tempdir().unwrap();
         let options = SqliteStoreOptions::default().journal_mode(JournalMode::Delete);
         let s = SqliteStore::open_with(dir.path().join("d.db"), options).unwrap();
         let h = s.health().unwrap();
         assert!(h.details.contains(&("journal_mode".to_owned(), "delete".to_owned())));
+    }
+
+    #[test]
+    fn a_busy_timeout_sqlite_cannot_express_is_refused() {
+        let options = SqliteStoreOptions::default().busy_timeout(Duration::MAX);
+        let err = SqliteStore::open_with(":memory:", options).err();
+        assert!(matches!(err, Some(StoreError::Other(_))), "{err:?}");
+        let zero = SqliteStoreOptions::default().busy_timeout(Duration::ZERO);
+        assert!(SqliteStore::open_with(":memory:", zero).is_ok());
+    }
+
+    #[test]
+    fn load_never_pairs_a_record_with_another_versions_deadlines() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("x.db");
+        let writer = SqliteStore::open(&db).unwrap();
+        let reader = SqliteStore::open(&db).unwrap();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                for n in 1..=150u64 {
+                    let deadlines = [dl("m.a", n, 1.0, 1), dl("m.b", n, 2.0, 1)];
+                    let machine_version = n.to_string();
+                    let opts = SaveOptions {
+                        machine_version: &machine_version,
+                        deadlines: &deadlines,
+                        ..SaveOptions::default()
+                    };
+                    writer.save("k", "{}", &opts).unwrap();
+                }
+                stop.store(true, Ordering::SeqCst);
+            });
+            while !stop.load(Ordering::SeqCst) {
+                if let Some(rec) = reader.load("k").unwrap() {
+                    assert_eq!(rec.deadlines.len(), 2);
+                    for d in &rec.deadlines {
+                        assert_eq!(d.entry_seq.to_string(), rec.machine_version);
+                    }
+                }
+            }
+        });
     }
 
     #[test]

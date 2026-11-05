@@ -279,4 +279,15 @@ mod tests {
         std::fs::write(&path, "{\"a\":1}\n{bad}\n{\"b\":2}\n").unwrap_or_else(|e| panic!("{e}"));
         assert!(read_jsonl(&path).is_err());
     }
+
+    #[test]
+    fn an_absurdly_deep_line_is_an_error_not_a_stack_overflow() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let path = dir.path().join("deep.jsonl");
+        let deep = format!("{}{}", "[".repeat(10_000), "]".repeat(10_000));
+        let lines = format!("{{\"a\":1}}\n{deep}\n{{\"b\":2}}\n");
+        std::fs::write(&path, lines).unwrap_or_else(|e| panic!("{e}"));
+        let err = read_jsonl(&path).err().unwrap_or_else(|| panic!("a deep line must not parse"));
+        assert!(err.to_string().contains("corrupt line"), "{err}");
+    }
 }

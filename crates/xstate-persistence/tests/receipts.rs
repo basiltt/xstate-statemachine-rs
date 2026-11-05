@@ -6,7 +6,8 @@ use xstate_core::{Machine, MachineLogic, SyncInterpreter};
 use xstate_persistence::StoreError;
 use xstate_persistence::receipts::{
     ReceiptError, ReceiptErrorKind, ReceiptFlags, ReceiptJson, STATUS_ACCEPTED, STATUS_CONFLICT,
-    STATUS_ERROR, STATUS_OK, STATUS_UNAVAILABLE, STATUS_UNPROCESSABLE, receipt_to_status,
+    STATUS_ERROR, STATUS_NO_OP, STATUS_OK, STATUS_UNAVAILABLE, STATUS_UNPROCESSABLE,
+    receipt_to_status,
 };
 
 /// `json.dumps(receipt_to_json(Receipt(frozenset(["m.b", "m.a"]), True, None)))`.
@@ -193,4 +194,27 @@ fn explicit_errors_win_and_engine_errors_classify() {
         json!("RunawayChainError"),
         "the JSON type carries the Python class name"
     );
+}
+
+#[test]
+fn messages_can_be_omitted_and_the_default_keeps_them() {
+    let r = ReceiptJson {
+        error: Some(ReceiptError::new(ReceiptErrorKind::Other("ValueError".into()), "card=4111")),
+        ..ReceiptJson::default()
+    };
+    assert_eq!(r.to_value()["error"]["message"], "card=4111");
+    assert_eq!(r.to_value_with(true), r.to_value());
+    assert_eq!(r.to_value_with(false)["error"], json!({"type": "ValueError", "message": ""}));
+    assert!(r.to_json_with(false).contains(r#""message": """#));
+    assert_eq!(ReceiptJson::default().to_value_with(false)["error"], json!(null));
+}
+
+#[test]
+fn status_no_op_is_a_200_and_unresolved_target_is_a_500() {
+    assert_eq!(STATUS_NO_OP, 200);
+    assert_eq!(receipt_to_status(&receipt(None)), STATUS_NO_OP);
+    let kind = ReceiptErrorKind::from_type_name("UnresolvedTargetError");
+    assert_eq!(kind, ReceiptErrorKind::UnresolvedTarget);
+    assert_eq!(kind.type_name(), "UnresolvedTargetError");
+    assert_eq!(receipt_to_status(&receipt(Some(kind))), STATUS_ERROR);
 }

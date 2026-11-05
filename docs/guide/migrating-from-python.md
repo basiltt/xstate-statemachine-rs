@@ -85,6 +85,37 @@ those are the bytes the Python library reads and hashes (ADR-0003). The engine n
 restore. The structure hash renders only the first target of a multi-target transition in both
 runtimes, so hashes stay identical.
 
+### Configuration checks and runtime rules from Python 0.12.0
+
+Rust follows the 0.12.0 validation rules (state `type`, `history`, boolean flags, action and
+guard objects, `maxIterations`, `after` keys, invoke fields, `initial`) and runtime rules
+(unresolved targets, unusable delays, nested action failures, corrupt snapshot records,
+`send("")`). Conformance cases `051`–`053` pin the observable ones against both oracles. Where
+the two libraries still differ, on purpose:
+
+- **Built-in `params` and user actions.** Python knows the machine's logic when it builds the
+  machine, so a user action named like a built-in (`cancel`, `log`, ...) is exempt from the
+  built-in's `params` check. `Machine::from_value` has no logic; use
+  `Machine::from_value_with_logic` for the same exemption. At run time the user action wins in
+  both, whichever way the machine was built.
+- **Unusable delays.** A delay function that fails, or returns NaN or infinity, disables that
+  timer with an error log in both. An *unregistered* delay name is an `ImplementationMissing`
+  error in Rust (checked by `MachineLogic::validate` before the machine starts), where Python
+  logs a warning and treats it as no delay.
+- **`maxIterations`** accepts a whole number written as an integer or `5.0`; Python also accepts
+  the string `"5"`.
+- **Unresolved targets.** The soft error reaches the caller through `Receipt::error`; observers
+  learn of it through `on_event_dropped("unresolved_target")`, because `on_event` is called
+  before the step's effects are executed. The dropped `escalate` event is
+  `xstate.error.actor.<machine id>`.
+- **Actor addressing** (`sendTo("kid")`, the reserved `parent`) has no fuzzy matching in Rust: a
+  name is an invoke / spawn id of the sender's own children, then a `systemId`, and `parent`
+  always means the parent, so Python's grandchild and `parent`-shadowing fixes have nothing to
+  fix here.
+- **Snapshot time on tokio.** The tokio interpreter has no pluggable clock; `taken_at` and
+  deadlines use the system wall clock, which is its only clock. `SyncInterpreter` uses the
+  interpreter's `Clock::wall_now`, as Python 0.12.0 does.
+
 ### Model and API
 
 - **Context and events (ADR-0002).** Two tiers: the dynamic tier (`serde_json::Value` context,

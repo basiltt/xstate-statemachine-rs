@@ -124,6 +124,13 @@ pub enum HandlerError {
         /// Error message.
         message: String,
     },
+    /// A state-store outage (Python `StoreError`): requeued without counting an attempt, never
+    /// dead-lettered as poison.
+    #[error("{message}")]
+    Requeue {
+        /// Error message.
+        message: String,
+    },
 }
 
 impl HandlerError {
@@ -156,17 +163,24 @@ impl HandlerError {
         match self {
             Self::Failed { error_type, .. } => error_type,
             Self::InstanceDone { .. } => "InterpreterStoppedError",
+            Self::Requeue { .. } => "StoreError",
         }
     }
 }
 
 impl From<StoreError> for HandlerError {
     fn from(e: StoreError) -> Self {
+        if matches!(
+            e,
+            StoreError::Conflict { .. }
+                | StoreError::Unavailable(_)
+                | StoreError::LockTimeout { .. }
+                | StoreError::SnapshotTooLarge { .. }
+                | StoreError::InvalidKey(_)
+        ) {
+            return Self::Requeue { message: e.to_string() };
+        }
         let name = match &e {
-            StoreError::Conflict { .. } => "ConcurrencyError",
-            StoreError::Unavailable(_) => "StoreUnavailableError",
-            StoreError::LockTimeout { .. } => "LockTimeoutError",
-            StoreError::SnapshotTooLarge { .. } => "SnapshotTooLargeError",
             StoreError::Corrupt(_) => "SnapshotCorruptError",
             StoreError::Engine(engine) => {
                 return Self::failed(
