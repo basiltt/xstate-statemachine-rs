@@ -6,6 +6,7 @@ version = 2
 yanked = "deny"
 # Only advisories with no fix reachable from this workspace are listed, each with the reason.
 ignore = [
+    { id = "RUSTSEC-2026-0441", reason = "informational: `pin-utils` is unmaintained. Reached only through aws-sdk-sqs / aws-config -> aws-smithy-http (feature `sqs` of xstate-eda); there is no vulnerability and no release of the AWS SDK without it yet. Revisit when aws-smithy-http drops pin-utils." },
     { id = "RUSTSEC-2025-0134", reason = "informational: `rustls-pemfile` is unmaintained. Reached only through lapin 3 -> amq-protocol-tcp -> tcp-stream (feature `rabbitmq` of xstate-eda); there is no vulnerability, and the fix is lapin 4, whose API is not source compatible with the RabbitMQ adapter. Revisit when the adapter moves to lapin 4." },
 ]
 
