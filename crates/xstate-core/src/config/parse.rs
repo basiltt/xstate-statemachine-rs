@@ -115,6 +115,18 @@ impl fmt::Display for Path<'_> {
     }
 }
 
+/// `obj[key]`. Configuration objects hold a handful of keys, so a scan comparing lengths
+/// first beats hashing the key (`serde_json` maps hash with `SipHash`); large maps still use
+/// the index.
+#[inline]
+pub(crate) fn field<'v>(obj: &'v Map<String, Value>, key: &str) -> Option<&'v Value> {
+    const SCAN_LIMIT: usize = 12;
+    if obj.len() > SCAN_LIMIT {
+        return obj.get(key);
+    }
+    obj.iter().find_map(|(k, v)| (k == key).then_some(v))
+}
+
 fn expect_object<'v>(
     value: &'v Value,
     path: &Path<'_>,
@@ -149,9 +161,19 @@ pub(super) fn parse_machine(
     options: &ParseOptions,
     user_actions: Option<&HashSet<String>>,
 ) -> Result<MachineConfig> {
+    parse_machine_with(value, options, user_actions, true)
+}
+
+/// [`parse_machine`]; `keep_source: false` leaves [`MachineConfig::source`] `null`.
+pub(super) fn parse_machine_with(
+    value: &Value,
+    options: &ParseOptions,
+    user_actions: Option<&HashSet<String>>,
+    keep_source: bool,
+) -> Result<MachineConfig> {
     let root_path = Path::ROOT;
     let obj = expect_object(value, &root_path, "machine config")?;
-    let id = match obj.get("id") {
+    let mut id = match field(obj, "id") {
         Some(Value::String(s)) if !s.is_empty() => s.clone(),
         Some(_) => return Err(Error::config("id", "machine `id` must be a non-empty string")),
         None => return Err(Error::config("id", "machine config requires an `id`")),
@@ -159,13 +181,13 @@ pub(super) fn parse_machine(
     let declared_strict = flag(obj, "strictConfig", &id)?;
     let strict_config = options.strict_config.or(declared_strict).unwrap_or(false);
     let mut parser = Parser { strict_config, warnings: Vec::new(), user_actions };
-    if !obj.contains_key("states") {
+    if field(obj, "states").is_none() {
         return Err(Error::config("states", "machine config requires `states`"));
     }
 
     parser.check_keys(obj, &root_path, STATE_KEYS, ROOT_ONLY_KEYS)?;
-    let root = parser.parse_state(obj, id.clone(), &id, &root_path)?;
-    let context = obj.get("context").cloned().unwrap_or(Value::Null);
+    let root = parser.parse_state(obj, id.clone(), &mut id, &root_path)?;
+    let context = field(obj, "context").cloned().unwrap_or(Value::Null);
     if context.is_string() {
         parser.warn(
             &root_path.key("context"),
@@ -173,7 +195,7 @@ pub(super) fn parse_machine(
         );
     }
     let context = if context.is_string() { Value::Object(Map::new()) } else { context };
-    let version = match obj.get("version") {
+    let version = match field(obj, "version") {
         None | Some(Value::Null) => None,
         Some(Value::String(s)) => Some(s.clone()),
         Some(Value::Number(n)) => Some(n.to_string()),
@@ -186,14 +208,14 @@ pub(super) fn parse_machine(
         version,
         policies,
         warnings: parser.warnings,
-        source: value.clone(),
+        source: if keep_source { value.clone() } else { Value::Null },
     })
 }
 
 /// A root boolean flag: JSON `true` / `false`, or `null` / absent for "not set". A string such
 /// as `"false"` is refused rather than read as truthy.
 fn flag(obj: &Map<String, Value>, key: &str, machine: &str) -> Result<Option<bool>> {
-    match obj.get(key) {
+    match field(obj, key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Bool(b)) => Ok(Some(*b)),
         Some(other) => Err(Error::config(
@@ -258,7 +280,7 @@ impl Parser<'_> {
         if let Some(v) = flag(obj, "strictTargets", id)? {
             p.strict_targets = v;
         }
-        if let Some(v) = obj.get("maxIterations") {
+        if let Some(v) = field(obj, "maxIterations") {
             let n = whole_number(v).filter(|n| *n >= 1).and_then(|n| u32::try_from(n).ok());
             p.max_iterations = n.ok_or_else(|| {
                 Error::config(
@@ -267,7 +289,7 @@ impl Parser<'_> {
                 )
             })?;
         }
-        match obj.get("spawnBlockingTimeout") {
+        match field(obj, "spawnBlockingTimeout") {
             None | Some(Value::Null) => {}
             Some(v) if v.as_f64().is_some_and(|ms| ms.is_finite() && ms >= 0.0) => {}
             Some(v) => {
@@ -285,7 +307,7 @@ impl Parser<'_> {
 
     /// The string-valued policies: `actionErrorPolicy`, `guardErrorPolicy`, `onUnhandled`.
     fn parse_policy_names(obj: &Map<String, Value>, p: &mut Policies) -> Result<()> {
-        if let Some(v) = obj.get("actionErrorPolicy") {
+        if let Some(v) = field(obj, "actionErrorPolicy") {
             p.action_error_policy = match v.as_str() {
                 Some("continue") => ActionErrorPolicy::Continue,
                 Some("rollback") => ActionErrorPolicy::Rollback,
@@ -298,7 +320,7 @@ impl Parser<'_> {
                 }
             };
         }
-        if let Some(v) = obj.get("guardErrorPolicy") {
+        if let Some(v) = field(obj, "guardErrorPolicy") {
             p.guard_error_policy = match v {
                 Value::Bool(false) => GuardErrorPolicy::False,
                 Value::Bool(true) => GuardErrorPolicy::True,
@@ -311,7 +333,7 @@ impl Parser<'_> {
                 }
             };
         }
-        if let Some(v) = obj.get("onUnhandled") {
+        if let Some(v) = field(obj, "onUnhandled") {
             p.on_unhandled = match v.as_str() {
                 Some("ignore") => UnhandledPolicy::Ignore,
                 Some("defer") => UnhandledPolicy::Defer,
@@ -327,17 +349,19 @@ impl Parser<'_> {
         Ok(())
     }
 
+    /// Parse one state node. `id` holds the node's full id; it is extended in place for the
+    /// children and restored before they return.
     fn parse_state(
         &mut self,
         obj: &Map<String, Value>,
         key: String,
-        id: &str,
+        id: &mut String,
         path: &Path<'_>,
     ) -> Result<StateConfig> {
         let mut state = StateConfig::new(key);
         let is_root = matches!(path.seg, Seg::Root);
 
-        if let (Some(v), false) = (obj.get("id"), is_root) {
+        if let (Some(v), false) = (field(obj, "id"), is_root) {
             let custom = v.as_str().filter(|s| !s.is_empty()).ok_or_else(|| {
                 Error::config(path.key("id").render(), "state `id` must be a non-empty string")
             })?;
@@ -345,7 +369,7 @@ impl Parser<'_> {
         }
 
         // Children first: the kind depends on whether there are any.
-        if let Some(children) = obj.get("states") {
+        if let Some(children) = field(obj, "states") {
             let states_path = path.key("states");
             let map = expect_object(children, &states_path, "`states`")?;
             for (child_key, child_val) in map {
@@ -360,13 +384,16 @@ impl Parser<'_> {
                 }
                 let child_obj = expect_object(child_val, &child_path, "state")?;
                 self.check_keys(child_obj, &child_path, STATE_KEYS, &[])?;
-                let child_id = format!("{id}.{child_key}");
-                let child =
-                    self.parse_state(child_obj, child_key.clone(), &child_id, &child_path)?;
+                let len = id.len();
+                id.push('.');
+                id.push_str(child_key);
+                let child = self.parse_state(child_obj, child_key.clone(), id, &child_path)?;
+                id.truncate(len);
                 state.states.push(child);
             }
         }
 
+        let id = id.as_str();
         state.kind = self.parse_kind(obj, path, id, !state.states.is_empty())?;
         state.initial = Self::parse_initial(obj, path, id, &state)?;
         self.parse_handlers(obj, path, id, &mut state)?;
@@ -384,7 +411,7 @@ impl Parser<'_> {
         id: &str,
         has_children: bool,
     ) -> Result<StateKind> {
-        let ty = match obj.get("type") {
+        let ty = match field(obj, "type") {
             None | Some(Value::Null) => {
                 return Ok(if has_children { StateKind::Compound } else { StateKind::Atomic });
             }
@@ -426,7 +453,7 @@ impl Parser<'_> {
     }
 
     fn parse_history(obj: &Map<String, Value>, path: &Path<'_>, id: &str) -> Result<StateKind> {
-        let deep = match obj.get("history") {
+        let deep = match field(obj, "history") {
             None | Some(Value::Null) => false,
             Some(Value::String(s)) if s == "deep" => true,
             Some(Value::String(s)) if s == "shallow" => false,
@@ -437,7 +464,7 @@ impl Parser<'_> {
                 ));
             }
         };
-        let target = match obj.get("target") {
+        let target = match field(obj, "target") {
             None | Some(Value::Null) => None,
             Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
             Some(other) => {
@@ -459,7 +486,7 @@ impl Parser<'_> {
         id: &str,
         state: &StateConfig,
     ) -> Result<Option<String>> {
-        let initial = match obj.get("initial") {
+        let initial = match field(obj, "initial") {
             None => None,
             Some(Value::String(s)) => Some(s.clone()),
             Some(_) => {
@@ -505,7 +532,7 @@ impl Parser<'_> {
         id: &str,
         state: &mut StateConfig,
     ) -> Result<()> {
-        if let Some(on) = obj.get("on") {
+        if let Some(on) = field(obj, "on") {
             let on_path = path.key("on");
             let map = expect_object(on, &on_path, "`on`")?;
             for (descriptor, v) in map {
@@ -518,11 +545,11 @@ impl Parser<'_> {
                 }
             }
         }
-        if let Some(always) = obj.get("always") {
+        if let Some(always) = field(obj, "always") {
             let owner = items::Owner { state: id, label: items::Label::Key("always") };
             state.always.extend(self.parse_transitions(always, &path.key("always"), &owner)?);
         }
-        if let Some(after) = obj.get("after") {
+        if let Some(after) = field(obj, "after") {
             let after_path = path.key("after");
             let map = expect_object(after, &after_path, "`after`")?;
             for (delay_key, v) in map {
@@ -531,18 +558,18 @@ impl Parser<'_> {
                 state.after.push((delay_key.clone(), transitions));
             }
         }
-        if let Some(v) = obj.get("onDone") {
+        if let Some(v) = field(obj, "onDone") {
             let owner = items::Owner { state: id, label: items::Label::Key("onDone") };
             state.on_done = self.parse_transitions(v, &path.key("onDone"), &owner)?;
         }
         state.entry = self
-            .parse_actions(obj.get("entry"), &path.key("entry"))
+            .parse_actions(field(obj, "entry"), &path.key("entry"))
             .map_err(|e| within(e, || format!("State '{id}' entry")))?;
         state.exit = self
-            .parse_actions(obj.get("exit"), &path.key("exit"))
+            .parse_actions(field(obj, "exit"), &path.key("exit"))
             .map_err(|e| within(e, || format!("State '{id}' exit")))?;
 
-        if let Some(inv) = obj.get("invoke") {
+        if let Some(inv) = field(obj, "invoke") {
             state.invoke = self.parse_invokes(inv, &path.key("invoke"), id)?;
         }
         Ok(())
@@ -569,15 +596,15 @@ impl Parser<'_> {
         path: &Path<'_>,
         state: &mut StateConfig,
     ) -> Result<()> {
-        state.output = obj.get("output").cloned();
-        state.meta = match obj.get("meta") {
+        state.output = field(obj, "output").cloned();
+        state.meta = match field(obj, "meta") {
             None => None,
             Some(v @ Value::Object(_)) => Some(v.clone()),
             Some(_) => {
                 return Err(Error::config(path.key("meta").render(), "`meta` must be an object"));
             }
         };
-        state.description = match obj.get("description") {
+        state.description = match field(obj, "description") {
             None => None,
             Some(Value::String(s)) => Some(s.clone()),
             Some(_) => {
@@ -587,7 +614,7 @@ impl Parser<'_> {
                 ));
             }
         };
-        state.tags = items::parse_tags(obj.get("tags"), &path.key("tags"))?;
+        state.tags = items::parse_tags(field(obj, "tags"), &path.key("tags"))?;
         Ok(())
     }
 }

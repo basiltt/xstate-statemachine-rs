@@ -3,8 +3,10 @@
 //! `send`, and timers fire from `tick` / `advance`.
 
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashSet, VecDeque};
-use std::sync::Arc;
+use std::collections::{BinaryHeap, VecDeque};
+use std::sync::{Arc, OnceLock};
+
+use foldhash::HashSet;
 
 use serde_json::Value;
 
@@ -124,7 +126,7 @@ impl Ord for Timer {
 /// Synchronous interpreter over a compiled [`Machine`].
 pub struct SyncInterpreter<C: Context = DynContext> {
     machine: Machine,
-    logic: Arc<MachineLogic<C>>,
+    logic: MachineLogic<C>,
     clock: Arc<dyn Clock>,
     input: Value,
     state: Option<ActiveState<C>>,
@@ -157,7 +159,7 @@ impl<C: Context> SyncInterpreter<C> {
     /// Create an interpreter with a real clock. Call [`start`](Self::start) before sending.
     #[must_use]
     pub fn new(machine: Machine, logic: MachineLogic<C>) -> Self {
-        Self::with_clock(machine, logic, Arc::new(RealClock::new()))
+        Self::with_clock(machine, logic, shared_real_clock())
     }
 
     /// Create an interpreter driven by the given clock.
@@ -165,18 +167,18 @@ impl<C: Context> SyncInterpreter<C> {
     pub fn with_clock(machine: Machine, logic: MachineLogic<C>, clock: Arc<dyn Clock>) -> Self {
         Self {
             machine,
-            logic: Arc::new(logic),
+            logic,
             clock,
             input: Value::Null,
             state: None,
             queue: VecDeque::new(),
             timers: BinaryHeap::new(),
-            cancelled: HashSet::new(),
+            cancelled: HashSet::default(),
             next_seq: 0,
             processing: false,
             emitted: Vec::new(),
             logs: Vec::new(),
-            effects: Vec::with_capacity(8),
+            effects: Vec::new(),
             observers: Vec::new(),
             deferred: VecDeque::new(),
             soft_error: None,
@@ -214,10 +216,21 @@ impl<C: Context> SyncInterpreter<C> {
             });
         }
         self.logic.validate(&self.machine)?;
-        let (state, mut effects, mut report) =
-            engine::start(&self.machine, &self.logic, &self.input)?;
+        let mut effects = std::mem::take(&mut self.effects);
+        effects.clear();
+        let started =
+            engine::start_into(&self.machine, &self.logic, &self.input, false, &mut effects);
+        let (state, mut report) = match started {
+            Ok(started) => started,
+            Err(err) => {
+                effects.clear();
+                self.effects = effects;
+                return Err(err);
+            }
+        };
         self.state = Some(state);
         self.apply_effects(&mut effects);
+        self.effects = effects;
         report.soft_error = self.soft_error.take();
         let rest = self.drain()?;
         report.actions.extend(rest.actions);
@@ -259,12 +272,20 @@ impl<C: Context> SyncInterpreter<C> {
             });
         }
         let _ = state;
-        self.queue.push_back(event);
         if self.processing {
             // Re-entrant send from inside an action: queued, processed by the outer loop.
+            self.queue.push_back(event);
             return Ok(self.receipt(StepReport::default()));
         }
-        let report = self.drain()?;
+        // Nothing queued ahead of it (pending events of a restored snapshot would be): the
+        // event is processed first, exactly as if it had gone through the queue.
+        let mut report = StepReport::default();
+        if self.queue.is_empty() {
+            self.drain_into(Some(&event), &mut report)?;
+        } else {
+            self.queue.push_back(event);
+            self.drain_into(None, &mut report)?;
+        }
         Ok(self.receipt(report))
     }
 
@@ -381,78 +402,98 @@ impl<C: Context> SyncInterpreter<C> {
     /// Process queued events and due timers until nothing is left. Returns the merged report
     /// of everything processed.
     fn drain(&mut self) -> Result<StepReport> {
+        let mut report = StepReport::default();
+        self.drain_into(None, &mut report)?;
+        Ok(report)
+    }
+
+    /// [`drain`](Self::drain), processing `first` before anything queued and merging into
+    /// `merged` (a fresh report).
+    fn drain_into(&mut self, first: Option<&Event>, merged: &mut StepReport) -> Result<()> {
         self.processing = true;
-        let result = self.drain_inner();
+        let result = self.drain_inner(first, merged);
         self.processing = false;
         result
     }
 
-    fn drain_inner(&mut self) -> Result<StepReport> {
-        let mut merged = StepReport::default();
-        let mut first = true;
-        loop {
-            let event = match self.queue.pop_front() {
-                Some(ev) => ev,
-                None => match self.pop_due_timer() {
-                    Some(ev) => ev,
-                    None => break,
-                },
-            };
-            let Some(state) = self.state.as_mut() else { break };
-            if state.status != Status::Running {
-                if first {
-                    merged.unhandled = true;
-                    first = false;
-                }
+    fn drain_inner(&mut self, first: Option<&Event>, merged: &mut StepReport) -> Result<()> {
+        // The first processed event's report is the merged report's base.
+        let mut fresh = true;
+        if let Some(event) = first {
+            self.process(event, merged, &mut fresh)?;
+        }
+        while self.state.is_some()
+            && let Some(event) = self.next_event()
+        {
+            self.process(&event, merged, &mut fresh)?;
+        }
+        Ok(())
+    }
+
+    /// Process one drained event into `merged`; `fresh` until the first one is in.
+    fn process(&mut self, event: &Event, merged: &mut StepReport, fresh: &mut bool) -> Result<()> {
+        let Some(state) = self.state.as_ref() else { return Ok(()) };
+        if state.status != Status::Running {
+            if *fresh {
+                merged.unhandled = true;
+                *fresh = false;
+            }
+            for obs in &self.observers {
+                obs.on_event_dropped(&self.machine, event, "not_running");
+            }
+        } else if *fresh {
+            self.step_event(event, merged)?;
+            *fresh = false;
+        } else {
+            let mut report = StepReport::default();
+            self.step_event(event, &mut report)?;
+            merge_report(merged, report);
+        }
+        Ok(())
+    }
+
+    /// The next queued event, else the next due timer's.
+    fn next_event(&mut self) -> Option<Event> {
+        self.queue.pop_front().or_else(|| self.pop_due_timer())
+    }
+
+    /// Run one event through the engine, notify the observers and execute the effects.
+    fn step_event(&mut self, event: &Event, report: &mut StepReport) -> Result<()> {
+        let policy = self.machine.policies().on_unhandled;
+        let observed = !self.observers.is_empty()
+            || (policy != UnhandledPolicy::Ignore && event.origin == EventOrigin::External);
+        let mut effects = std::mem::take(&mut self.effects);
+        effects.clear();
+        let Some(state) = self.state.as_mut() else { return Ok(()) };
+        let stepped = engine::step_into(
+            &self.machine,
+            &self.logic,
+            state,
+            event,
+            &mut effects,
+            false,
+            report,
+        );
+        match stepped {
+            Ok(()) => {}
+            Err(err) => {
+                self.effects = effects;
                 for obs in &self.observers {
-                    obs.on_event_dropped(&self.machine, &event, "not_running");
+                    obs.on_error(&self.machine, &err);
                 }
-                continue;
-            }
-            let policy = self.machine.policies().on_unhandled;
-            let keep_event = !self.observers.is_empty()
-                || (policy != UnhandledPolicy::Ignore && event.origin == EventOrigin::External);
-            let kept = keep_event.then(|| event.clone());
-            let mut effects = std::mem::take(&mut self.effects);
-            effects.clear();
-            let stepped = engine::step(&self.machine, &self.logic, state, event, &mut effects);
-            let mut report = match stepped {
-                Ok(report) => report,
-                Err(err) => {
-                    self.effects = effects;
-                    for obs in &self.observers {
-                        obs.on_error(&self.machine, &err);
-                    }
-                    return Err(err);
-                }
-            };
-            if let Some(ev) = kept.as_ref() {
-                self.after_step(ev, &report);
-            }
-            // Observers saw the report before the effects ran (as before); a soft error from
-            // executing them (an unresolved `sendTo`) reaches them as `on_event_dropped` and
-            // the caller through the receipt.
-            self.apply_effects(&mut effects);
-            self.effects = effects;
-            report.soft_error = self.soft_error.take();
-            if first {
-                merged.changed = report.changed;
-                merged.unhandled = report.unhandled;
-                first = false;
-            } else {
-                merged.changed |= report.changed;
-            }
-            merged.actions.extend(report.actions);
-            merged.transitions.extend(report.transitions);
-            merged.microsteps += report.microsteps;
-            if report.failed.is_some() {
-                merged.failed = report.failed;
-            }
-            if merged.soft_error.is_none() {
-                merged.soft_error = report.soft_error;
+                return Err(err);
             }
         }
-        Ok(merged)
+        if observed {
+            self.after_step(event, report);
+        }
+        // Observers saw the report before the effects ran (as before); a soft error from
+        // executing them (an unresolved `sendTo`) reaches them as `on_event_dropped` and
+        // the caller through the receipt.
+        self.apply_effects(&mut effects);
+        self.effects = effects;
+        report.soft_error = self.soft_error.take();
+        Ok(())
     }
 
     /// Observer notification and the `onUnhandled` policy for one processed event.
@@ -496,6 +537,9 @@ impl<C: Context> SyncInterpreter<C> {
     }
 
     fn pop_due_timer(&mut self) -> Option<Event> {
+        if self.timers.is_empty() {
+            return None;
+        }
         let now = self.clock.now_ms();
         while let Some(top) = self.timers.peek() {
             if top.due_ms > now {
@@ -546,6 +590,11 @@ impl<C: Context> SyncInterpreter<C> {
     }
 
     fn apply_effects(&mut self, effects: &mut Vec<Effect>) {
+        // The common step only exits states: with no timer armed, cancelling is a no-op.
+        if self.timers.is_empty() && effects.iter().all(|e| matches!(e, Effect::CancelTimers(_))) {
+            effects.clear();
+            return;
+        }
         for effect in effects.drain(..) {
             match effect {
                 Effect::ArmTimer { state, delay_ms, event, entry_seq, .. } => {
@@ -622,6 +671,30 @@ impl<C: Context> SyncInterpreter<C> {
         };
         self.queue.push_back(event);
     }
+}
+
+/// Fold the report of a later event of the same `send` into the first one's.
+fn merge_report(merged: &mut StepReport, report: StepReport) {
+    merged.changed |= report.changed;
+    merged.actions.extend(report.actions);
+    merged.transitions.extend(report.transitions);
+    merged.microsteps += report.microsteps;
+    if report.failed.is_some() {
+        merged.failed = report.failed;
+    }
+    if merged.soft_error.is_none() {
+        merged.soft_error = report.soft_error;
+    }
+}
+
+/// The process-wide monotonic clock shared by interpreters built without an explicit clock.
+/// Only differences of its readings matter (timer due times), so sharing one origin is
+/// equivalent to a clock per interpreter, and saves an allocation and a clock read per
+/// interpreter.
+fn shared_real_clock() -> Arc<dyn Clock> {
+    static CLOCK: OnceLock<Arc<RealClock>> = OnceLock::new();
+    let clock: Arc<RealClock> = Arc::clone(CLOCK.get_or_init(|| Arc::new(RealClock::new())));
+    clock
 }
 
 mod restore;

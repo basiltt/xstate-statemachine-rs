@@ -9,6 +9,20 @@ raised only in a minor release.
 
 ## [Unreleased]
 
+### Added
+
+- `xstate-core`: `benches/python_parity.rs` mirrors the Python library's cross-library benchmark
+  (scenarios S1 to S7 of `benchmarks/competitors/`, 0.12.0 sync engine) with the same machines,
+  logic and per-operation work; the ids (`py_s1_flat_toggle` ... `py_s7_delayed_transition`) are
+  in `benches/budgets.json` with the Python time per operation (`python_per_op_ns`, a new
+  optional field of `budgets.schema.json`) and a 100x target.
+- `scripts/perf_gate.py` (standard library only): runs the engine benchmarks (or reads
+  `target/criterion` with `--no-run`), compares each median with
+  `baseline_p50_ns x allowed_slowdown`, prints the speed-up over Python, and exits 1 on a
+  regression; `--relative` divides out the machine speed factor, `--advisory` never fails,
+  `--update-baselines` records the medians. CI's `bench-gate` job now runs it with
+  `--advisory --relative` (hosted runners are too noisy to gate on).
+
 ### Fixed
 
 - `xstate-core`: a state `type` outside `atomic`/`compound`/`parallel`/`final`/`history`
@@ -146,6 +160,31 @@ raised only in a minor release.
   the context (the field is still published as `null`).
 
 ### Changed
+
+- `xstate-core`: event dispatch is 2 to 3 times faster and allocation-free (`send_flat` 446 to
+  192 ns, `send_nested_3` 642 to 212 ns, `send_parallel_2` 543 to 213 ns, Python-parity S1 to S4
+  at 74x, 39x, 80x and 92x the Python library); machine construction is about twice as fast
+  (S5 13.6 to 6.9 µs, `build_50_states` 203 to 129 µs). Semantics are unchanged (all conformance
+  cases, goldens and tests pass). What changed inside the engine:
+  - per-machine precomputed transition domains and entry sets (machines without history
+    states), exit sets read from the domain's subtree range, a configuration bitset stored
+    inline for up to 128 states, transition selection that walks up from the single active leaf
+    of a machine without parallel states and skips subtrees that handle none of the event's
+    descriptors;
+  - `SyncInterpreter::send` processes the event in place when nothing is queued ahead of it,
+    reuses its effect buffer for `start`, reads the clock only when a timer is armed, and builds
+    one report per `send`; `settle` is skipped when nothing is eventless or raised;
+  - `done.state` events are no longer built when the same entry finishes the machine (they were
+    discarded unseen), and `after` timer event types are interned at compile time;
+  - parsing reads configuration objects by scanning their few keys instead of hashing, builds
+    state ids in one buffer, and `Machine::from_value` / `from_json` keep the source document as
+    compact JSON text instead of a deep copy of the value (`Machine::to_json` parses it back:
+    the document is equal to the input, at the cost of a parse when it is asked for);
+  - `MachineLogic::validate` returns at once for a machine that names no action, guard,
+    service or delay, and the logic registry hashes with `foldhash`.
+- `xstate-core`: `SyncInterpreter::new` shares one process-wide `RealClock` instead of creating
+  one per interpreter (only differences of its readings are used, for timer due times).
+- `xstate-core`: no longer depends on `fixedbitset`.
 
 - Conformance: the Python engine converged on XState v5 for the eight recorded divergences
   (Python branch `xstate-v5-engine-parity`); `conformance/divergences.generated.md` is empty and

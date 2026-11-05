@@ -32,8 +32,9 @@ pub(super) fn compile(
     config: MachineConfig,
     user_actions: Option<&HashSet<String>>,
 ) -> Result<MachineData> {
-    let mut raws: Vec<Raw<'_>> = Vec::new();
-    flatten(&config.root, &config.root.key, None, 0, &mut raws);
+    let mut raws: Vec<Raw<'_>> = Vec::with_capacity(count_states(&config.root));
+    let mut id = config.root.key.clone();
+    flatten(&config.root, &mut id, None, 0, &mut raws);
 
     let mut ids: FastMap<Arc<str>, StateId> = FastMap::default();
     ids.reserve(raws.len());
@@ -49,6 +50,7 @@ pub(super) fn compile(
     }
 
     let mut children: FastMap<(StateId, &str), StateId> = FastMap::default();
+    children.reserve(raws.len());
     for (i, raw) in raws.iter().enumerate() {
         if let Some(parent) = raw.parent {
             children.insert((parent, raw.cfg.key.as_str()), StateId::from_index(i));
@@ -66,7 +68,6 @@ pub(super) fn compile(
         user_actions,
         transitions: Vec::new(),
         warnings: config.warnings.clone(),
-        declared_events: HashSet::new(),
         event_index: FastMap::default(),
         has_always: false,
     };
@@ -98,12 +99,26 @@ pub(super) fn compile(
     }
 
     cx.validate(&states)?;
+    index_subtree_events(&mut states, cx.event_index.len());
 
-    let Compiler { transitions, warnings, declared_events, has_always, event_index, .. } = cx;
-    let mut declared: Vec<String> = declared_events.into_iter().collect();
-    declared.sort();
+    let Compiler { transitions, warnings, has_always, event_index, .. } = cx;
+    let mut event_names = SmallVec::from_elem(smol_str::SmolStr::default(), event_index.len());
+    for (name, &key) in &event_index {
+        event_names[key as usize] = name.clone();
+    }
+    let mut leaf_mask = crate::engine::bits::StateBits::with_capacity(states.len());
+    for (i, node) in states.iter().enumerate() {
+        leaf_mask.set(i, node.is_leaf());
+    }
+    let has_history = states.iter().any(StateNode::is_history);
+    let has_parallel = states.iter().any(StateNode::is_parallel);
+    let references_logic = states.iter().any(|s| {
+        !s.entry.is_empty() || !s.exit.is_empty() || !s.invokes.is_empty() || !s.after.is_empty()
+    }) || transitions
+        .iter()
+        .any(|t| !t.actions.is_empty() || t.guard.is_some());
     Ok(MachineData {
-        id: config.root.key.clone(),
+        id,
         states,
         transitions,
         ids,
@@ -113,26 +128,63 @@ pub(super) fn compile(
         policies: config.policies,
         warnings,
         has_always,
-        declared_events: declared,
+        has_history,
+        has_parallel,
+        references_logic,
+        leaf_mask,
+        plans: std::sync::OnceLock::new(),
+        declared_events: std::sync::OnceLock::new(),
         event_index,
+        event_names,
         hash: std::sync::OnceLock::new(),
-        source: config.source,
+        source: super::source::Source::Document(config.source),
     })
 }
 
+/// Record on every state which exact event keys its subtree handles, and whether it holds
+/// wildcard handlers, so that selection can skip subtrees that cannot match an event. States
+/// are in pre-order, so walking them backwards visits every child before its parent.
+fn index_subtree_events(states: &mut [StateNode], key_count: usize) {
+    for node in states.iter_mut() {
+        let mut keys = crate::engine::bits::StateBits::with_capacity(key_count);
+        for (key, _) in &node.on_exact {
+            keys.set(*key as usize, true);
+        }
+        node.subtree_events = keys;
+        node.subtree_wildcards = !node.on_partial.is_empty() || !node.on_wildcard.is_empty();
+    }
+    for i in (1..states.len()).rev() {
+        let Some(parent) = states[i].parent else { continue };
+        let (keys, wildcards) = (states[i].subtree_events.clone(), states[i].subtree_wildcards);
+        let parent = &mut states[parent.index()];
+        parent.subtree_events.union_with(&keys);
+        parent.subtree_wildcards |= wildcards;
+    }
+}
+
+/// Number of states in the subtree of `cfg`, itself included.
+fn count_states(cfg: &StateConfig) -> usize {
+    1 + cfg.states.iter().map(count_states).sum::<usize>()
+}
+
+/// Append `cfg` and its subtree in document (pre-)order. `id` holds the node's full id; it is
+/// extended in place for the children and restored before returning.
 fn flatten<'c>(
     cfg: &'c StateConfig,
-    id: &str,
+    id: &mut String,
     parent: Option<StateId>,
     depth: u32,
     out: &mut Vec<Raw<'c>>,
 ) {
     let my_index = out.len();
-    out.push(Raw { cfg, id: Arc::from(id), parent, depth });
+    out.push(Raw { cfg, id: Arc::from(id.as_str()), parent, depth });
     let me = StateId::from_index(my_index);
+    let len = id.len();
     for child in &cfg.states {
-        let child_id = format!("{id}.{}", child.key);
-        flatten(child, &child_id, Some(me), depth + 1, out);
+        id.push('.');
+        id.push_str(&child.key);
+        flatten(child, id, Some(me), depth + 1, out);
+        id.truncate(len);
     }
 }
 
@@ -159,8 +211,7 @@ struct Compiler<'a, 'c> {
     user_actions: Option<&'a HashSet<String>>,
     transitions: Vec<Transition>,
     warnings: Vec<ConfigWarning>,
-    declared_events: HashSet<String>,
-    event_index: FastMap<String, u32>,
+    event_index: FastMap<smol_str::SmolStr, u32>,
     has_always: bool,
 }
 
@@ -186,8 +237,11 @@ impl Compiler<'_, '_> {
         let Handlers { on_exact, mut on_partial, on_wildcard, always, after, invokes } = handlers;
         on_partial.sort_by_key(|(d, _)| std::cmp::Reverse(d.len()));
 
-        let initial_key =
-            if matches!(kind, NodeKind::Compound { .. }) { cfg.initial.clone() } else { None };
+        let initial_key = if matches!(kind, NodeKind::Compound { .. }) {
+            cfg.initial.as_deref().map(smol_str::SmolStr::new)
+        } else {
+            None
+        };
         let entry = if cfg.entry.is_empty() {
             Vec::new()
         } else {
@@ -214,6 +268,7 @@ impl Compiler<'_, '_> {
             entry,
             exit,
             invokes,
+            after_events: after.iter().map(|a| smol_str::SmolStr::new(&a.event)).collect(),
             after,
             initial_key,
             output: cfg.output.clone(),
@@ -221,6 +276,8 @@ impl Compiler<'_, '_> {
             description: cfg.description.clone(),
             tags: cfg.tags.clone(),
             history_children: SmallVec::new(),
+            subtree_events: crate::engine::bits::StateBits::default(),
+            subtree_wildcards: false,
         })
     }
 
@@ -370,17 +427,12 @@ impl Compiler<'_, '_> {
                 }
             }
         } else {
-            if !descriptor.starts_with("xstate.")
-                && !self.declared_events.contains(descriptor.as_str())
-            {
-                self.declared_events.insert(descriptor.to_string());
-            }
             let key = if let Some(&k) = self.event_index.get(descriptor.as_str()) {
                 k
             } else {
                 let next = u32::try_from(self.event_index.len())
                     .map_err(|_| Error::LimitExceeded("too many distinct event types".into()))?;
-                self.event_index.insert(descriptor.to_string(), next);
+                self.event_index.insert(descriptor.clone(), next);
                 next
             };
             match out.on_exact.iter_mut().find(|(k, _)| *k == key) {

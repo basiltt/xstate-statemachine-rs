@@ -3,37 +3,37 @@
   "allowed_slowdown": 1.25,
   "benchmarks": {
     "send_flat": {
-      "baseline_p50_ns": 420,
-      "target_p50_ns": 200,
-      "note": "after the allocation pass, 2026-11-02 (Python: 14000)"
+      "baseline_p50_ns": 192,
+      "target_p50_ns": 150,
+      "note": "performance pass, 2026-11-06 (was 420 after the allocation pass)"
     },
     "send_guard_assign": {
-      "baseline_p50_ns": 520,
+      "baseline_p50_ns": 239,
       "target_p50_ns": 600,
       "note": "Python: 16000"
     },
     "send_nested_3": {
-      "baseline_p50_ns": 650,
+      "baseline_p50_ns": 212,
       "target_p50_ns": 500,
       "note": "Python: 35000"
     },
     "send_parallel_2": {
-      "baseline_p50_ns": 565,
+      "baseline_p50_ns": 213,
       "target_p50_ns": 500,
       "note": "Python: 39000"
     },
     "build_50_states": {
-      "baseline_p50_ns": 180000,
+      "baseline_p50_ns": 128939,
       "target_p50_ns": 40000,
       "note": "JSON text -> Machine, 50 states; Python S5 (115000) builds a much smaller machine from a parsed dict, not comparable"
     },
     "snapshot_get": {
-      "baseline_p50_ns": 1300,
+      "baseline_p50_ns": 1306,
       "target_p50_ns": 3000,
       "note": "Python: 12000"
     },
     "snapshot_restore": {
-      "baseline_p50_ns": 9000,
+      "baseline_p50_ns": 8158,
       "target_p50_ns": 5000,
       "note": "Python: 23000; includes logic validation"
     },
@@ -42,21 +42,63 @@
       "target_p50_ns": 8000
     },
     "step_flat": {
-      "baseline_p50_ns": 330,
-      "target_p50_ns": 150,
+      "baseline_p50_ns": 131,
+      "target_p50_ns": 100,
       "note": "bare engine::step, no interpreter"
     },
     "build_phase_json_value": {
-      "baseline_p50_ns": 44000,
+      "baseline_p50_ns": 41891,
       "target_p50_ns": 20000
     },
     "build_phase_config": {
-      "baseline_p50_ns": 49000,
+      "baseline_p50_ns": 59250,
       "target_p50_ns": 20000
     },
     "build_phase_compile": {
-      "baseline_p50_ns": 62000,
+      "baseline_p50_ns": 47425,
       "target_p50_ns": 20000
+    },
+    "py_s1_flat_toggle": {
+      "baseline_p50_ns": 168,
+      "target_p50_ns": 123.5,
+      "python_per_op_ns": 12351.8,
+      "note": "S1 flat_toggle: one send on A <-> B; Python 0.12.0 sync: 12.35 us/op (benchmarks/competitors/results.json); target = 100x"
+    },
+    "py_s2_guarded_context": {
+      "baseline_p50_ns": 268,
+      "target_p50_ns": 105.4,
+      "python_per_op_ns": 10537.0,
+      "note": "S2 guarded_context: one guarded, counting send (build amortised over 20 000 sends); Python 0.12.0 sync: 10.54 us/op (benchmarks/competitors/results.json); target = 100x"
+    },
+    "py_s3_hierarchical": {
+      "baseline_p50_ns": 354,
+      "target_p50_ns": 283.7,
+      "python_per_op_ns": 28367.3,
+      "note": "S3 hierarchical: CROSS + DEEP (two sends); Python 0.12.0 sync: 28.37 us/op (benchmarks/competitors/results.json); target = 100x"
+    },
+    "py_s4_parallel": {
+      "baseline_p50_ns": 412,
+      "target_p50_ns": 378.6,
+      "python_per_op_ns": 37863.1,
+      "note": "S4 parallel: TOGGLE1 + TOGGLE2 (two sends); Python 0.12.0 sync: 37.86 us/op (benchmarks/competitors/results.json); target = 100x"
+    },
+    "py_s5_construction": {
+      "baseline_p50_ns": 6869,
+      "target_p50_ns": 789.9,
+      "python_per_op_ns": 78994.5,
+      "note": "S5 construction: Machine::from_value(hier) + new + start; Python 0.12.0 sync: 78.99 us/op (benchmarks/competitors/results.json); target = 100x"
+    },
+    "py_s6_many_instances": {
+      "baseline_p50_ns": 575,
+      "target_p50_ns": 219.1,
+      "python_per_op_ns": 21910.8,
+      "note": "S6 many_instances: new + start + one send, per instance of 1 000; Python 0.12.0 sync: 21.91 us/op (benchmarks/competitors/results.json); target = 100x"
+    },
+    "py_s7_delayed_transition": {
+      "baseline_p50_ns": 5677,
+      "target_p50_ns": 1180.3,
+      "python_per_op_ns": 118033.0,
+      "note": "S7 delayed_transition: clock + build + new + start + advance 1 ms; Python 0.12.0 sync: 118.03 us/op (benchmarks/competitors/results.json); target = 100x"
     }
   }
 }

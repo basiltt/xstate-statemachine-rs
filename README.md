@@ -127,38 +127,75 @@ storage level; differences in engine semantics are in
 
 ## Performance
 
-Median (p50) per operation on one developer machine (Intel Core i7-11850H, 31.7 GiB, Windows 11),
-from [`benches/budgets.json`](benches/budgets.json) (recorded 2026-11-02, after the allocation
-pass; criterion benches in `crates/xstate-core/benches`). The Python figures are the Python
-library's own: `send_*` and `build_50_states` are scenarios S1 to S5 of its cross-library
-benchmark (`benchmarks/competitors/results.json`, `xstate-statemachine (sync)` measured on
-**Python 0.11.0**, CPython 3.14 on the same host), and the snapshot and persistence figures are the
-baselines in its `benchmarks/budgets.json`. They were not re-measured against 0.12.0, which the
-port targets.
+The Python library's own cross-library benchmark (scenarios S1 to S7 of
+`benchmarks/competitors/` in xstate-statemachine 0.12.0, sync engine) is mirrored one to one in
+[`crates/xstate-core/benches/python_parity.rs`](crates/xstate-core/benches/python_parity.rs): the
+same machines, the same logic (JSON context; S2's guard and action are Rust closures, the
+equivalent of Python's callables) and the same work per operation as the Python `hot()` loop.
+Median (p50) per operation, best of five runs, on one developer machine (Intel Core i7-11850H,
+31.7 GiB, Windows 11 Pro, rustc 1.99.1, system allocator; CPython 3.14.6 on the same host):
 
-| Benchmark | Rust p50 | Python p50 | Speed-up | What it measures |
-|---|---|---|---|---|
-| `send_flat` | 0.42 µs | 14 µs (S1) | 33x | one event on a two-state machine, no actions |
-| `send_guard_assign` | 0.52 µs | 16 µs (S2) | 31x | guard plus `assign` on a dynamic context |
-| `send_nested_3` | 0.65 µs | 35 µs (S3) | 54x | three-level hierarchy, cross-branch transition |
-| `send_parallel_2` | 0.57 µs | 39 µs (S4) | 69x | two orthogonal regions toggling |
-| `snapshot_get` | 1.3 µs | 12 µs | 9x | serialise a 50-state machine's snapshot |
-| `snapshot_restore` | 9 µs | 23 µs | 2.6x | parse, validate and restore, including logic validation |
-| `step_flat` | 0.33 µs | n/a | | the bare `engine::step`, no interpreter |
-| `build_50_states` | 180 µs | 115 µs (S5)\* | | JSON text to `Machine`, 50 states (parse 44 µs, config 49 µs, compile 62 µs) |
+| Scenario | One operation | Rust p50 | Python 0.12.0 | Speed-up | 100x target |
+|---|---|---|---|---|---|
+| S1 `flat_toggle` | one `send` on A ⇄ B | 168 ns | 12.35 µs | 74x | 124 ns |
+| S2 `guarded_context` | one guarded `send` whose action increments `count` | 268 ns | 10.54 µs | 39x | 105 ns |
+| S3 `hierarchical` | `CROSS` + `DEEP` across a two-level hierarchy (two sends) | 354 ns | 28.37 µs | 80x | 284 ns |
+| S4 `parallel` | `TOGGLE1` + `TOGGLE2` on two regions (two sends) | 412 ns | 37.86 µs | 92x | 379 ns |
+| S5 `construction` | `Machine::from_value` of S3's machine + `new` + `start` | 6.87 µs | 79.0 µs | 11.5x | 790 ns |
+| S6 `many_instances` | per instance of 1 000: `new` + `start` + one `send` | 575 ns | 21.9 µs | 38x | 219 ns |
+| S7 `delayed_transition` | new `SimulatedClock`, build, `new` + `start`, advance 1 ms, see `done` | 5.68 µs | 118 µs | 21x | 1.18 µs |
 
-\* Python's S5 builds a much smaller machine from an already parsed dict, so it is not
-comparable; machine construction is a once-per-process cost. `persisted_memory` (load, send, save
-on the memory store; Python 87 µs, target 8 µs) has no baseline yet.
+None of the scenarios reaches 100x yet; event dispatch (S1, S3, S4) is within 1.1x to 1.4x of
+it. What bounds the rest:
 
-These numbers come from a quiet machine and are one run each: expect them to move by roughly
-1.5 to 2x with load, thermal state and compiler or CPython version, and treat the speed-ups as an
-order of magnitude (tens of times for event handling), not as a precise ratio.
+- **Dispatch (S1, S3, S4)** costs the generic macrostep rather than one dictionary lookup:
+  transition selection, XState's exit / entry sets and snapshot-change bookkeeping, one
+  `CancelTimers` effect per exited state, and a `Receipt` per `send` (an `Arc` clone of the
+  machine plus the active leaves). A send allocates nothing.
+- **S2** additionally allocates the receipt's `actions: Vec<Arc<str>>` once per send (one action
+  ran), and the guard and the action each look `count` up in the JSON context (a `SipHash`ed
+  `serde_json` map), as the Python callables do in a `dict`.
+- **Construction (S5, S7)** is dominated by allocation: `from_value` builds the public, owned
+  `MachineConfig` (about 30 short-lived strings and vectors for S3's machine) and then the
+  compiled arena (about 30 more: a full-id `Arc<str>` per state, child and target lists, the
+  event table), and keeps the source document for `Machine::to_json` (as compact JSON text, one
+  allocation). On the Windows system allocator an allocation and its free cost 50 to 100 ns, so
+  S5's 66 allocations are about half of its time. Building a machine once and cloning it
+  (an `Arc`) costs nanoseconds: S7 without the build is about 0.9 µs.
+- **S6** is construction of the interpreter, `start`, one send and the drop, plus one allocation
+  (the reusable effect buffer, sized on the first exit).
 
-[`benches/README.md`](benches/README.md) lists the targets. The budgets file also defines the
-relative performance gate (a machine speed factor is estimated from the median ratio across all
-rows, then every row must stay within `allowed_slowdown` = 1.25 of its baseline); CI currently
-builds every benchmark (`cargo bench --no-run`) but does not run the gate.
+The engine benchmarks that predate the parity scenarios, before and after the same pass (medians,
+best of five runs each, same machine):
+
+| Benchmark | Before | After | What it measures |
+|---|---|---|---|
+| `send_flat` | 446 ns | 192 ns | one event on a two-state machine, no actions |
+| `step_flat` | 324 ns | 131 ns | the bare `engine::step`, no interpreter |
+| `send_guard_assign` | 493 ns | 239 ns | guard plus a JSON `assign` |
+| `send_nested_3` | 642 ns | 212 ns | three-level hierarchy, cross-branch transition |
+| `send_parallel_2` | 543 ns | 213 ns | two orthogonal regions toggling |
+| `build_50_states` | 203 µs | 129 µs | JSON text to `Machine`, 50 states |
+| `snapshot_get` | 1.32 µs | 1.31 µs | serialise a 50-state machine's snapshot |
+| `snapshot_restore` | 8.98 µs | 8.16 µs | parse, validate and restore |
+
+Reproduce both sides:
+
+```bash
+# Rust (this repository): run, then gate against benches/budgets.json and print the speed-ups
+cargo bench -p xstate-core --bench python_parity --bench core -- --noplot
+python scripts/perf_gate.py --no-run
+
+# Python (the xstate-statemachine repository, its virtualenv active)
+python benchmarks/competitors/run.py --lib xstate_sync
+```
+
+Treat single runs with care: on a desktop with a browser and other applications running, medians
+move by 1.5x to 2x between runs, which is why the table reports the best of several runs and why
+the CI gate is advisory. [`benches/README.md`](benches/README.md) describes the benchmarks and
+the gate: `scripts/perf_gate.py` compares every median with `baseline_p50_ns x allowed_slowdown`
+(1.25) from [`benches/budgets.json`](benches/budgets.json) and fails on a regression;
+`--relative` first divides out the machine's speed, and CI runs it with `--advisory --relative`.
 
 ## Interoperability with the Python library
 

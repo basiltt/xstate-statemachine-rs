@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value};
 
-use super::{Parser, Path, expect_object, within};
+use super::{Parser, Path, expect_object, field, within};
 use crate::config::{ActionConfig, GuardConfig, InvokeConfig, TransitionConfig};
 use crate::error::{Error, Result};
 use crate::machine::builtin;
@@ -59,7 +59,7 @@ fn transition_flag(
     path: &Path<'_>,
     owner: &Owner<'_>,
 ) -> Result<Option<bool>> {
-    match obj.get(key) {
+    match field(obj, key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Bool(b)) => Ok(Some(*b)),
         Some(other) => Err(Error::config(
@@ -156,11 +156,11 @@ impl Parser<'_> {
         if obj.is_empty() {
             return Ok(TransitionConfig { forbidden: true, ..TransitionConfig::default() });
         }
-        let targets = transition_targets(obj.get("target"), &path.key("target"), owner)?;
+        let targets = transition_targets(field(obj, "target"), &path.key("target"), owner)?;
         let actions = self
-            .parse_actions(obj.get("actions"), &path.key("actions"))
+            .parse_actions(field(obj, "actions"), &path.key("actions"))
             .map_err(|e| within(e, || format!("{} actions", owner.transition_label())))?;
-        let guard = match (obj.get("guard"), obj.get("cond")) {
+        let guard = match (field(obj, "guard"), field(obj, "cond")) {
             (Some(g), _) | (None, Some(g)) => {
                 Some(self.parse_guard(g, &path.key("guard")).map_err(|e| {
                     within(e, || format!("{}: invalid 'guard'", owner.transition_label()))
@@ -176,8 +176,8 @@ impl Parser<'_> {
             guard,
             reenter: reenter.or(internal.map(|i| !i)).unwrap_or(false),
             forbidden: false,
-            meta: obj.get("meta").cloned(),
-            description: obj.get("description").and_then(Value::as_str).map(str::to_owned),
+            meta: field(obj, "meta").cloned(),
+            description: field(obj, "description").and_then(Value::as_str).map(str::to_owned),
         })
     }
 
@@ -189,7 +189,7 @@ impl Parser<'_> {
     ) -> Result<InvokeConfig> {
         let obj = expect_object(value, path, "`invoke`")?;
         self.check_keys(obj, path, INVOKE_KEYS, &[])?;
-        let src = match obj.get("src") {
+        let src = match field(obj, "src") {
             Some(Value::String(s)) if !s.is_empty() => s.clone(),
             Some(Value::Object(_)) => {
                 return Err(Error::config(
@@ -206,20 +206,20 @@ impl Parser<'_> {
         };
         let id = invoke_name(obj, "id", path, state)?;
         let system_id = invoke_name(obj, "systemId", path, state)?;
-        if let Some(d) = obj.get("description").filter(|d| !d.is_string()) {
+        if let Some(d) = field(obj, "description").filter(|d| !d.is_string()) {
             return Err(Error::config(
                 path.key("description").render(),
                 format!("State '{state}' invoke: 'description' must be a string, got {d}"),
             ));
         }
-        let on_done = match obj.get("onDone") {
+        let on_done = match field(obj, "onDone") {
             Some(v) => {
                 let owner = Owner { state, label: Label::Key("invoke onDone") };
                 self.parse_transitions(v, &path.key("onDone"), &owner)?
             }
             None => Vec::new(),
         };
-        let on_error = match obj.get("onError") {
+        let on_error = match field(obj, "onError") {
             Some(v) => {
                 let owner = Owner { state, label: Label::Key("invoke onError") };
                 self.parse_transitions(v, &path.key("onError"), &owner)?
@@ -229,7 +229,7 @@ impl Parser<'_> {
         Ok(InvokeConfig {
             id,
             src,
-            input: obj.get("input").cloned().unwrap_or(Value::Null),
+            input: field(obj, "input").cloned().unwrap_or(Value::Null),
             system_id,
             on_done,
             on_error,
@@ -318,10 +318,9 @@ impl Parser<'_> {
             Value::Object(obj) => obj,
             _ => return Err(Error::config(path.render(), "guard must be a string or an object")),
         };
-        let ty =
-            obj.get("type").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| {
-                Error::config(path.render(), "guard object needs a non-empty string `type`")
-            })?;
+        let ty = field(obj, "type").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(
+            || Error::config(path.render(), "guard object needs a non-empty string `type`"),
+        )?;
         for key in obj.keys().filter(|k| !GUARD_KEYS.contains(&k.as_str()) && !k.starts_with("x-"))
         {
             let hint = closest(key, GUARD_KEYS.iter().copied())
@@ -338,7 +337,7 @@ impl Parser<'_> {
                 let inner = params
                     .get("guard")
                     .or_else(|| {
-                        obj.get("children").and_then(|c| c.as_array()).and_then(|a| a.first())
+                        field(obj, "children").and_then(|c| c.as_array()).and_then(|a| a.first())
                     })
                     .ok_or_else(|| {
                         Error::config(
@@ -376,7 +375,7 @@ impl Parser<'_> {
 
 /// A guard object's `params`: an object or `null` (`stateIn` also takes a bare state id).
 fn guard_params(obj: &Map<String, Value>, ty: &str, path: &Path<'_>) -> Result<Value> {
-    match obj.get("params") {
+    match field(obj, "params") {
         None | Some(Value::Null) => Ok(Value::Null),
         Some(p @ Value::Object(_)) => Ok(p.clone()),
         Some(p @ Value::String(_)) if ty == "stateIn" => Ok(p.clone()),
@@ -410,7 +409,7 @@ fn invoke_name(
     path: &Path<'_>,
     state: &str,
 ) -> Result<Option<String>> {
-    match obj.get(key) {
+    match field(obj, key) {
         None => Ok(None),
         Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
         Some(other) => Err(Error::config(
@@ -422,7 +421,7 @@ fn invoke_name(
 
 /// The `type` and `params` of an action object: a non-empty string and an object (or `null`).
 fn action_parts<'v>(obj: &'v Map<String, Value>, path: &Path<'_>) -> Result<(&'v str, Value)> {
-    let name = match obj.get("type") {
+    let name = match field(obj, "type") {
         Some(Value::String(s)) if !s.is_empty() => s.as_str(),
         other => {
             let got = other.map_or_else(|| "nothing".to_owned(), ToString::to_string);
@@ -432,7 +431,7 @@ fn action_parts<'v>(obj: &'v Map<String, Value>, path: &Path<'_>) -> Result<(&'v
             ));
         }
     };
-    let params = match obj.get("params") {
+    let params = match field(obj, "params") {
         None | Some(Value::Null) => Value::Null,
         Some(p @ Value::Object(_)) => p.clone(),
         Some(other) => {
@@ -455,7 +454,7 @@ fn check_flat_params(
     optional: &[&str],
     path: &Path<'_>,
 ) -> Result<()> {
-    let params = obj.get("params").and_then(Value::as_object);
+    let params = field(obj, "params").and_then(Value::as_object);
     let missing = required.iter().any(|k| !params.is_some_and(|p| p.contains_key(*k)));
     let mut stray: Vec<&str> = obj
         .keys()

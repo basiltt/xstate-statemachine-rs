@@ -18,7 +18,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 smallvec = { workspace = true }
 indexmap = { workspace = true }
-fixedbitset = { workspace = true }
 smol_str = { workspace = true }
 foldhash = { workspace = true }
 sha2 = { workspace = true }
@@ -30,6 +29,10 @@ proptest = { workspace = true }
 
 [[bench]]
 name = "core"
+harness = false
+
+[[bench]]
+name = "python_parity"
 harness = false
 
 [lints]

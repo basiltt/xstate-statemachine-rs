@@ -245,17 +245,6 @@ impl MachineConfig {
         parse::parse_machine(value, options, None)
     }
 
-    /// Parse, treating every name in `user_actions` as the user's own action even when it is
-    /// spelled like a built-in (`log`, `cancel`, ...): its `params` are not held to the
-    /// built-in's signature, since user logic wins over built-ins.
-    pub(crate) fn from_value_for(
-        value: &Value,
-        options: &ParseOptions,
-        user_actions: &std::collections::HashSet<String>,
-    ) -> Result<Self> {
-        parse::parse_machine(value, options, Some(user_actions))
-    }
-
     /// Parse from JSON text.
     ///
     /// # Errors
@@ -288,6 +277,16 @@ impl StateConfig {
             tags: Vec::new(),
         }
     }
+}
+
+/// Parse for compilation by the machine itself, which keeps its own copy of the document:
+/// [`MachineConfig::source`] is left `null` instead of being a deep copy of `value`.
+pub(crate) fn parse_without_source(
+    value: &Value,
+    options: &ParseOptions,
+    user_actions: Option<&std::collections::HashSet<String>>,
+) -> Result<MachineConfig> {
+    parse::parse_machine_with(value, options, user_actions, false)
 }
 
 /// Parse a guard value (string or object form). Used by the `choose` built-in compiler.

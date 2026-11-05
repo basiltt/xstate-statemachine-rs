@@ -5,9 +5,10 @@ it end to end before its first public release and to build the documentation sit
 the library's reference ("the bible").
 
 **Status at handover.** Repository `C:\Users\basil\Desktop\Projects\RustProjects\xstate-statemachine-rs`,
-branch `main`, head `d247434` (2026-11-02), clean tree, **no remote yet** (nothing has been pushed to
-GitHub; CI has never run). Workspace version `0.1.0`, unpublished. Roughly 75k lines of Rust across 15
-crates, 20k of them tests; 1041 cargo tests + 32 pytest tests pass; `cargo fmt --check`, clippy pedantic
+branch `main` (see `git log` for the head; last big batches: 0.12.0 alignment and the performance
+pass on 2026-11-06), clean tree, **no remote yet** (nothing has been pushed to GitHub; CI has never
+run). Workspace version `0.1.0`, unpublished. Roughly 80k lines of Rust across 15 crates, 20k of
+them tests; ~1100 cargo tests + 32 pytest tests pass; `cargo fmt --check`, clippy pedantic
 with `-D warnings` on all targets/features, rustdoc with `-D warnings` and `cargo deny check` are clean.
 
 ---
@@ -16,7 +17,7 @@ with `-D warnings` on all targets/features, rustdoc with `-D warnings` and `carg
 
 The owner (Basil T T, GitHub `basiltt`) maintains a Python library, **`xstate-statemachine`**
 (local checkout `C:\Users\basil\Desktop\Projects\PythonProjects\xstate-statemachine`, version
-0.12.0; PyPI has 0.11.0; GitHub `basiltt/xstate-statemachine`). It is a feature-rich XState v5 /
+**0.12.0 released on PyPI 2026-11-05** with the XState-parity engine merged; GitHub `basiltt/xstate-statemachine`). It is a feature-rich XState v5 /
 SCXML statechart runtime for Python: engine, async interpreter, persistence with durable timers and
 idempotency, event-driven-architecture tooling (CloudEvents envelopes, brokers, outbox, dead letters,
 AsyncAPI), resilience patterns, observability, the Stately Inspector protocol, a CLI (`xsm`), HTTP
@@ -91,8 +92,9 @@ Key design decisions (ADRs):
   Python-vs-XState divergences the suite recorded against Python 0.12.0 (exit order, parallel entry
   order, wildcard matching of engine events, cross-region targets, exit actions on completion,
   reenter into descendants, multi-target rejection, JSON-form `choose`) were fixed in the Python
-  repository on branch `xstate-v5-engine-parity` (2026-11-03, unreleased), so
-  `conformance/divergences.generated.md` is now empty. Snapshots and the structure hash use the
+  repository (branch `xstate-v5-engine-parity`, merged and **released as 0.12.0 on 2026-11-05**),
+  so `conformance/divergences.generated.md` is empty and both engines are checked against xstate
+  5.33.3 — the newest stable release on npm (6.0 is alpha only). Snapshots and the structure hash use the
   Python/v4 event spellings (`after.*`, `done.state.*`, `done.invoke.*`, `error.platform.*`) so
   the bytes match Python.
 - **0002 Two-tier context.** `DynContext = serde_json::Value` (JSON-form `assign`) plus a typed
@@ -129,8 +131,8 @@ integrating, gating and committing. Commits are on `main` in order:
   (`conformance/tools/generate_expected.py`), producing expected traces, Python `machine_hash` and
   Python snapshot text. `crates/xstate-conformance/tests` asserts the Rust engine matches XState on
   every case and reproduces Python's hash and snapshot (text equal modulo Python's 2-space
-  indentation). `generate_expected.py --check` reports 50 cases, 0 divergent, 0 stale against the
-  Python parity branch (released 0.12.0 diverges on the eight original cases and on `038`–`050`).
+  indentation). `generate_expected.py --check` reports 53 cases, 0 divergent, 0 stale against the
+  released Python 0.12.0 (the venv has it installed).
 - **Golden fixtures generated from the Python library** (regenerate with
   `"<python venv>" -I conformance/tools/<script>.py`; all currently drift-free):
   `inspect_golden.py` (3 inspector recordings, byte-identical), `eda_golden.py` (envelopes, dead
@@ -147,21 +149,41 @@ integrating, gating and committing. Commits are on `main` in order:
 
 ### Performance baselines
 
-`benches/budgets.json` (criterion, `crates/xstate-core/benches/core.rs`; p50 on an i7-11850H,
-quiet machine; a loaded machine measured 1.5–1.9× slower):
+`benches/budgets.json` holds criterion p50 baselines for `crates/xstate-core/benches/{core,python_parity}.rs`
+(i7-11850H, Windows 11, best of five runs on a machine that was *not* quiet; single runs moved
+1.5–2× between runs). `python_parity.rs` mirrors the Python library's own competitor-benchmark
+scenarios S1–S7 (`benchmarks/competitors/adapters/xstate_sync.py` in the Python repo) and the
+Python per-operation numbers come from its `results.json` measured on 0.12.0:
 
-| Benchmark | Rust p50 | Python |
-|---|---|---|
-| `send_flat` | 420 ns | ~14 µs |
-| `send_guard_assign` | 520 ns | ~16 µs |
-| `send_nested_3` | 650 ns | ~35 µs |
-| `send_parallel_2` | 565 ns | ~39 µs |
-| `build_50_states` | 180 µs | not comparable |
-| `snapshot_get` | 1.3 µs | ~12 µs |
-| `snapshot_restore` | 9 µs | ~23 µs |
+| Scenario | Rust p50 | Python 0.12.0 | Speed-up | 100× target |
+|---|---|---|---|---|
+| S1 flat toggle, one `send` | 168 ns | 12.35 µs | 74× | 124 ns |
+| S2 guarded counter (guard + assign), one `send` | 268 ns | 10.54 µs | 39× | 105 ns |
+| S3 two-level hierarchy, `CROSS` + `DEEP` | 354 ns | 28.37 µs | 80× | 284 ns |
+| S4 two parallel regions, `TOGGLE1` + `TOGGLE2` | 412 ns | 37.86 µs | 92× | 379 ns |
+| S5 build + `new` + `start` (S3 machine) | 6.87 µs | 79.0 µs | 11.5× | 790 ns |
+| S6 per instance: `new` + `start` + one `send` | 575 ns | 21.9 µs | 38× | 219 ns |
+| S7 `SimulatedClock`, build, start, 1 ms timer fires | 5.68 µs | 118 µs | 21× | 1.18 µs |
 
-`allowed_slowdown` is 1.25 but **no automated perf gate exists yet** (the `bench-gate` CI job only
-builds the benches).
+The owner's goal is 100× on every scenario. Dispatch (S1, S3, S4) is within 1.1–1.4× of it;
+S2, S6, S5 and S7 are not. Known remaining levers, in order of expected pay-off: (1) S2 — the
+public `Receipt.actions` is a `Vec`, one allocation per send whenever an action runs, and the
+guard/action look `count` up in a hashed JSON map; a `SmallVec`/arena for action names and a
+typed context (`C: Context` struct instead of `DynContext`) remove both; (2) S6 — the per-interpreter
+effect buffer allocation exists because every exited state emits `CancelTimers`; emitting it only
+for states with `after` timers removes it (but a hand-crafted snapshot naming a timer on a state
+without `after` would then never be cancelled — decide); (3) S5/S7 — about half of construction is
+~60 short-lived allocations through the owned `MachineConfig` (≈50–100 ns each on the Windows
+system allocator); a direct parse-and-compile path that bypasses `MachineConfig`, or a bump
+allocator for compilation, is the large remaining rewrite; also `Machine::to_json()` now re-parses
+stored compact text instead of cloning a `Value`.
+
+`scripts/perf_gate.py` compares each median with `baseline_p50_ns × allowed_slowdown` (1.25),
+prints the speed-up over Python and the distance to 100×, and fails on a regression;
+`--advisory`, `--relative`, `--no-run`, `--update-baselines`. CI's `bench-gate` job runs it in
+`--advisory --relative` mode because runner hardware varies; gate locally only on a quiet machine
+(even one noisy local run produced two false regressions in absolute mode). Measure with nothing
+else building.
 
 ## 4. Environment and how to work
 

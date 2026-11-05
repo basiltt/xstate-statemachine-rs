@@ -16,6 +16,7 @@ use crate::ids::{StateId, TransitionId};
 
 pub(crate) mod builtin;
 mod compile;
+mod source;
 
 pub use builtin::{Builtin, Delay, SendTarget};
 
@@ -26,6 +27,7 @@ pub struct Machine {
 }
 
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)] // independent facts about the chart, precomputed
 pub(crate) struct MachineData {
     pub(crate) id: String,
     pub(crate) states: Vec<StateNode>,
@@ -37,12 +39,27 @@ pub(crate) struct MachineData {
     pub(crate) policies: Policies,
     pub(crate) warnings: Vec<ConfigWarning>,
     pub(crate) has_always: bool,
-    pub(crate) declared_events: Vec<String>,
+    /// Whether any state is a history pseudo-state.
+    pub(crate) has_history: bool,
+    /// Whether any state is parallel (otherwise every configuration is a single chain).
+    pub(crate) has_parallel: bool,
+    /// Whether anything names an implementation (action, guard, service, delay): without, any
+    /// logic registry validates.
+    pub(crate) references_logic: bool,
+    /// The atomic and final states, as a mask over the configuration.
+    pub(crate) leaf_mask: crate::engine::bits::StateBits,
+    /// Precomputed transition domains and entry sets, built on first use.
+    pub(crate) plans: std::sync::OnceLock<Option<crate::engine::sets::Plans>>,
+    /// Exact event types declared on any state, sorted; derived from `event_index` on first
+    /// use (strict mode, typed machines).
+    pub(crate) declared_events: std::sync::OnceLock<Vec<String>>,
     /// Exact event descriptor → interned key used by every node's `on_exact` table.
-    pub(crate) event_index: FastMap<String, u32>,
+    pub(crate) event_index: FastMap<smol_str::SmolStr, u32>,
+    /// The keys of `event_index` by key.
+    pub(crate) event_names: SmallVec<[smol_str::SmolStr; 4]>,
     pub(crate) hash: std::sync::OnceLock<String>,
     /// The configuration document as parsed, returned by [`Machine::to_json`].
-    pub(crate) source: Value,
+    pub(crate) source: source::Source,
 }
 
 /// Kind of a compiled state node.
@@ -103,8 +120,10 @@ pub struct StateNode {
     pub invokes: Vec<InvokeDef>,
     /// Delayed transitions armed on entry.
     pub after: Vec<AfterDef>,
+    /// The timer event type of each `after` entry (`AfterDef::event`), interned.
+    pub(crate) after_events: SmallVec<[smol_str::SmolStr; 1]>,
     /// Python-dialect `initial` key for the structure hash (compound states only).
-    pub(crate) initial_key: Option<String>,
+    pub(crate) initial_key: Option<smol_str::SmolStr>,
     /// `output` of a final state.
     pub output: Option<Value>,
     /// Free-form metadata.
@@ -115,6 +134,10 @@ pub struct StateNode {
     pub tags: Vec<String>,
     /// History children, for recording on exit.
     pub(crate) history_children: SmallVec<[StateId; 1]>,
+    /// Exact event keys (see [`Machine::event_key`]) handled anywhere in this subtree.
+    pub(crate) subtree_events: crate::engine::bits::StateBits,
+    /// Whether any state in this subtree has partial-wildcard or `*` handlers.
+    pub(crate) subtree_wildcards: bool,
 }
 
 /// What triggers a transition.
@@ -231,7 +254,10 @@ impl Machine {
     /// Shape errors from parsing and structural errors from compilation.
     pub fn from_json(text: &str) -> Result<Self> {
         let value: Value = serde_json::from_str(text)?;
-        Self::from_value(&value)
+        let config = crate::config::parse_without_source(&value, &ParseOptions::default(), None)?;
+        let mut data = compile::compile(config, None)?;
+        data.source = source::Source::Json(text.into());
+        Ok(Self { inner: Arc::new(data) })
     }
 
     /// Parse and compile an XState JSON value.
@@ -239,7 +265,7 @@ impl Machine {
     /// # Errors
     /// Shape errors from parsing and structural errors from compilation.
     pub fn from_value(value: &Value) -> Result<Self> {
-        Self::from_config(MachineConfig::from_value(value)?)
+        Self::from_value_with(value, &ParseOptions::default())
     }
 
     /// Parse with options and compile.
@@ -247,7 +273,20 @@ impl Machine {
     /// # Errors
     /// Shape errors from parsing and structural errors from compilation.
     pub fn from_value_with(value: &Value, options: &ParseOptions) -> Result<Self> {
-        Self::from_config(MachineConfig::from_value_with(value, options)?)
+        Self::compile_borrowed(value, options, None)
+    }
+
+    /// Parse and compile `value` without copying it: the source document is kept as JSON text
+    /// (see `machine::source`).
+    fn compile_borrowed(
+        value: &Value,
+        options: &ParseOptions,
+        user_actions: Option<&std::collections::HashSet<String>>,
+    ) -> Result<Self> {
+        let config = crate::config::parse_without_source(value, options, user_actions)?;
+        let mut data = compile::compile(config, user_actions)?;
+        data.source = source::Source::from_value(value);
+        Ok(Self { inner: Arc::new(data) })
     }
 
     /// Compile a parsed configuration.
@@ -272,8 +311,7 @@ impl Machine {
     ) -> Result<Self> {
         let names: std::collections::HashSet<String> =
             logic.action_names().map(str::to_owned).collect();
-        let config = MachineConfig::from_value_for(value, options, &names)?;
-        Ok(Self { inner: Arc::new(compile::compile(config, Some(&names))?) })
+        Self::compile_borrowed(value, options, Some(&names))
     }
 
     /// The configuration document this machine was compiled from: the input verbatim for
@@ -282,14 +320,14 @@ impl Machine {
     /// machine.
     #[must_use]
     pub fn to_json(&self) -> Value {
-        self.inner.source.clone()
+        self.inner.source.to_value()
     }
 
     /// [`Machine::to_json`] pretty-printed (two-space indent).
     #[must_use]
     pub fn to_json_string(&self) -> String {
         // Serialising a `Value` cannot fail: every key is a string.
-        serde_json::to_string_pretty(&self.inner.source).unwrap_or_default()
+        serde_json::to_string_pretty(&self.inner.source.to_value()).unwrap_or_default()
     }
 
     /// Mermaid `stateDiagram-v2` rendering. See [`crate::export`].
@@ -391,19 +429,75 @@ impl Machine {
     #[inline]
     #[must_use]
     pub fn event_key(&self, event_type: &str) -> Option<u32> {
+        // A machine declares a handful of event types: comparing them beats hashing.
+        const SCAN_LIMIT: usize = 8;
+        let names = &self.inner.event_names;
+        if names.len() <= SCAN_LIMIT {
+            let found = names.iter().position(|n| n.as_str() == event_type);
+            #[allow(clippy::cast_possible_truncation)] // keys are u32 by construction
+            return found.map(|i| i as u32);
+        }
         self.inner.event_index.get(event_type).copied()
     }
 
     /// Event types declared on any state (exact descriptors only), for strict mode.
     #[must_use]
     pub fn declared_events(&self) -> &[String] {
-        &self.inner.declared_events
+        self.inner.declared_events.get_or_init(|| {
+            // Every exact descriptor a state declares, minus the engine's own `xstate.*` events.
+            let mut declared: Vec<String> = self
+                .inner
+                .event_index
+                .keys()
+                .filter(|d| !d.starts_with("xstate."))
+                .map(ToString::to_string)
+                .collect();
+            declared.sort();
+            declared
+        })
     }
 
     /// Whether any state has eventless transitions (lets the engine skip settling).
     #[must_use]
     pub fn has_always(&self) -> bool {
         self.inner.has_always
+    }
+
+    /// Whether any state is a history pseudo-state.
+    #[inline]
+    pub(crate) fn has_history(&self) -> bool {
+        self.inner.has_history
+    }
+
+    /// Whether any action, guard, invoke or delay is part of the machine.
+    #[inline]
+    pub(crate) fn references_logic(&self) -> bool {
+        self.inner.references_logic
+    }
+
+    /// Whether any state is parallel.
+    #[inline]
+    pub(crate) fn has_parallel(&self) -> bool {
+        self.inner.has_parallel
+    }
+
+    /// Atomic and final states as a configuration mask.
+    #[inline]
+    pub(crate) fn leaf_mask(&self) -> &crate::engine::bits::StateBits {
+        &self.inner.leaf_mask
+    }
+
+    /// Precomputed transition plans (`None` for machines with history states).
+    #[inline]
+    pub(crate) fn plans(&self) -> Option<&crate::engine::sets::Plans> {
+        self.inner.plans.get_or_init(|| crate::engine::sets::Plans::compute(self)).as_ref()
+    }
+
+    /// Exclusive end of `node`'s subtree in the document-order arena: its proper
+    /// descendants are exactly the indices `node.index() + 1 .. subtree_end(node)`.
+    #[inline]
+    pub(crate) fn subtree_end(&self, node: StateId) -> usize {
+        self.inner.states[node.index()].subtree_end as usize
     }
 
     /// `true` when `node` is a proper descendant of `ancestor`.
@@ -497,28 +591,6 @@ impl StateNode {
     #[must_use]
     pub fn is_compound(&self) -> bool {
         matches!(self.kind, NodeKind::Compound { .. })
-    }
-
-    /// Candidate transitions for an event in XState v5 order: the exact descriptor's
-    /// transitions first, then matching partial wildcards (longest first), then `*`. Wildcard
-    /// candidates are appended even when an exact descriptor exists, so a failed exact guard
-    /// falls through to them. `key` is the interned event key (see [`Machine::event_key`]).
-    #[inline]
-    pub(crate) fn candidates<'a>(
-        &'a self,
-        key: Option<u32>,
-        event_type: &'a str,
-    ) -> impl Iterator<Item = TransitionId> + 'a {
-        let exact = key
-            .and_then(|k| self.on_exact.iter().find(|(ek, _)| *ek == k))
-            .into_iter()
-            .flat_map(|(_, ts)| ts.iter().copied());
-        let partial = self
-            .on_partial
-            .iter()
-            .filter(move |(desc, _)| partial_matches(desc, event_type))
-            .flat_map(|(_, ts)| ts.iter().copied());
-        exact.chain(partial).chain(self.on_wildcard.iter().copied())
     }
 }
 

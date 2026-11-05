@@ -20,6 +20,9 @@ pub(super) fn run_actions<C: Context>(
     actions: &[ActionDef],
     event: &Event,
 ) -> Result<()> {
+    if actions.is_empty() {
+        return Ok(());
+    }
     let Err(err) = run_list(cx, actions, event) else { return Ok(()) };
     match cx.machine.policies().action_error_policy {
         ActionErrorPolicy::Continue => {

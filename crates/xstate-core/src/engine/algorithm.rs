@@ -1,75 +1,21 @@
-//! Selection, conflict resolution, exit/entry computation and the macrostep loop — a direct
-//! transcription of XState v5's `stateUtils` (itself the SCXML Appendix D algorithm).
+//! The macrostep loop, microsteps, and state exit and entry -- a direct transcription of
+//! XState v5's `stateUtils` (itself the SCXML Appendix D algorithm). Selection lives in
+//! [`super::select`], the exit / entry set computation in [`super::sets`].
 
 use serde_json::Value;
 
-use super::actions::{evaluate_guard, run_actions};
+use super::actions::run_actions;
+use super::select::{select_eventless_transitions, select_transitions};
+use super::sets::{
+    Enabled, StateSet, add_descendants_to_enter, compute_entry_set, compute_exit_set,
+    remove_conflicting,
+};
 use super::{Ctx, Effect, Status};
 use crate::context::Context;
 use crate::error::{Error, Result};
 use crate::event::{Event, EventOrigin};
 use crate::ids::{StateId, TransitionId};
-use crate::machine::{Machine, NodeKind, Transition};
-
-/// Set of states kept sorted in document order in an inline vector: configurations touched
-/// by one microstep are small, so this never allocates in the common case.
-#[derive(Default)]
-struct StateSet {
-    items: smallvec::SmallVec<[StateId; 16]>,
-}
-
-impl StateSet {
-    #[inline]
-    fn new(_machine: &Machine) -> Self {
-        Self::default()
-    }
-
-    #[inline]
-    fn insert(&mut self, s: StateId) {
-        if let Err(pos) = self.items.binary_search(&s) {
-            self.items.insert(pos, s);
-        }
-    }
-
-    #[inline]
-    fn contains(&self, s: StateId) -> bool {
-        self.items.binary_search(&s).is_ok()
-    }
-
-    #[inline]
-    fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
-    #[inline]
-    fn is_disjoint(&self, other: &Self) -> bool {
-        // Both sorted: merge-walk.
-        let (mut i, mut j) = (0, 0);
-        while i < self.items.len() && j < other.items.len() {
-            match self.items[i].cmp(&other.items[j]) {
-                std::cmp::Ordering::Less => i += 1,
-                std::cmp::Ordering::Greater => j += 1,
-                std::cmp::Ordering::Equal => return false,
-            }
-        }
-        true
-    }
-
-    /// Members in document order.
-    #[inline]
-    fn iter(&self) -> impl DoubleEndedIterator<Item = StateId> + '_ {
-        self.items.iter().copied()
-    }
-
-    /// `true` when both sets hold the same states.
-    #[inline]
-    fn same_members(&self, other: &Self) -> bool {
-        self.items == other.items
-    }
-}
-
-/// Transitions enabled for one microstep; rarely more than a few.
-type Enabled = smallvec::SmallVec<[TransitionId; 4]>;
+use crate::machine::{Machine, NodeKind};
 
 // ----------------------------------------------------------------------------- entry points
 
@@ -82,14 +28,14 @@ pub(super) fn start<C: Context>(cx: &mut Ctx<'_, C>) -> Result<()> {
     enter_states(cx, &to_enter, &init, false)?;
     exit_all_when_done(cx, &init)?;
     cx.report.microsteps += 1;
-    settle(cx, init)
+    settle(cx, &init)
 }
 
 /// XState runs the exit actions of every remaining active state (reverse document order) as
 /// soon as the machine is done -- in `microstep`, which also covers the initial transition.
 fn exit_all_when_done<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Result<()> {
     if cx.state.status == Status::Done {
-        let remaining: Vec<StateId> = cx.state.configuration().collect();
+        let remaining: smallvec::SmallVec<[StateId; 16]> = cx.state.configuration().collect();
         for &s in remaining.iter().rev() {
             run_actions(cx, &cx.machine.node(s).exit, event)?;
         }
@@ -97,8 +43,8 @@ fn exit_all_when_done<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Result<
     Ok(())
 }
 
-pub(super) fn macrostep<C: Context>(cx: &mut Ctx<'_, C>, event: Event) -> Result<()> {
-    let enabled = select_transitions(cx, &event)?;
+pub(super) fn macrostep<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Result<()> {
+    let enabled = select_transitions(cx, event)?;
     if enabled.is_empty() {
         cx.report.unhandled = true;
         if event.origin == EventOrigin::ErrorActor {
@@ -114,7 +60,11 @@ pub(super) fn macrostep<C: Context>(cx: &mut Ctx<'_, C>, event: Event) -> Result
             return Ok(());
         }
     } else {
-        microstep(cx, &enabled, &event, false)?;
+        microstep(cx, &enabled, event, false)?;
+    }
+    if !cx.machine.has_always() && cx.state.internal_queue.is_empty() {
+        // Nothing eventless to select and nothing raised: `settle` would stop at once.
+        return Ok(());
     }
     settle(cx, event)
 }
@@ -124,8 +74,10 @@ pub(super) fn macrostep<C: Context>(cx: &mut Ctx<'_, C>, event: Event) -> Result
 /// microstep returned the same snapshot -- see `ActiveState::mutations`), eventless transitions
 /// are not re-selected until an internal event has been processed, so a self-targeting
 /// `always` runs once instead of looping.
-fn settle<C: Context>(cx: &mut Ctx<'_, C>, mut current: Event) -> Result<()> {
+fn settle<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Result<()> {
     let limit = cx.machine.policies().max_iterations;
+    // The event being settled: the delivered one, then each internal event in turn.
+    let mut raised: Option<Event> = None;
     let mut iterations: u32 = 0;
     let mut select_eventless = true;
     while cx.state.status == Status::Running {
@@ -134,7 +86,7 @@ fn settle<C: Context>(cx: &mut Ctx<'_, C>, mut current: Event) -> Result<()> {
             let err = Error::RunawayChain {
                 machine: cx.machine.id().to_owned(),
                 limit,
-                event: current.ty.to_string(),
+                event: raised.as_ref().unwrap_or(event).ty.to_string(),
             };
             cx.state.status = Status::Error;
             cx.state.error = Some(err.to_string());
@@ -142,112 +94,22 @@ fn settle<C: Context>(cx: &mut Ctx<'_, C>, mut current: Event) -> Result<()> {
             return Err(err);
         }
         let mut enabled = if select_eventless && cx.machine.has_always() {
-            select_eventless_transitions(cx, &current)?
+            select_eventless_transitions(cx, raised.as_ref().unwrap_or(event))?
         } else {
             Enabled::new()
         };
         let was_eventless = !enabled.is_empty();
         if !was_eventless {
             let Some(next) = cx.state.internal_queue.pop_front() else { break };
-            current = next;
-            enabled = select_transitions(cx, &current)?;
+            enabled = select_transitions(cx, raised.insert(next))?;
         }
         let before = cx.state.mutations;
         if !enabled.is_empty() {
-            microstep(cx, &enabled, &current, was_eventless)?;
+            microstep(cx, &enabled, raised.as_ref().unwrap_or(event), was_eventless)?;
         }
         select_eventless = !was_eventless || cx.state.mutations != before;
     }
     Ok(())
-}
-
-// ----------------------------------------------------------------------------- selection
-
-/// XState's `transitionNode`: descend the active tree; a parallel node asks every region and
-/// consults its own handlers only when no region had a match; a compound node consults its
-/// own handlers only when its active child had none.
-fn select_transitions<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Result<Enabled> {
-    fn select<C: Context>(
-        cx: &mut Ctx<'_, C>,
-        node: StateId,
-        event: &Event,
-        key: Option<u32>,
-    ) -> Result<Enabled> {
-        let machine = cx.machine;
-        let n = machine.node(node);
-        let mut inner = Enabled::new();
-        match n.kind {
-            NodeKind::Parallel | NodeKind::Compound { .. } => {
-                for &child in &n.children {
-                    if cx.state.is_active(child) {
-                        inner.extend(select(cx, child, event, key)?);
-                    }
-                }
-            }
-            NodeKind::Atomic | NodeKind::Final | NodeKind::History { .. } => {}
-        }
-        if !inner.is_empty() {
-            return Ok(inner);
-        }
-        Ok(own_transition(cx, node, event, key)?.into_iter().collect())
-    }
-    let key = cx.machine.event_key(&event.ty);
-    select(cx, StateId::ROOT, event, key)
-}
-
-/// First candidate on `node` whose guard holds.
-fn own_transition<C: Context>(
-    cx: &mut Ctx<'_, C>,
-    node: StateId,
-    event: &Event,
-    key: Option<u32>,
-) -> Result<Option<TransitionId>> {
-    let machine = cx.machine;
-    for tid in machine.node(node).candidates(key, &event.ty) {
-        if guard_holds(cx, machine.transition(tid), event)? {
-            return Ok(Some(tid));
-        }
-    }
-    Ok(None)
-}
-
-fn guard_holds<C: Context>(cx: &mut Ctx<'_, C>, t: &Transition, event: &Event) -> Result<bool> {
-    match &t.guard {
-        None => Ok(true),
-        Some(g) => evaluate_guard(cx, g, event),
-    }
-}
-
-/// XState's `selectEventlessTransitions`: per atomic state, the first `always` transition up
-/// the ancestor chain whose guard holds; then conflict resolution. The atomic states are
-/// visited in the order XState's snapshot holds them -- entry order, see
-/// `ActiveState::entered_at` -- so the leaf entered first is asked first and wins a conflict.
-fn select_eventless_transitions<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Result<Enabled> {
-    let machine = cx.machine;
-    let mut leaves = cx.state.leaves(machine);
-    if leaves.len() > 1 {
-        let entered = &cx.state.entered_at;
-        leaves.sort_unstable_by_key(|s| (entered.get(s.index()).copied().unwrap_or(0), *s));
-    }
-    let mut enabled = Enabled::new();
-    for leaf in leaves {
-        let chain = std::iter::once(leaf).chain(machine.ancestors(leaf, None));
-        'walk: for node in chain {
-            let always = &machine.node(node).always;
-            if always.is_empty() {
-                continue;
-            }
-            for &tid in always {
-                if guard_holds(cx, machine.transition(tid), event)? {
-                    if !enabled.contains(&tid) {
-                        enabled.push(tid);
-                    }
-                    break 'walk;
-                }
-            }
-        }
-    }
-    Ok(remove_conflicting(machine, &enabled, cx.state))
 }
 
 // ----------------------------------------------------------------------------- microstep
@@ -263,10 +125,15 @@ fn microstep<C: Context>(
     let machine = cx.machine;
     let filtered = remove_conflicting(machine, enabled, cx.state);
     cx.report.microsteps += 1;
-    cx.report.transitions.extend(filtered.iter().copied());
+    if let [only] = filtered.as_slice() {
+        cx.report.transitions.push(*only);
+    } else {
+        cx.report.transitions.extend(filtered.iter().copied());
+    }
 
     let to_exit = compute_exit_set(machine, &filtered, cx.state);
-    let records_history = to_exit.iter().any(|s| !machine.node(s).history_children.is_empty());
+    let records_history = machine.has_history()
+        && to_exit.iter().any(|s| !machine.node(s).history_children.is_empty());
     // An eventless microstep must know up front whether it re-enters exactly what it exits (to
     // watch the context). Without a history record the exit does not change what the entry
     // set depends on, so it can be computed first; other microsteps compute it after the
@@ -325,38 +192,6 @@ fn note_snapshot_change<C: Context>(
     }
 }
 
-/// XState's `removeConflictingTransitions`.
-fn remove_conflicting<C>(
-    machine: &Machine,
-    enabled: &[TransitionId],
-    state: &super::ActiveState<C>,
-) -> Enabled {
-    let mut filtered = Enabled::new();
-    for &t1 in enabled {
-        let mut preempted = false;
-        let mut to_remove = Enabled::new();
-        let exit1 = compute_exit_set(machine, &[t1], state);
-        for &t2 in &filtered {
-            let exit2 = compute_exit_set(machine, &[t2], state);
-            if !exit1.is_disjoint(&exit2) {
-                let s1 = machine.transition(t1).source;
-                let s2 = machine.transition(t2).source;
-                if machine.is_descendant(s1, s2) {
-                    to_remove.push(t2);
-                } else {
-                    preempted = true;
-                    break;
-                }
-            }
-        }
-        if !preempted {
-            filtered.retain(|t| !to_remove.contains(t));
-            filtered.push(t1);
-        }
-    }
-    filtered
-}
-
 // ----------------------------------------------------------------------------- exit
 
 fn exit_states<C: Context>(cx: &mut Ctx<'_, C>, to_exit: &StateSet, event: &Event) -> Result<()> {
@@ -367,7 +202,7 @@ fn exit_states<C: Context>(cx: &mut Ctx<'_, C>, to_exit: &StateSet, event: &Even
     // Record history before anything leaves the configuration. The record is keyed by the
     // exited state and holds every active descendant (the Python snapshot layout); the
     // shallow/deep view a history node needs is derived from it on restore.
-    for s in to_exit.iter() {
+    for s in to_exit.iter().filter(|_| machine.has_history()) {
         if machine.node(s).history_children.is_empty() {
             continue;
         }
@@ -388,208 +223,6 @@ fn exit_states<C: Context>(cx: &mut Ctx<'_, C>, to_exit: &StateSet, event: &Even
         cx.report.changed = true;
     }
     Ok(())
-}
-
-/// XState's `computeExitSet`.
-fn compute_exit_set<C>(
-    machine: &Machine,
-    transitions: &[TransitionId],
-    state: &super::ActiveState<C>,
-) -> StateSet {
-    let mut out = StateSet::new(machine);
-    for &tid in transitions {
-        let t = machine.transition(tid);
-        if t.targets.is_empty() {
-            continue;
-        }
-        let domain = transition_domain(machine, t, &state.history);
-        if t.reenter && Some(t.source) == domain {
-            out.insert(t.source);
-        }
-        for s in state.configuration() {
-            if domain.is_none_or(|d| machine.is_descendant(s, d)) {
-                out.insert(s);
-            }
-        }
-    }
-    out
-}
-
-/// XState's `getTransitionDomain`. `None` means "above the root" (every active state exits).
-fn transition_domain(
-    machine: &Machine,
-    t: &Transition,
-    history: &super::HistoryMap,
-) -> Option<StateId> {
-    let targets = effective_targets(machine, t, history);
-    if targets.is_empty() {
-        return None;
-    }
-    if !t.reenter && targets.iter().all(|&x| machine.is_self_or_descendant(x, t.source)) {
-        return Some(t.source);
-    }
-    // Least common *proper* ancestor of source and targets (symmetric, so the source can be
-    // the walk's head).
-    machine
-        .ancestors(t.source, None)
-        .find(|&anc| targets.iter().all(|&n| machine.is_descendant(n, anc)))
-}
-
-/// Ancestor chain of one state.
-type Ancestors = smallvec::SmallVec<[StateId; 8]>;
-
-/// Small list of target states.
-type Targets = smallvec::SmallVec<[StateId; 2]>;
-
-/// Targets with history pseudo-states replaced by the recorded (or default) states.
-fn effective_targets(machine: &Machine, t: &Transition, history: &super::HistoryMap) -> Targets {
-    let mut out = Targets::new();
-    for &target in &t.targets {
-        match machine.node(target).kind {
-            NodeKind::History { .. } => out.extend(history_targets(machine, target, history)),
-            _ => out.push(target),
-        }
-    }
-    out
-}
-
-/// Recorded history for `h` (deep: the leaves, shallow: the direct children of its parent),
-/// else its default target, else the parent's `initial`.
-fn history_targets(machine: &Machine, h: StateId, history: &super::HistoryMap) -> Vec<StateId> {
-    let node = machine.node(h);
-    let deep = matches!(node.kind, NodeKind::History { deep: true, .. });
-    if let Some(parent) = node.parent
-        && let Some(recorded) = history.get(&parent)
-    {
-        let view: Vec<StateId> = recorded
-            .iter()
-            .copied()
-            .filter(|&c| {
-                if deep {
-                    machine.node(c).is_leaf()
-                } else {
-                    machine.node(c).parent == Some(parent)
-                }
-            })
-            .collect();
-        if !view.is_empty() {
-            return view;
-        }
-    }
-    history_default(machine, h).into_iter().collect()
-}
-
-fn history_default(machine: &Machine, h: StateId) -> Option<StateId> {
-    let node = machine.node(h);
-    if let NodeKind::History { target: Some(t), .. } = node.kind {
-        return Some(t);
-    }
-    let parent = node.parent?;
-    match machine.node(parent).kind {
-        NodeKind::Compound { initial } => Some(initial),
-        _ => None,
-    }
-}
-
-// ----------------------------------------------------------------------------- entry
-
-/// XState's `computeEntrySet`.
-fn compute_entry_set(
-    machine: &Machine,
-    transitions: &[TransitionId],
-    history: &super::HistoryMap,
-) -> StateSet {
-    let mut to_enter = StateSet::new(machine);
-    for &tid in transitions {
-        let t = machine.transition(tid);
-        let domain = transition_domain(machine, t, history);
-        for &target in &t.targets {
-            let node = machine.node(target);
-            if !node.is_history() && (t.source != target || Some(t.source) != domain || t.reenter) {
-                to_enter.insert(target);
-            }
-            add_descendants_to_enter(machine, target, history, &mut to_enter);
-        }
-        for s in effective_targets(machine, t, history) {
-            let mut ancestors: Ancestors = machine.ancestors(s, domain).collect();
-            if let Some(d) = domain.filter(|&d| machine.node(d).is_parallel()) {
-                ancestors.push(d);
-            }
-            // XState: a re-entering transition on the root re-enters everything; otherwise the
-            // domain itself is never re-entered, only its proper descendants.
-            let reentrancy_domain =
-                if t.source == StateId::ROOT && t.reenter { None } else { domain };
-            add_ancestors_to_enter(machine, &ancestors, reentrancy_domain, history, &mut to_enter);
-        }
-    }
-    to_enter
-}
-
-/// XState's `addDescendantStatesToEnter`.
-fn add_descendants_to_enter(
-    machine: &Machine,
-    node: StateId,
-    history: &super::HistoryMap,
-    to_enter: &mut StateSet,
-) {
-    let n = machine.node(node);
-    match n.kind {
-        NodeKind::History { .. } => {
-            let targets = history_targets(machine, node, history);
-            for &s in &targets {
-                to_enter.insert(s);
-                add_descendants_to_enter(machine, s, history, to_enter);
-            }
-            for &s in &targets {
-                let ancestors: Ancestors = machine.ancestors(s, n.parent).collect();
-                add_ancestors_to_enter(machine, &ancestors, None, history, to_enter);
-            }
-        }
-        NodeKind::Compound { initial } => {
-            to_enter.insert(initial);
-            add_descendants_to_enter(machine, initial, history, to_enter);
-            let ancestors: Ancestors = machine.ancestors(initial, Some(node)).collect();
-            add_ancestors_to_enter(machine, &ancestors, None, history, to_enter);
-        }
-        NodeKind::Parallel => {
-            for &child in &n.children {
-                if machine.node(child).is_history() {
-                    continue;
-                }
-                if !to_enter.iter().any(|s| machine.is_descendant(s, child)) {
-                    to_enter.insert(child);
-                    add_descendants_to_enter(machine, child, history, to_enter);
-                }
-            }
-        }
-        NodeKind::Atomic | NodeKind::Final => {}
-    }
-}
-
-/// XState's `addAncestorStatesToEnter`.
-fn add_ancestors_to_enter(
-    machine: &Machine,
-    ancestors: &[StateId],
-    reentrancy_domain: Option<StateId>,
-    history: &super::HistoryMap,
-    to_enter: &mut StateSet,
-) {
-    for &anc in ancestors {
-        if reentrancy_domain.is_none_or(|d| machine.is_descendant(anc, d)) {
-            to_enter.insert(anc);
-        }
-        if machine.node(anc).is_parallel() {
-            for &child in &machine.node(anc).children {
-                if machine.node(child).is_history() {
-                    continue;
-                }
-                if !to_enter.iter().any(|s| machine.is_descendant(s, child)) {
-                    to_enter.insert(child);
-                    add_descendants_to_enter(machine, child, history, to_enter);
-                }
-            }
-        }
-    }
 }
 
 /// XState's `enterStates`. With `keep_order` (the microstep re-enters exactly what it exited
@@ -631,7 +264,11 @@ fn arm_entry_effects<C: Context>(cx: &mut Ctx<'_, C>, s: StateId, event: &Event)
     let node = cx.machine.node(s);
     for (index, after) in node.after.iter().enumerate() {
         let Some(delay_ms) = super::usable_delay(cx, &after.delay, event)? else { continue };
-        let ev = Event::after(&after.key, &node.id);
+        // `xstate.after.<key>.<state id>`, interned at compile time.
+        let ev = match node.after_events.get(index) {
+            Some(ty) => Event::engine(ty.clone(), Value::Null, EventOrigin::After),
+            None => Event::after(&after.key, &node.id),
+        };
         cx.effects.push(Effect::ArmTimer {
             state: s,
             index,
@@ -661,10 +298,7 @@ fn final_state_entered<C: Context>(cx: &mut Ctx<'_, C>, s: StateId, completed: &
     let parent_node = machine.node(parent);
     let mut marker = if parent_node.is_parallel() { Some(parent) } else { parent_node.parent };
     let mut root_completion = marker.unwrap_or(s);
-    if parent_node.is_compound() {
-        let output = node.output.clone().unwrap_or(Value::Null);
-        cx.state.internal_queue.push_back(Event::done_state(&parent_node.id, output));
-    }
+    let mut done_parallel: smallvec::SmallVec<[StateId; 4]> = smallvec::SmallVec::new();
     while let Some(anc) = marker {
         if !machine.node(anc).is_parallel()
             || completed.contains(anc)
@@ -673,12 +307,22 @@ fn final_state_entered<C: Context>(cx: &mut Ctx<'_, C>, s: StateId, completed: &
             break;
         }
         completed.insert(anc);
-        cx.state.internal_queue.push_back(Event::done_state(&machine.node(anc).id, Value::Null));
+        done_parallel.push(anc);
         root_completion = anc;
         marker = machine.node(anc).parent;
     }
     if marker.is_none() {
+        // The machine is done: `finish` drops the internal queue, so the `done.state` events
+        // this entry would raise are never seen and are not built.
         finish(cx, root_completion);
+        return;
+    }
+    if parent_node.is_compound() {
+        let output = node.output.clone().unwrap_or(Value::Null);
+        cx.state.internal_queue.push_back(Event::done_state(&parent_node.id, output));
+    }
+    for anc in done_parallel {
+        cx.state.internal_queue.push_back(Event::done_state(&machine.node(anc).id, Value::Null));
     }
 }
 

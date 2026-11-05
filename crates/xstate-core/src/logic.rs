@@ -5,7 +5,7 @@
 //! [`Machine`], so a typo surfaces at build time rather than when
 //! the transition is first taken.
 
-use std::collections::HashMap;
+use foldhash::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -140,11 +140,11 @@ pub struct MachineLogic<C> {
 impl<C> Default for MachineLogic<C> {
     fn default() -> Self {
         Self {
-            actions: HashMap::new(),
+            actions: HashMap::default(),
             shadows_builtin: false,
-            guards: HashMap::new(),
-            services: HashMap::new(),
-            delays: HashMap::new(),
+            guards: HashMap::default(),
+            services: HashMap::default(),
+            delays: HashMap::default(),
         }
     }
 }
@@ -354,6 +354,10 @@ impl<C: Context> MachineLogic<C> {
                     list.iter().try_for_each(|g| walk_guard(logic, g))
                 }
             }
+        }
+        if !machine.references_logic() {
+            // No action, guard, invoke or delay to look up.
+            return Ok(());
         }
         for node in machine.states() {
             walk_actions(self, &node.entry)?;

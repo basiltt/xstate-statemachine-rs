@@ -13,6 +13,11 @@
         "properties": {
           "baseline_p50_ns": { "type": ["number", "null"], "minimum": 0 },
           "target_p50_ns": { "type": "number", "exclusiveMinimum": 0 },
+          "python_per_op_ns": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "The Python library's time for the same operation (xstate-statemachine 0.12.0, sync engine); scripts/perf_gate.py prints the speed-up over it"
+          },
           "note": { "type": "string" }
         },
         "required": ["baseline_p50_ns"],

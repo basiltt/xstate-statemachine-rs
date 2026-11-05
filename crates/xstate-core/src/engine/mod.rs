@@ -8,7 +8,6 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use fixedbitset::FixedBitSet;
 use serde_json::Value;
 
 use crate::context::Context;
@@ -20,6 +19,11 @@ use crate::machine::{Delay, InvokeDef, Machine, SendTarget};
 
 mod actions;
 mod algorithm;
+pub(crate) mod bits;
+mod select;
+pub(crate) mod sets;
+
+use bits::StateBits;
 
 /// Lifecycle status of a running machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -54,7 +58,7 @@ pub(crate) type HistoryMap = HashMap<StateId, Vec<StateId>>;
 /// Mutable runtime state of one machine instance.
 #[derive(Debug, Clone)]
 pub struct ActiveState<C> {
-    pub(crate) configuration: FixedBitSet,
+    pub(crate) configuration: StateBits,
     pub(crate) context: C,
     pub(crate) history: HistoryMap,
     pub(crate) status: Status,
@@ -71,6 +75,8 @@ pub struct ActiveState<C> {
     /// a restored configuration. XState keeps its active states as a list (`snapshot._nodes`)
     /// to which a microstep appends what it enters, and `selectEventlessTransitions` walks the
     /// atomic states in that order; sorting the active leaves by this stamp reproduces it.
+    /// Only eventless selection reads it, so it is empty (and not kept) for a machine without
+    /// `always` transitions.
     pub(crate) entered_at: Vec<u64>,
 }
 
@@ -107,7 +113,7 @@ impl<C> ActiveState<C> {
 
     /// Every active state (ancestors included) in document order.
     pub fn configuration(&self) -> impl Iterator<Item = StateId> + '_ {
-        self.configuration.ones().map(StateId::from_index)
+        self.configuration.states()
     }
 
     /// `true` when `state` is active.
@@ -125,7 +131,9 @@ impl<C> ActiveState<C> {
     /// Active leaf states in document order.
     #[must_use]
     pub fn leaves(&self, machine: &Machine) -> smallvec::SmallVec<[StateId; 4]> {
-        self.configuration().filter(|s| machine.node(*s).is_leaf()).collect()
+        let mut out = smallvec::SmallVec::new();
+        self.configuration.states_masked_into(machine.leaf_mask(), &mut out);
+        out
     }
 
     /// Active leaf state ids, sorted, in the format `machine.a.b`.
@@ -172,7 +180,7 @@ impl<C: Context> ActiveState<C> {
         history: HistoryMap,
         snapshot: &crate::snapshot::Snapshot,
     ) -> Self {
-        let mut bits = FixedBitSet::with_capacity(machine.states().len());
+        let mut bits = StateBits::with_capacity(machine.states().len());
         for &s in configuration {
             bits.set(s.index(), true);
         }
@@ -189,9 +197,14 @@ impl<C: Context> ActiveState<C> {
             entry_seq,
             // XState's `restoreSnapshot` rebuilds its state list from the state value: the
             // leaves in document order, which is what equal stamps sort as.
-            entered_at: vec![0; machine.states().len()],
+            entered_at: entry_stamps(machine),
         }
     }
+}
+
+/// Fresh per-state entry stamps: one per state when eventless selection needs them.
+fn entry_stamps(machine: &Machine) -> Vec<u64> {
+    if machine.has_always() { vec![0; machine.states().len()] } else { Vec::new() }
 }
 
 /// A side effect requested by the engine, to be executed by the driver after the step.
@@ -330,9 +343,23 @@ pub(crate) fn start_with<C: Context>(
     input: &Value,
     pure: bool,
 ) -> Result<(ActiveState<C>, Vec<Effect>, StepReport)> {
+    let mut effects = Vec::new();
+    let (state, report) = start_into(machine, logic, input, pure, &mut effects)?;
+    Ok((state, effects, report))
+}
+
+/// [`start_with`] appending the effects to `effects` (a buffer reused across steps).
+pub(crate) fn start_into<C: Context>(
+    machine: &Machine,
+    logic: &MachineLogic<C>,
+    input: &Value,
+    pure: bool,
+    effects: &mut Vec<Effect>,
+) -> Result<(ActiveState<C>, StepReport)> {
+    let first = effects.len();
     let context = C::from_initial(machine.initial_context(), input)?;
     let mut state = ActiveState {
-        configuration: FixedBitSet::with_capacity(machine.states().len()),
+        configuration: StateBits::with_capacity(machine.states().len()),
         context,
         history: HashMap::new(),
         status: Status::Running,
@@ -341,23 +368,15 @@ pub(crate) fn start_with<C: Context>(
         internal_queue: VecDeque::new(),
         mutations: 0,
         entry_seq: 0,
-        entered_at: vec![0; machine.states().len()],
+        entered_at: entry_stamps(machine),
     };
-    let mut effects = Vec::new();
     let mut report = StepReport::default();
     {
-        let mut cx = Ctx {
-            machine,
-            logic,
-            state: &mut state,
-            effects: &mut effects,
-            report: &mut report,
-            pure,
-        };
+        let mut cx = Ctx { machine, logic, state: &mut state, effects, report: &mut report, pure };
         algorithm::start(&mut cx)?;
     }
-    finalize_effects(&mut effects, 0);
-    Ok((state, effects, report))
+    finalize_effects(effects, first);
+    Ok((state, report))
 }
 
 /// Process one external event to completion (a macrostep).
@@ -367,6 +386,7 @@ pub(crate) fn start_with<C: Context>(
 ///
 /// # Errors
 /// Propagates logic errors according to the machine's error policies.
+#[allow(clippy::needless_pass_by_value)] // public signature; the step borrows the event
 pub fn step<C: Context>(
     machine: &Machine,
     logic: &MachineLogic<C>,
@@ -374,28 +394,43 @@ pub fn step<C: Context>(
     event: Event,
     effects: &mut Vec<Effect>,
 ) -> Result<StepReport> {
-    step_with(machine, logic, state, event, effects, false)
+    step_with(machine, logic, state, &event, effects, false)
 }
 
+/// [`step`] for a borrowed event; `pure` plans user actions instead of running them.
 pub(crate) fn step_with<C: Context>(
     machine: &Machine,
     logic: &MachineLogic<C>,
     state: &mut ActiveState<C>,
-    event: Event,
+    event: &Event,
     effects: &mut Vec<Effect>,
     pure: bool,
 ) -> Result<StepReport> {
     let mut report = StepReport::default();
+    step_into(machine, logic, state, event, effects, pure, &mut report)?;
+    Ok(report)
+}
+
+/// [`step_with`] writing into `report`, which must be a fresh (default) report.
+pub(crate) fn step_into<C: Context>(
+    machine: &Machine,
+    logic: &MachineLogic<C>,
+    state: &mut ActiveState<C>,
+    event: &Event,
+    effects: &mut Vec<Effect>,
+    pure: bool,
+    report: &mut StepReport,
+) -> Result<()> {
     if state.status != Status::Running {
         report.unhandled = true;
-        return Ok(report);
+        return Ok(());
     }
     let first = effects.len();
     let rollback =
         machine.policies().action_error_policy == crate::config::ActionErrorPolicy::Rollback;
     let checkpoint = rollback.then(|| state.clone());
     let outcome = {
-        let mut cx = Ctx { machine, logic, state, effects, report: &mut report, pure };
+        let mut cx = Ctx { machine, logic, state, effects, report: &mut *report, pure };
         algorithm::macrostep(&mut cx, event)
     };
     match outcome {
@@ -406,8 +441,8 @@ pub(crate) fn step_with<C: Context>(
                 *state = saved;
             }
             effects.truncate(first);
-            report = StepReport { failed: Some(err.to_string()), ..StepReport::default() };
-            return Ok(report);
+            *report = StepReport { failed: Some(err.to_string()), ..StepReport::default() };
+            return Ok(());
         }
         Err(err) => {
             // XState: a failing action is unrecoverable for the actor.
@@ -419,7 +454,7 @@ pub(crate) fn step_with<C: Context>(
         }
     }
     finalize_effects(effects, first);
-    Ok(report)
+    Ok(())
 }
 
 /// Drop start/stop pairs for actors that were started and stopped within the same step, and
@@ -427,6 +462,9 @@ pub(crate) fn step_with<C: Context>(
 /// tail of `effects` starting at `first` belongs to this step.
 fn finalize_effects(effects: &mut Vec<Effect>, first: usize) {
     let tail = &effects[first..];
+    if !tail.iter().any(|e| matches!(e, Effect::StartInvoke { .. } | Effect::Raise(_))) {
+        return;
+    }
     let mut keep = vec![true; tail.len()];
     for (i, e) in tail.iter().enumerate() {
         match e {

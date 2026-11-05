@@ -43,6 +43,7 @@ pub fn initial_transition<C: Context>(
 ///
 /// # Errors
 /// Missing guard implementations; `maxIterations` exhaustion.
+#[allow(clippy::needless_pass_by_value)] // public signature; the step borrows the event
 pub fn transition<C: Context>(
     machine: &Machine,
     logic: &MachineLogic<C>,
@@ -51,7 +52,7 @@ pub fn transition<C: Context>(
 ) -> Result<(ActiveState<C>, Vec<PlannedAction>)> {
     let mut next = state.clone();
     let mut effects = Vec::new();
-    let report = engine::step_with(machine, logic, &mut next, event, &mut effects, true)?;
+    let report = engine::step_with(machine, logic, &mut next, &event, &mut effects, true)?;
     Ok((next, report.planned))
 }
 

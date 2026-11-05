@@ -159,17 +159,21 @@ jobs:
           fi
 
   bench-gate:
-    name: benchmarks build
+    name: benchmarks and perf gate (advisory)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # Compiles every criterion benchmark so they cannot rot; benches/budgets.json is the
-      # reference for the (relative) perf gate that runs them.
+      # Compiles every criterion benchmark so they cannot rot.
       - run: cargo bench --workspace --benches --no-run --locked
       - name: budgets.json is valid JSON
         run: node -e 'JSON.parse(require("fs").readFileSync("benches/budgets.json", "utf8"))'
+      # Runs the engine benchmarks and compares them with benches/budgets.json. Advisory:
+      # hosted runners are not the machine the baselines were recorded on and vary from run to
+      # run, so the table is printed but a regression does not fail the job (benches/README.md).
+      - name: perf gate (advisory, relative)
+        run: python3 scripts/perf_gate.py --advisory --relative -- --warm-up-time 1 --measurement-time 3
 
   docs:
     name: rustdoc
