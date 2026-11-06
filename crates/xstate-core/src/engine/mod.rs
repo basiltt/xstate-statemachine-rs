@@ -224,7 +224,8 @@ pub enum Effect {
         /// The `xstate.after.*` event to deliver.
         event: Event,
     },
-    /// Cancel every pending `after` timer of `state` (it was exited).
+    /// Cancel every pending `after` timer of `state` (it was exited). Emitted only for states
+    /// that declare `after` entries, the only ones that own timers.
     CancelTimers(StateId),
     /// Start an invoked service.
     StartInvoke {
@@ -285,6 +286,10 @@ pub enum Effect {
     Raise(Event),
 }
 
+/// The user action names a step executed, in order: inline (no allocation) for up to two
+/// actions. Derefs to `[Arc<str>]`.
+pub type ActionList = smallvec::SmallVec<[std::sync::Arc<str>; 2]>;
+
 /// What happened during one [`step`] (or [`start`]).
 #[derive(Debug, Clone, Default)]
 pub struct StepReport {
@@ -292,8 +297,8 @@ pub struct StepReport {
     pub changed: bool,
     /// Transitions taken, in execution order (across all microsteps).
     pub transitions: smallvec::SmallVec<[TransitionId; 4]>,
-    /// User action names executed, in order.
-    pub actions: Vec<std::sync::Arc<str>>,
+    /// User action names executed, in order (stored inline for up to two actions).
+    pub actions: ActionList,
     /// Number of microsteps executed.
     pub microsteps: u32,
     /// `true` when no transition matched the delivered event.
@@ -344,21 +349,25 @@ pub(crate) fn start_with<C: Context>(
     pure: bool,
 ) -> Result<(ActiveState<C>, Vec<Effect>, StepReport)> {
     let mut effects = Vec::new();
-    let (state, report) = start_into(machine, logic, input, pure, &mut effects)?;
+    let mut slot = None;
+    let report = start_into(machine, logic, input, pure, &mut effects, &mut slot)?;
+    let state = slot.ok_or_else(|| crate::Error::logic("start produced no state"))?;
     Ok((state, effects, report))
 }
 
-/// [`start_with`] appending the effects to `effects` (a buffer reused across steps).
+/// [`start_with`] appending the effects to `effects` (a buffer reused across steps) and
+/// building the state in `slot` (left `None` on error), where the caller keeps it.
 pub(crate) fn start_into<C: Context>(
     machine: &Machine,
     logic: &MachineLogic<C>,
     input: &Value,
     pure: bool,
     effects: &mut Vec<Effect>,
-) -> Result<(ActiveState<C>, StepReport)> {
+    slot: &mut Option<ActiveState<C>>,
+) -> Result<StepReport> {
     let first = effects.len();
     let context = C::from_initial(machine.initial_context(), input)?;
-    let mut state = ActiveState {
+    let state = slot.insert(ActiveState {
         configuration: StateBits::with_capacity(machine.states().len()),
         context,
         history: HashMap::new(),
@@ -369,14 +378,18 @@ pub(crate) fn start_into<C: Context>(
         mutations: 0,
         entry_seq: 0,
         entered_at: entry_stamps(machine),
-    };
+    });
     let mut report = StepReport::default();
-    {
-        let mut cx = Ctx { machine, logic, state: &mut state, effects, report: &mut report, pure };
-        algorithm::start(&mut cx)?;
+    let started = {
+        let mut cx = Ctx { machine, logic, state, effects, report: &mut report, pure };
+        algorithm::start(&mut cx)
+    };
+    if let Err(err) = started {
+        *slot = None;
+        return Err(err);
     }
     finalize_effects(effects, first);
-    Ok((state, report))
+    Ok(report)
 }
 
 /// Process one external event to completion (a macrostep).

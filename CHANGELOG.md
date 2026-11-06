@@ -185,6 +185,33 @@ raised only in a minor release.
 - `xstate-core`: `SyncInterpreter::new` shares one process-wide `RealClock` instead of creating
   one per interpreter (only differences of its readings are used, for timer due times).
 - `xstate-core`: no longer depends on `fixedbitset`.
+- `xstate-core`: second performance pass. Interleaved with the first pass's tree on the same
+  machine (criterion medians, best of three each): S1 -20 %, S2 -24 %, S6 -48 %, S7 -24 %,
+  S5 -11 %, `send_nested_3` / `send_parallel_2` -18 % / -20 %, `build_phase_compile` -32 %.
+  Semantics are unchanged (53 conformance cases, goldens, workspace tests and the Python
+  bindings' tests pass). What changed:
+  - **API:** `Receipt::actions` and `StepReport::actions` are now `ActionList`
+    (`SmallVec<[Arc<str>; 2]>`, exported from the crate root; derefs to `[Arc<str>]`) instead of
+    `Vec<Arc<str>>`, so a send whose step runs one or two user actions allocates nothing.
+    `Receipt::action_names()` still returns `Vec<String>`. No caller in the workspace needed a
+    change.
+  - `Effect::CancelTimers` is emitted only for exited states that declare `after` entries (the
+    only states that own timers), so a step that arms no timer emits no effect and an
+    interpreter that never arms one never allocates its effect buffer.
+    `SyncInterpreter::from_snapshot` now refuses (`Error::Snapshot`) a deadline whose state
+    declares no `after` timer; such a timer could never have been armed by the engine.
+  - The logic registry stores its names in insertion order and finds them by comparing names
+    (a hash index is built above 16 entries): creating an empty `MachineLogic` no longer seeds
+    four hash maps and a guard or action lookup no longer hashes its name.
+    `MachineLogic::action_names` lists the actions in registration order.
+  - The exit set of a single transition is appended in document order without searching, the
+    entry set of a planned transition is borrowed from the machine instead of copied, and the
+    set of completed parallel states is only created when a final state is entered.
+  - `start` builds the runtime state in the interpreter's slot instead of moving it there, and
+    skips settling when the machine has no eventless transition and nothing was raised.
+  - Compilation finds event keys and child states by scanning for machines with up to 8 event
+    types / 32 states (hash indexes above) and keeps the flattened state list inline: three
+    fewer allocations for the S3 machine (61 to 58).
 
 - Conformance: the Python engine converged on XState v5 for the eight recorded divergences
   (Python branch `xstate-v5-engine-parity`); `conformance/divergences.generated.md` is empty and

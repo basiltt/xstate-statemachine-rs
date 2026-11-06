@@ -32,7 +32,7 @@ pub(super) fn compile(
     config: MachineConfig,
     user_actions: Option<&HashSet<String>>,
 ) -> Result<MachineData> {
-    let mut raws: Vec<Raw<'_>> = Vec::with_capacity(count_states(&config.root));
+    let mut raws: SmallVec<[Raw<'_>; 16]> = SmallVec::with_capacity(count_states(&config.root));
     let mut id = config.root.key.clone();
     flatten(&config.root, &mut id, None, 0, &mut raws);
 
@@ -49,11 +49,14 @@ pub(super) fn compile(
         }
     }
 
+    // Small machines find a child by scanning the flattened states; larger ones index them.
     let mut children: FastMap<(StateId, &str), StateId> = FastMap::default();
-    children.reserve(raws.len());
-    for (i, raw) in raws.iter().enumerate() {
-        if let Some(parent) = raw.parent {
-            children.insert((parent, raw.cfg.key.as_str()), StateId::from_index(i));
+    if raws.len() > CHILD_SCAN_LIMIT {
+        children.reserve(raws.len());
+        for (i, raw) in raws.iter().enumerate() {
+            if let Some(parent) = raw.parent {
+                children.insert((parent, raw.cfg.key.as_str()), StateId::from_index(i));
+            }
         }
     }
 
@@ -68,6 +71,7 @@ pub(super) fn compile(
         user_actions,
         transitions: Vec::new(),
         warnings: config.warnings.clone(),
+        event_names: SmallVec::new(),
         event_index: FastMap::default(),
         has_always: false,
     };
@@ -99,13 +103,9 @@ pub(super) fn compile(
     }
 
     cx.validate(&states)?;
-    index_subtree_events(&mut states, cx.event_index.len());
+    index_subtree_events(&mut states, cx.event_names.len());
 
-    let Compiler { transitions, warnings, has_always, event_index, .. } = cx;
-    let mut event_names = SmallVec::from_elem(smol_str::SmolStr::default(), event_index.len());
-    for (name, &key) in &event_index {
-        event_names[key as usize] = name.clone();
-    }
+    let Compiler { transitions, warnings, has_always, event_index, event_names, .. } = cx;
     let mut leaf_mask = crate::engine::bits::StateBits::with_capacity(states.len());
     for (i, node) in states.iter().enumerate() {
         leaf_mask.set(i, node.is_leaf());
@@ -162,6 +162,9 @@ fn index_subtree_events(states: &mut [StateNode], key_count: usize) {
     }
 }
 
+/// Up to this many states, children are looked up by scanning instead of through an index.
+const CHILD_SCAN_LIMIT: usize = 32;
+
 /// Number of states in the subtree of `cfg`, itself included.
 fn count_states(cfg: &StateConfig) -> usize {
     1 + cfg.states.iter().map(count_states).sum::<usize>()
@@ -174,7 +177,7 @@ fn flatten<'c>(
     id: &mut String,
     parent: Option<StateId>,
     depth: u32,
-    out: &mut Vec<Raw<'c>>,
+    out: &mut SmallVec<[Raw<'c>; 16]>,
 ) {
     let my_index = out.len();
     out.push(Raw { cfg, id: Arc::from(id.as_str()), parent, depth });
@@ -211,6 +214,9 @@ struct Compiler<'a, 'c> {
     user_actions: Option<&'a HashSet<String>>,
     transitions: Vec<Transition>,
     warnings: Vec<ConfigWarning>,
+    /// Interned exact descriptors by key; `event_index` maps them back once there are more
+    /// than [`super::EVENT_SCAN_LIMIT`].
+    event_names: SmallVec<[smol_str::SmolStr; 4]>,
     event_index: FastMap<smol_str::SmolStr, u32>,
     has_always: bool,
 }
@@ -221,12 +227,46 @@ impl Compiler<'_, '_> {
     }
 
     fn child_by_key(&self, parent: StateId, key: &str) -> Option<StateId> {
-        self.children.get(&(parent, key)).copied()
+        if !self.children.is_empty() {
+            return self.children.get(&(parent, key)).copied();
+        }
+        // Pre-order: the parent's subtree follows it, deeper than the parent.
+        let depth = self.raws.get(parent.index())?.depth;
+        self.raws[parent.index() + 1..]
+            .iter()
+            .take_while(|r| r.depth > depth)
+            .position(|r| r.parent == Some(parent) && r.cfg.key == key)
+            .map(|i| StateId::from_index(parent.index() + 1 + i))
     }
 
     /// Walk a dotted relative path (`a.b.c`) down from `scope`.
     fn descend(&self, scope: StateId, path: &str) -> Option<StateId> {
         path.split('.').try_fold(scope, |cur, key| self.child_by_key(cur, key))
+    }
+
+    /// The key of an exact event descriptor, interning it on first sight.
+    fn intern_event(&mut self, descriptor: &smol_str::SmolStr) -> Result<u32> {
+        let known = if self.event_index.is_empty() {
+            self.event_names.iter().position(|n| n == descriptor)
+        } else {
+            self.event_index.get(descriptor.as_str()).map(|&k| k as usize)
+        };
+        if let Some(k) = known {
+            // Keys are below `u32::MAX` by construction.
+            return u32::try_from(k).map_err(|_| Error::LimitExceeded("too many events".into()));
+        }
+        let next = u32::try_from(self.event_names.len())
+            .map_err(|_| Error::LimitExceeded("too many distinct event types".into()))?;
+        self.event_names.push(descriptor.clone());
+        if self.event_names.len() > super::EVENT_SCAN_LIMIT {
+            if self.event_index.is_empty() {
+                let names = self.event_names.iter().zip(0..);
+                self.event_index = names.map(|(n, k)| (n.clone(), k)).collect();
+            } else {
+                self.event_index.insert(descriptor.clone(), next);
+            }
+        }
+        Ok(next)
     }
 
     fn compile_state(&mut self, sid: StateId, raw: &Raw<'_>) -> Result<StateNode> {
@@ -427,14 +467,7 @@ impl Compiler<'_, '_> {
                 }
             }
         } else {
-            let key = if let Some(&k) = self.event_index.get(descriptor.as_str()) {
-                k
-            } else {
-                let next = u32::try_from(self.event_index.len())
-                    .map_err(|_| Error::LimitExceeded("too many distinct event types".into()))?;
-                self.event_index.insert(descriptor.clone(), next);
-                next
-            };
+            let key = self.intern_event(&descriptor)?;
             match out.on_exact.iter_mut().find(|(k, _)| *k == key) {
                 Some((_, ts)) => ts.extend(compiled),
                 None => out.on_exact.push((key, compiled.into_iter().collect())),

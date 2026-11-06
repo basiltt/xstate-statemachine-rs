@@ -33,8 +33,9 @@ pub struct Receipt {
     pub changed: bool,
     /// Whether no transition matched the delivered event.
     pub unhandled: bool,
-    /// User actions executed while processing the event and its consequences, in order.
-    pub actions: Vec<Arc<str>>,
+    /// User actions executed while processing the event and its consequences, in order
+    /// (inline, without allocating, for up to two actions).
+    pub actions: crate::engine::ActionList,
     /// Status after processing.
     pub status: Status,
     /// A failure that did not undo the step (see [`StepReport::soft_error`]): the event was
@@ -218,17 +219,22 @@ impl<C: Context> SyncInterpreter<C> {
         self.logic.validate(&self.machine)?;
         let mut effects = std::mem::take(&mut self.effects);
         effects.clear();
-        let started =
-            engine::start_into(&self.machine, &self.logic, &self.input, false, &mut effects);
-        let (state, mut report) = match started {
-            Ok(started) => started,
+        let started = engine::start_into(
+            &self.machine,
+            &self.logic,
+            &self.input,
+            false,
+            &mut effects,
+            &mut self.state,
+        );
+        let mut report = match started {
+            Ok(report) => report,
             Err(err) => {
                 effects.clear();
                 self.effects = effects;
                 return Err(err);
             }
         };
-        self.state = Some(state);
         self.apply_effects(&mut effects);
         self.effects = effects;
         report.soft_error = self.soft_error.take();

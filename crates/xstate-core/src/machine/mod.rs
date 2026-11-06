@@ -20,6 +20,10 @@ mod source;
 
 pub use builtin::{Builtin, Delay, SendTarget};
 
+/// Up to this many distinct event types, event keys are found by comparing names rather than
+/// through `MachineData::event_index`.
+pub(crate) const EVENT_SCAN_LIMIT: usize = 8;
+
 /// A compiled statechart. Cheap to clone (it is an `Arc` inside).
 #[derive(Debug, Clone)]
 pub struct Machine {
@@ -53,9 +57,10 @@ pub(crate) struct MachineData {
     /// Exact event types declared on any state, sorted; derived from `event_index` on first
     /// use (strict mode, typed machines).
     pub(crate) declared_events: std::sync::OnceLock<Vec<String>>,
-    /// Exact event descriptor → interned key used by every node's `on_exact` table.
+    /// Exact event descriptor → interned key used by every node's `on_exact` table; built only
+    /// for machines with more than [`EVENT_SCAN_LIMIT`] event types (fewer are scanned).
     pub(crate) event_index: FastMap<smol_str::SmolStr, u32>,
-    /// The keys of `event_index` by key.
+    /// The interned exact event descriptors, by key.
     pub(crate) event_names: SmallVec<[smol_str::SmolStr; 4]>,
     pub(crate) hash: std::sync::OnceLock<String>,
     /// The configuration document as parsed, returned by [`Machine::to_json`].
@@ -430,9 +435,8 @@ impl Machine {
     #[must_use]
     pub fn event_key(&self, event_type: &str) -> Option<u32> {
         // A machine declares a handful of event types: comparing them beats hashing.
-        const SCAN_LIMIT: usize = 8;
         let names = &self.inner.event_names;
-        if names.len() <= SCAN_LIMIT {
+        if names.len() <= EVENT_SCAN_LIMIT {
             let found = names.iter().position(|n| n.as_str() == event_type);
             #[allow(clippy::cast_possible_truncation)] // keys are u32 by construction
             return found.map(|i| i as u32);
@@ -447,8 +451,8 @@ impl Machine {
             // Every exact descriptor a state declares, minus the engine's own `xstate.*` events.
             let mut declared: Vec<String> = self
                 .inner
-                .event_index
-                .keys()
+                .event_names
+                .iter()
                 .filter(|d| !d.starts_with("xstate."))
                 .map(ToString::to_string)
                 .collect();

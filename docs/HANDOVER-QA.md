@@ -155,28 +155,43 @@ integrating, gating and committing. Commits are on `main` in order:
 scenarios S1–S7 (`benchmarks/competitors/adapters/xstate_sync.py` in the Python repo) and the
 Python per-operation numbers come from its `results.json` measured on 0.12.0:
 
-| Scenario | Rust p50 | Python 0.12.0 | Speed-up | 100× target |
-|---|---|---|---|---|
-| S1 flat toggle, one `send` | 168 ns | 12.35 µs | 74× | 124 ns |
-| S2 guarded counter (guard + assign), one `send` | 268 ns | 10.54 µs | 39× | 105 ns |
-| S3 two-level hierarchy, `CROSS` + `DEEP` | 354 ns | 28.37 µs | 80× | 284 ns |
-| S4 two parallel regions, `TOGGLE1` + `TOGGLE2` | 412 ns | 37.86 µs | 92× | 379 ns |
-| S5 build + `new` + `start` (S3 machine) | 6.87 µs | 79.0 µs | 11.5× | 790 ns |
-| S6 per instance: `new` + `start` + one `send` | 575 ns | 21.9 µs | 38× | 219 ns |
-| S7 `SimulatedClock`, build, start, 1 ms timer fires | 5.68 µs | 118 µs | 21× | 1.18 µs |
+Second pass (2026-11-06), measured interleaved with the first pass's tree in one session that
+ran ~15 % slower than the first pass's recording (best of three / five runs):
 
-The owner's goal is 100× on every scenario. Dispatch (S1, S3, S4) is within 1.1–1.4× of it;
-S2, S6, S5 and S7 are not. Known remaining levers, in order of expected pay-off: (1) S2 — the
-public `Receipt.actions` is a `Vec`, one allocation per send whenever an action runs, and the
-guard/action look `count` up in a hashed JSON map; a `SmallVec`/arena for action names and a
-typed context (`C: Context` struct instead of `DynContext`) remove both; (2) S6 — the per-interpreter
-effect buffer allocation exists because every exited state emits `CancelTimers`; emitting it only
-for states with `after` timers removes it (but a hand-crafted snapshot naming a timer on a state
-without `after` would then never be cancelled — decide); (3) S5/S7 — about half of construction is
-~60 short-lived allocations through the owned `MachineConfig` (≈50–100 ns each on the Windows
-system allocator); a direct parse-and-compile path that bypasses `MachineConfig`, or a bump
-allocator for compilation, is the large remaining rewrite; also `Machine::to_json()` now re-parses
-stored compact text instead of cloning a `Value`.
+| Scenario | First pass | This pass | Python 0.12.0 | Speed-up | 100× target |
+|---|---|---|---|---|---|
+| S1 flat toggle, one `send` | 196 ns | 156 ns | 12.35 µs | 79× | 124 ns |
+| S2 guarded counter (guard + action), one `send` | 282 ns | 215 ns | 10.54 µs | 49× | 105 ns |
+| S3 two-level hierarchy, `CROSS` + `DEEP` | 368 ns | 368 ns | 28.37 µs | 77× | 284 ns |
+| S4 two parallel regions, `TOGGLE1` + `TOGGLE2` | 515 ns | 481 ns | 37.86 µs | 79× | 379 ns |
+| S5 build + `new` + `start` (S3 machine) | 8.96 µs | 7.95 µs | 79.0 µs | 9.9× | 790 ns |
+| S6 per instance: `new` + `start` + one `send` | 738 ns | 383 ns | 21.9 µs | 57× | 219 ns |
+| S7 `SimulatedClock`, build, start, 1 ms timer fires | 6.38 µs | 4.82 µs | 118 µs | 24× | 1.18 µs |
+
+`budgets.json` keeps, per benchmark, the lower of the first pass's recording (quieter session:
+S3 354 ns, S4 412 ns, S5 6.87 µs) and this pass's best. Done in the second pass: `Receipt` /
+`StepReport` `actions` became `ActionList` (`SmallVec<[Arc<str>; 2]>`, no allocation per S2
+send); `CancelTimers` is emitted only for exited states with `after` (restore now refuses a
+deadline on a state without `after`), so S6 and plain sends allocate and emit nothing; the logic
+registry scans names instead of hashing (no hash-map seeding per `MachineLogic`); single-transition
+exit sets are appended without searching and planned entry sets borrowed; `start` builds the
+state in place and skips `settle` when nothing can settle; compilation scans event names and
+children for small machines (61 → 58 allocations for S3's machine). Checked and not a cost: the
+S2 self-target without `reenter` exits and enters nothing; the 1-key JSON context lookup takes
+`indexmap`'s single-entry path, no hashing.
+
+Remaining levers, in order of expected pay-off: (1) S5/S7 — 58 allocations per build, ~38 of
+them the owned `MachineConfig`; a direct value-to-arena compile path with a fallback to the full
+parser (and a differential test against it over every conformance case) is the large rewrite,
+worth ~2× on S5/S7; the public `Vec`/`Arc<str>` fields of `StateNode` / `Transition` keep ~20
+compile allocations even then. (2) S2/S1 — a dedicated single-transition fast path that skips the
+general microstep (no conflict resolution, no sets, no snapshot-change bookkeeping) for machines
+with plans, no parallel states and no `always`; and a `Receipt` that does not clone the machine
+`Arc` (API change: `state_ids()` / `matches()` would take the machine). (3) S6 — the interpreter
+is ~830 bytes (each JSON `Value` is 80 bytes with `preserve_order`); boxing rarely used parts
+(`input`, `output`, the deferred queue) would cut moves and drops. A process-wide cache of
+compiled machines keyed by the document would make S5/S7 trivially fast but measures a hash
+lookup, not construction; not done.
 
 `scripts/perf_gate.py` compares each median with `baseline_p50_ns × allowed_slowdown` (1.25),
 prints the speed-up over Python and the distance to 100×, and fails on a regression;

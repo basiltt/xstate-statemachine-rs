@@ -30,11 +30,6 @@ impl StateSet {
     }
 
     #[inline]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
-    #[inline]
     pub(crate) fn is_disjoint(&self, other: &Self) -> bool {
         // Both sorted: merge-walk.
         let (mut i, mut j) = (0, 0);
@@ -54,10 +49,36 @@ impl StateSet {
         self.items.iter().copied()
     }
 
-    /// `true` when both sets hold the same states.
+    /// Members in document order, as a slice.
     #[inline]
-    pub(crate) fn same_members(&self, other: &Self) -> bool {
-        self.items == other.items
+    pub(crate) fn as_slice(&self) -> &[StateId] {
+        &self.items
+    }
+
+    /// Append `s`, which must sort after every member (members stay in document order).
+    #[inline]
+    fn push_last(&mut self, s: StateId) {
+        debug_assert!(self.items.last().is_none_or(|&last| last < s));
+        self.items.push(s);
+    }
+}
+
+/// An entry set: borrowed from the machine's precomputed plans, or built for this microstep.
+pub(crate) enum EntrySet<'m> {
+    /// The fixed entry set of a single transition (see [`Plans`]).
+    Planned(&'m [StateId]),
+    /// Computed from the transitions and the recorded history.
+    Built(StateSet),
+}
+
+impl EntrySet<'_> {
+    /// Members in document order.
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[StateId] {
+        match self {
+            Self::Planned(states) => states,
+            Self::Built(set) => set.as_slice(),
+        }
     }
 }
 
@@ -107,6 +128,10 @@ pub(crate) fn compute_exit_set<C>(
     state: &super::ActiveState<C>,
 ) -> StateSet {
     let mut out = StateSet::new(machine);
+    if let [tid] = transitions {
+        exit_set_of_one(machine, *tid, state, &mut out);
+        return out;
+    }
     for &tid in transitions {
         let t = machine.transition(tid);
         if t.targets.is_empty() {
@@ -129,6 +154,34 @@ pub(crate) fn compute_exit_set<C>(
         }
     }
     out
+}
+
+/// [`compute_exit_set`] of a single transition: the members come out in document order (the
+/// re-entered source precedes its subtree), so they are appended without searching.
+fn exit_set_of_one<C>(
+    machine: &Machine,
+    tid: TransitionId,
+    state: &super::ActiveState<C>,
+    out: &mut StateSet,
+) {
+    let t = machine.transition(tid);
+    if t.targets.is_empty() {
+        return;
+    }
+    let domain = match machine.plans() {
+        Some(plans) => plans.domain(tid),
+        None => transition_domain(machine, t, &state.history),
+    };
+    if t.reenter && Some(t.source) == domain {
+        out.push_last(t.source);
+    }
+    let (start, end) = match domain {
+        Some(d) => (d.index() + 1, machine.subtree_end(d)),
+        None => (0, usize::MAX),
+    };
+    for s in state.configuration.ones_in(start, end) {
+        out.push_last(StateId::from_index(s));
+    }
 }
 
 /// XState's `getTransitionDomain`. `None` means "above the root" (every active state exits).
@@ -211,15 +264,15 @@ fn history_default(machine: &Machine, h: StateId) -> Option<StateId> {
 
 /// XState's `computeEntrySet`. A single transition of a machine without history states has
 /// a fixed entry set, computed once per machine (see [`Plans`]).
-pub(crate) fn compute_entry_set(
-    machine: &Machine,
+pub(crate) fn compute_entry_set<'m>(
+    machine: &'m Machine,
     transitions: &[TransitionId],
     history: &super::HistoryMap,
-) -> StateSet {
+) -> EntrySet<'m> {
     if let ([tid], Some(plans)) = (transitions, machine.plans()) {
-        return StateSet { items: smallvec::SmallVec::from_slice(plans.entry(*tid)) };
+        return EntrySet::Planned(plans.entry(*tid));
     }
-    compute_entry_set_dynamic(machine, transitions, history)
+    EntrySet::Built(compute_entry_set_dynamic(machine, transitions, history))
 }
 
 fn compute_entry_set_dynamic(

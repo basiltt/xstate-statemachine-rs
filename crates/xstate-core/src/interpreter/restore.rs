@@ -163,6 +163,14 @@ impl<C: Context> SyncInterpreter<C> {
                     from: "snapshot.deadlines".into(),
                 });
             };
+            // Only a state with `after` entries owns timers: the engine cancels a state's
+            // timers on exit only for such a state.
+            if interp.machine.node(owner).after.is_empty() {
+                return Err(Error::Snapshot(format!(
+                    "deadline for state '{}', which declares no `after` timer",
+                    d.state_id
+                )));
+            }
             let delay_ms = d.delay_ms.as_f64().unwrap_or(0.0);
             let remaining = match options.restart_timers {
                 RestartTimers::Parked => continue,

@@ -95,6 +95,22 @@ fn corrupt_event_records_refuse_the_restore() {
     assert_eq!(i.state_ids(), ["m.b"]);
 }
 
+/// Only a state that declares `after` owns timers (the engine cancels timers on exit only for
+/// such a state), so a deadline naming another state is a corrupt snapshot.
+#[test]
+fn deadline_of_a_state_without_after_refuses_the_restore() {
+    let clock = SimulatedClock::new();
+    let mut i =
+        SyncInterpreter::with_clock(timed(), MachineLogic::dynamic(), Arc::new(clock.clone()));
+    i.start().unwrap();
+    let mut snap = i.snapshot().unwrap();
+    assert_eq!(snap.deadlines.len(), 2);
+    snap.deadlines[0].state_id = "m.b".into();
+    let err = restore(&snap).expect_err("refused");
+    assert_eq!(err.kind(), ErrorKind::Snapshot, "{err}");
+    assert!(err.to_string().contains("m.b"), "{err}");
+}
+
 /// Each due timer is re-checked before it runs: one cancelled by an earlier timer of the
 /// same batch does not fire. Non-finite clock moves are refused.
 #[test]

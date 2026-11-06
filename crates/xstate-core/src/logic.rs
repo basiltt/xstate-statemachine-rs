@@ -5,7 +5,6 @@
 //! [`Machine`], so a typo surfaces at build time rather than when
 //! the transition is first taken.
 
-use foldhash::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -120,7 +119,11 @@ impl<C> fmt::Debug for ServiceImpl<C> {
     }
 }
 
-fn sorted_names<V>(map: &HashMap<String, V>) -> Vec<&str> {
+mod registry;
+
+use registry::Registry;
+
+fn sorted_names<V>(map: &Registry<V>) -> Vec<&str> {
     let mut v: Vec<&str> = map.keys().map(String::as_str).collect();
     v.sort_unstable();
     v
@@ -128,23 +131,23 @@ fn sorted_names<V>(map: &HashMap<String, V>) -> Vec<&str> {
 
 /// Registry of implementations for one machine.
 pub struct MachineLogic<C> {
-    actions: HashMap<String, ActionFn<C>>,
+    actions: Registry<ActionFn<C>>,
     /// Some registered action is spelled like a built-in (`log`, `cancel`, ...): the engine
     /// then looks the built-in's name up here first (user logic wins over built-ins).
     shadows_builtin: bool,
-    guards: HashMap<String, GuardFn<C>>,
-    services: HashMap<String, ServiceImpl<C>>,
-    delays: HashMap<String, DelayImpl<C>>,
+    guards: Registry<GuardFn<C>>,
+    services: Registry<ServiceImpl<C>>,
+    delays: Registry<DelayImpl<C>>,
 }
 
 impl<C> Default for MachineLogic<C> {
     fn default() -> Self {
         Self {
-            actions: HashMap::default(),
+            actions: Registry::default(),
             shadows_builtin: false,
-            guards: HashMap::default(),
-            services: HashMap::default(),
-            delays: HashMap::default(),
+            guards: Registry::default(),
+            services: Registry::default(),
+            delays: Registry::default(),
         }
     }
 }
@@ -202,7 +205,7 @@ impl<C: Context> MachineLogic<C> {
         self
     }
 
-    /// Names of the registered actions, in no particular order.
+    /// Names of the registered actions, in registration order.
     pub fn action_names(&self) -> impl Iterator<Item = &str> + '_ {
         self.actions.keys().map(String::as_str)
     }

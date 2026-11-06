@@ -49,7 +49,7 @@ pub mod typed;
 
 pub use clock::{Clock, RealClock, SimulatedClock};
 pub use context::{Context, DynContext};
-pub use engine::{ActiveState, Effect, Status, StepReport};
+pub use engine::{ActionList, ActiveState, Effect, Status, StepReport};
 pub use error::{Error, ErrorKind, Result};
 pub use event::{Event, EventOrigin};
 pub use ids::{StateId, TransitionId};

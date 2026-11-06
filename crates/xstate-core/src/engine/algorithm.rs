@@ -25,9 +25,13 @@ pub(super) fn start<C: Context>(cx: &mut Ctx<'_, C>) -> Result<()> {
     let mut to_enter = StateSet::new(machine);
     to_enter.insert(StateId::ROOT);
     add_descendants_to_enter(machine, StateId::ROOT, &cx.state.history, &mut to_enter);
-    enter_states(cx, &to_enter, &init, false)?;
+    enter_states(cx, to_enter.as_slice(), &init, false)?;
     exit_all_when_done(cx, &init)?;
     cx.report.microsteps += 1;
+    if !cx.machine.has_always() && cx.state.internal_queue.is_empty() {
+        // Nothing eventless to select and nothing raised: `settle` would stop at once.
+        return Ok(());
+    }
     settle(cx, &init)
 }
 
@@ -141,21 +145,22 @@ fn microstep<C: Context>(
     let early_entry = (eventless && !records_history)
         .then(|| compute_entry_set(machine, &filtered, &cx.state.history));
     let context_before = match &early_entry {
-        Some(entry) if entry.same_members(&to_exit) => context_image(cx),
+        Some(entry) if entry.as_slice() == to_exit.as_slice() => context_image(cx),
         _ => None,
     };
 
-    exit_states(cx, &to_exit, event)?;
+    exit_states(cx, to_exit.as_slice(), event)?;
     for &tid in &filtered {
         run_actions(cx, &machine.transition(tid).actions, event)?;
     }
     let to_enter =
         early_entry.unwrap_or_else(|| compute_entry_set(machine, &filtered, &cx.state.history));
+    let (to_exit, to_enter) = (to_exit.as_slice(), to_enter.as_slice());
     // XState keeps the previous snapshot -- and the order of its states -- when the microstep
     // re-enters exactly what it exited and records no history.
-    let preserved = !records_history && to_enter.same_members(&to_exit);
-    enter_states(cx, &to_enter, event, preserved)?;
-    note_snapshot_change(cx, preserved, &to_exit, &to_enter, context_before);
+    let preserved = !records_history && to_enter == to_exit;
+    enter_states(cx, to_enter, event, preserved)?;
+    note_snapshot_change(cx, preserved, to_exit, to_enter, context_before);
     exit_all_when_done(cx, event)
 }
 
@@ -177,13 +182,13 @@ fn context_image<C: Context>(cx: &mut Ctx<'_, C>) -> Option<Value> {
 fn note_snapshot_change<C: Context>(
     cx: &mut Ctx<'_, C>,
     preserved: bool,
-    to_exit: &StateSet,
-    to_enter: &StateSet,
+    to_exit: &[StateId],
+    to_enter: &[StateId],
     context_before: Option<Value>,
 ) {
     let machine = cx.machine;
     let changed = !preserved
-        || to_exit.iter().chain(to_enter.iter()).any(|s| !machine.node(s).invokes.is_empty())
+        || to_exit.iter().chain(to_enter).any(|&s| !machine.node(s).invokes.is_empty())
         || context_before.is_some_and(|before| {
             serde_json::to_value(&cx.state.context).ok().as_ref() != Some(&before)
         });
@@ -194,7 +199,7 @@ fn note_snapshot_change<C: Context>(
 
 // ----------------------------------------------------------------------------- exit
 
-fn exit_states<C: Context>(cx: &mut Ctx<'_, C>, to_exit: &StateSet, event: &Event) -> Result<()> {
+fn exit_states<C: Context>(cx: &mut Ctx<'_, C>, to_exit: &[StateId], event: &Event) -> Result<()> {
     let machine = cx.machine;
     if to_exit.is_empty() {
         return Ok(());
@@ -202,7 +207,7 @@ fn exit_states<C: Context>(cx: &mut Ctx<'_, C>, to_exit: &StateSet, event: &Even
     // Record history before anything leaves the configuration. The record is keyed by the
     // exited state and holds every active descendant (the Python snapshot layout); the
     // shallow/deep view a history node needs is derived from it on restore.
-    for s in to_exit.iter().filter(|_| machine.has_history()) {
+    for &s in to_exit.iter().filter(|_| machine.has_history()) {
         if machine.node(s).history_children.is_empty() {
             continue;
         }
@@ -212,9 +217,13 @@ fn exit_states<C: Context>(cx: &mut Ctx<'_, C>, to_exit: &StateSet, event: &Even
         cx.state.mutations += 1;
     }
     // Reverse document order.
-    for s in to_exit.iter().rev() {
+    for &s in to_exit.iter().rev() {
         let node = machine.node(s);
-        cx.effects.push(Effect::CancelTimers(s));
+        // Only an `after` timer has an owning state, and only a state with `after` entries
+        // arms one (a restored snapshot's deadlines are checked to belong to such a state).
+        if !node.after.is_empty() {
+            cx.effects.push(Effect::CancelTimers(s));
+        }
         run_actions(cx, &node.exit, event)?;
         for inv in &node.invokes {
             cx.effects.push(Effect::StopActor(inv.id.clone()));
@@ -230,13 +239,14 @@ fn exit_states<C: Context>(cx: &mut Ctx<'_, C>, to_exit: &StateSet, event: &Even
 /// snapshot, so their position in its state list does not change.
 fn enter_states<C: Context>(
     cx: &mut Ctx<'_, C>,
-    to_enter: &StateSet,
+    to_enter: &[StateId],
     event: &Event,
     keep_order: bool,
 ) -> Result<()> {
     let machine = cx.machine;
-    let mut completed = StateSet::new(machine);
-    for s in to_enter.iter() {
+    // Parallel states completed in this pass; only needed once a final state is entered.
+    let mut completed: Option<StateSet> = None;
+    for &s in to_enter {
         if cx.state.status != Status::Running {
             break;
         }
@@ -253,7 +263,7 @@ fn enter_states<C: Context>(
         run_actions(cx, &node.entry, event)?;
         arm_entry_effects(cx, s, event)?;
         if node.is_final() {
-            final_state_entered(cx, s, &mut completed);
+            final_state_entered(cx, s, completed.get_or_insert_with(StateSet::default));
         }
     }
     Ok(())
