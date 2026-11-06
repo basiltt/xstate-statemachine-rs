@@ -8,6 +8,7 @@ use foldhash::HashMap as FastMap;
 use serde_json::{Map, Value};
 use smallvec::SmallVec;
 
+use super::assemble::{self, Finished};
 use super::builtin::{self, ChooseBranch, Delay};
 use super::{
     ActionDef, AfterDef, Guard, InvokeDef, MachineData, NodeKind, StateNode, Transition, Trigger,
@@ -20,150 +21,70 @@ use crate::error::{Error, Result};
 use crate::event::names;
 use crate::ids::{StateId, TransitionId};
 
-/// Flattened view of one config node during compilation.
-struct Raw<'c> {
+/// Position and naming of one state in the document-order arena, shared by the compiler of
+/// parsed configurations and the direct compiler of JSON values (`super::direct`).
+pub(super) struct Skel<'c> {
+    /// Key under the parent's `states`.
+    pub(super) key: &'c str,
+    /// Full dotted id.
+    pub(super) id: Arc<str>,
+    pub(super) parent: Option<StateId>,
+    pub(super) depth: u32,
+}
+
+/// One config node during compilation.
+struct Raw<'r, 'c> {
     cfg: &'c StateConfig,
-    id: Arc<str>,
+    skel: &'r Skel<'c>,
+    /// Full dotted id (`skel.id`).
+    id: &'r str,
     parent: Option<StateId>,
-    depth: u32,
 }
 
 pub(super) fn compile(
     config: MachineConfig,
     user_actions: Option<&HashSet<String>>,
 ) -> Result<MachineData> {
-    let mut raws: SmallVec<[Raw<'_>; 16]> = SmallVec::with_capacity(count_states(&config.root));
+    let count = count_states(&config.root);
+    let mut cfgs: SmallVec<[&StateConfig; 16]> = SmallVec::with_capacity(count);
+    let mut skels: SmallVec<[Skel<'_>; 16]> = SmallVec::with_capacity(count);
     let mut id = config.root.key.clone();
-    flatten(&config.root, &mut id, None, 0, &mut raws);
-
-    let mut ids: FastMap<Arc<str>, StateId> = FastMap::default();
-    ids.reserve(raws.len());
-    let mut custom_ids: HashMap<String, StateId> = HashMap::new();
-    for (i, raw) in raws.iter().enumerate() {
-        let sid = StateId::from_index(i);
-        ids.insert(Arc::clone(&raw.id), sid);
-        if let Some(custom) = &raw.cfg.custom_id
-            && custom_ids.insert(custom.clone(), sid).is_some()
-        {
-            return Err(Error::config(&*raw.id, format!("duplicate custom id `#{custom}`")));
-        }
-    }
-
-    // Small machines find a child by scanning the flattened states; larger ones index them.
-    let mut children: FastMap<(StateId, &str), StateId> = FastMap::default();
-    if raws.len() > CHILD_SCAN_LIMIT {
-        children.reserve(raws.len());
-        for (i, raw) in raws.iter().enumerate() {
-            if let Some(parent) = raw.parent {
-                children.insert((parent, raw.cfg.key.as_str()), StateId::from_index(i));
-            }
-        }
-    }
-
-    let mut cx = Compiler {
-        raws: &raws,
-        ids: &ids,
-        children: &children,
-        custom_ids: &custom_ids,
-        machine_id: &config.root.key,
-        strict_targets: config.policies.strict_targets,
-        strict_config: config.policies.strict_config,
+    flatten(&config.root, &mut id, None, 0, &mut cfgs, &mut skels);
+    let (ids, custom_ids) = assemble::index_ids(&skels, |i| cfgs[i].custom_id.as_deref())?;
+    let children = assemble::index_children(&skels);
+    let mut cx = Compiler::new(
+        &skels,
+        (&ids, &children, &custom_ids),
+        &config.root.key,
+        &config.policies,
         user_actions,
-        transitions: Vec::new(),
-        warnings: config.warnings.clone(),
-        event_names: SmallVec::new(),
-        event_index: FastMap::default(),
-        has_always: false,
-    };
-
-    let mut states: Vec<StateNode> = Vec::with_capacity(raws.len());
-    for (i, raw) in raws.iter().enumerate() {
-        let sid = StateId::from_index(i);
-        states.push(cx.compile_state(sid, raw)?);
+    );
+    cx.warnings.clone_from(&config.warnings);
+    let mut states: Vec<StateNode> = Vec::with_capacity(skels.len());
+    for (i, (cfg, skel)) in cfgs.iter().zip(&skels).enumerate() {
+        let raw = Raw { cfg, skel, id: &skel.id, parent: skel.parent };
+        states.push(cx.compile_state(StateId::from_index(i), &raw)?);
     }
-
-    // Children, subtree ends and history children from the flattened order.
-    for i in (0..raws.len()).rev() {
-        let sid = StateId::from_index(i);
-        let mut end = i + 1;
-        for (j, r) in raws.iter().enumerate().skip(i + 1) {
-            if r.depth <= raws[i].depth {
-                break;
-            }
-            end = j + 1;
-        }
-        states[i].subtree_end =
-            u32::try_from(end).map_err(|_| Error::LimitExceeded("too many states".into()))?;
-        if let Some(parent) = raws[i].parent {
-            states[parent.index()].children.insert(0, sid);
-            if states[i].is_history() {
-                states[parent.index()].history_children.insert(0, sid);
-            }
-        }
-    }
-
-    cx.validate(&states)?;
-    index_subtree_events(&mut states, cx.event_names.len());
-
-    let Compiler { transitions, warnings, has_always, event_index, event_names, .. } = cx;
-    let mut leaf_mask = crate::engine::bits::StateBits::with_capacity(states.len());
-    for (i, node) in states.iter().enumerate() {
-        leaf_mask.set(i, node.is_leaf());
-    }
-    let has_history = states.iter().any(StateNode::is_history);
-    let has_parallel = states.iter().any(StateNode::is_parallel);
-    let references_logic = states.iter().any(|s| {
-        !s.entry.is_empty() || !s.exit.is_empty() || !s.invokes.is_empty() || !s.after.is_empty()
-    }) || transitions
-        .iter()
-        .any(|t| !t.actions.is_empty() || t.guard.is_some());
-    Ok(MachineData {
+    let parts = assemble::Parts {
         id,
-        states,
-        transitions,
-        ids,
-        custom_ids,
         context: config.context,
         version: config.version,
         policies: config.policies,
-        warnings,
-        has_always,
-        has_history,
-        has_parallel,
-        references_logic,
-        leaf_mask,
-        plans: std::sync::OnceLock::new(),
-        declared_events: std::sync::OnceLock::new(),
-        event_index,
-        event_names,
-        hash: std::sync::OnceLock::new(),
         source: super::source::Source::Document(config.source),
-    })
+    };
+    let finished = finish(cx, states)?;
+    Ok(assemble::assemble(finished, ids, custom_ids, parts))
 }
 
-/// Record on every state which exact event keys its subtree handles, and whether it holds
-/// wildcard handlers, so that selection can skip subtrees that cannot match an event. States
-/// are in pre-order, so walking them backwards visits every child before its parent.
-fn index_subtree_events(states: &mut [StateNode], key_count: usize) {
-    for node in states.iter_mut() {
-        let mut keys = crate::engine::bits::StateBits::with_capacity(key_count);
-        for (key, _) in &node.on_exact {
-            keys.set(*key as usize, true);
-        }
-        node.subtree_events = keys;
-        node.subtree_wildcards = !node.on_partial.is_empty() || !node.on_wildcard.is_empty();
-    }
-    for i in (1..states.len()).rev() {
-        let Some(parent) = states[i].parent else { continue };
-        let (keys, wildcards) = (states[i].subtree_events.clone(), states[i].subtree_wildcards);
-        let parent = &mut states[parent.index()];
-        parent.subtree_events.union_with(&keys);
-        parent.subtree_wildcards |= wildcards;
-    }
+/// Complete the compiled states (children, subtree ends, history children, event index) and
+/// validate them.
+pub(super) fn finish(cx: Compiler<'_, '_>, mut states: Vec<StateNode>) -> Result<Finished> {
+    assemble::link_children(cx.skels, &mut states)?;
+    cx.validate(&states)?;
+    assemble::index_subtree_events(&mut states, cx.event_names.len());
+    let Compiler { transitions, warnings, has_always, event_index, event_names, .. } = cx;
+    Ok(Finished { states, transitions, warnings, has_always, event_index, event_names })
 }
-
-/// Up to this many states, children are looked up by scanning instead of through an index.
-const CHILD_SCAN_LIMIT: usize = 32;
 
 /// Number of states in the subtree of `cfg`, itself included.
 fn count_states(cfg: &StateConfig) -> usize {
@@ -177,33 +98,44 @@ fn flatten<'c>(
     id: &mut String,
     parent: Option<StateId>,
     depth: u32,
-    out: &mut SmallVec<[Raw<'c>; 16]>,
+    cfgs: &mut SmallVec<[&'c StateConfig; 16]>,
+    skels: &mut SmallVec<[Skel<'c>; 16]>,
 ) {
-    let my_index = out.len();
-    out.push(Raw { cfg, id: Arc::from(id.as_str()), parent, depth });
-    let me = StateId::from_index(my_index);
+    let me = StateId::from_index(skels.len());
+    cfgs.push(cfg);
+    skels.push(Skel { key: &cfg.key, id: Arc::from(id.as_str()), parent, depth });
     let len = id.len();
     for child in &cfg.states {
         id.push('.');
         id.push_str(&child.key);
-        flatten(child, id, Some(me), depth + 1, out);
+        flatten(child, id, Some(me), depth + 1, cfgs, skels);
         id.truncate(len);
     }
 }
 
 /// Per-state transition tables under construction.
 #[derive(Default)]
-struct Handlers {
+pub(super) struct Handlers {
     on_exact: SmallVec<[(u32, SmallVec<[TransitionId; 2]>); 4]>,
     on_partial: Vec<(String, SmallVec<[TransitionId; 2]>)>,
     on_wildcard: SmallVec<[TransitionId; 2]>,
-    always: SmallVec<[TransitionId; 2]>,
-    after: Vec<AfterDef>,
+    pub(super) always: SmallVec<[TransitionId; 2]>,
+    pub(super) after: Vec<AfterDef>,
+    /// The timer event type of each `after` entry, interned (shared with its transitions).
+    pub(super) after_events: SmallVec<[smol_str::SmolStr; 1]>,
     invokes: Vec<InvokeDef>,
 }
 
-struct Compiler<'a, 'c> {
-    raws: &'a [Raw<'c>],
+/// The id indexes the compiler resolves targets against: full ids, children by key (large
+/// machines only), custom ids.
+pub(super) type Indexes<'a, 'c> = (
+    &'a FastMap<Arc<str>, StateId>,
+    &'a FastMap<(StateId, &'c str), StateId>,
+    &'a HashMap<String, StateId>,
+);
+
+pub(super) struct Compiler<'a, 'c> {
+    skels: &'a [Skel<'c>],
     ids: &'a FastMap<Arc<str>, StateId>,
     children: &'a FastMap<(StateId, &'c str), StateId>,
     custom_ids: &'a HashMap<String, StateId>,
@@ -218,24 +150,55 @@ struct Compiler<'a, 'c> {
     /// than [`super::EVENT_SCAN_LIMIT`].
     event_names: SmallVec<[smol_str::SmolStr; 4]>,
     event_index: FastMap<smol_str::SmolStr, u32>,
-    has_always: bool,
+    pub(super) has_always: bool,
+}
+
+impl<'a, 'c> Compiler<'a, 'c> {
+    pub(super) fn new(
+        skels: &'a [Skel<'c>],
+        (ids, children, custom_ids): Indexes<'a, 'c>,
+        machine_id: &'a str,
+        policies: &crate::config::Policies,
+        user_actions: Option<&'a HashSet<String>>,
+    ) -> Self {
+        Self {
+            skels,
+            ids,
+            children,
+            custom_ids,
+            machine_id,
+            strict_targets: policies.strict_targets,
+            strict_config: policies.strict_config,
+            user_actions,
+            transitions: Vec::new(),
+            warnings: Vec::new(),
+            event_names: SmallVec::new(),
+            event_index: FastMap::default(),
+            has_always: false,
+        }
+    }
+
+    /// Reserve room for `n` more transitions.
+    pub(super) fn reserve_transitions(&mut self, n: usize) {
+        self.transitions.reserve(n);
+    }
 }
 
 impl Compiler<'_, '_> {
     fn id_of(&self, sid: StateId) -> &str {
-        &self.raws[sid.index()].id
+        &self.skels[sid.index()].id
     }
 
-    fn child_by_key(&self, parent: StateId, key: &str) -> Option<StateId> {
+    pub(super) fn child_by_key(&self, parent: StateId, key: &str) -> Option<StateId> {
         if !self.children.is_empty() {
             return self.children.get(&(parent, key)).copied();
         }
         // Pre-order: the parent's subtree follows it, deeper than the parent.
-        let depth = self.raws.get(parent.index())?.depth;
-        self.raws[parent.index() + 1..]
+        let depth = self.skels.get(parent.index())?.depth;
+        self.skels[parent.index() + 1..]
             .iter()
             .take_while(|r| r.depth > depth)
-            .position(|r| r.parent == Some(parent) && r.cfg.key == key)
+            .position(|r| r.parent == Some(parent) && r.key == key)
             .map(|i| StateId::from_index(parent.index() + 1 + i))
     }
 
@@ -245,7 +208,7 @@ impl Compiler<'_, '_> {
     }
 
     /// The key of an exact event descriptor, interning it on first sight.
-    fn intern_event(&mut self, descriptor: &smol_str::SmolStr) -> Result<u32> {
+    pub(super) fn intern_event(&mut self, descriptor: &smol_str::SmolStr) -> Result<u32> {
         let known = if self.event_index.is_empty() {
             self.event_names.iter().position(|n| n == descriptor)
         } else {
@@ -269,14 +232,11 @@ impl Compiler<'_, '_> {
         Ok(next)
     }
 
-    fn compile_state(&mut self, sid: StateId, raw: &Raw<'_>) -> Result<StateNode> {
+    fn compile_state(&mut self, sid: StateId, raw: &Raw<'_, '_>) -> Result<StateNode> {
         let cfg = raw.cfg;
         let kind = self.compile_kind(sid, raw)?;
         let mut handlers = Handlers::default();
         self.compile_handlers(sid, raw, &kind, &mut handlers)?;
-        let Handlers { on_exact, mut on_partial, on_wildcard, always, after, invokes } = handlers;
-        on_partial.sort_by_key(|(d, _)| std::cmp::Reverse(d.len()));
-
         let initial_key = if matches!(kind, NodeKind::Compound { .. }) {
             cfg.initial.as_deref().map(smol_str::SmolStr::new)
         } else {
@@ -293,35 +253,16 @@ impl Compiler<'_, '_> {
             self.compile_actions(sid, &cfg.exit, &format!("{}.exit", raw.id))?
         };
 
-        Ok(StateNode {
-            id: Arc::clone(&raw.id),
-            key: smol_str::SmolStr::new(&cfg.key),
-            parent: raw.parent,
-            children: Vec::new(),
-            depth: raw.depth,
-            kind,
-            subtree_end: 0,
-            on_exact,
-            on_partial,
-            on_wildcard,
-            always,
-            entry,
-            exit,
-            invokes,
-            after_events: after.iter().map(|a| smol_str::SmolStr::new(&a.event)).collect(),
-            after,
-            initial_key,
+        let meta = NodeMeta {
             output: cfg.output.clone(),
             meta: cfg.meta.clone(),
             description: cfg.description.clone(),
             tags: cfg.tags.clone(),
-            history_children: SmallVec::new(),
-            subtree_events: crate::engine::bits::StateBits::default(),
-            subtree_wildcards: false,
-        })
+        };
+        Ok(state_node(raw.skel, kind, handlers, (entry, exit), initial_key, meta))
     }
 
-    fn compile_kind(&mut self, sid: StateId, raw: &Raw<'_>) -> Result<NodeKind> {
+    fn compile_kind(&mut self, sid: StateId, raw: &Raw<'_, '_>) -> Result<NodeKind> {
         let cfg = raw.cfg;
         Ok(match &cfg.kind {
             StateKind::Atomic => NodeKind::Atomic,
@@ -331,7 +272,7 @@ impl Compiler<'_, '_> {
                 let key = cfg
                     .initial
                     .as_deref()
-                    .ok_or_else(|| Error::config(&*raw.id, "compound state needs `initial`"))?;
+                    .ok_or_else(|| Error::config(raw.id, "compound state needs `initial`"))?;
                 let initial = self.child_by_key(sid, key).ok_or_else(|| {
                     let children = cfg.states.iter().map(|c| c.key.as_str());
                     let hint = closest_key(key, children)
@@ -348,11 +289,11 @@ impl Compiler<'_, '_> {
             }
             StateKind::History { deep, target } => {
                 raw.parent
-                    .ok_or_else(|| Error::config(&*raw.id, "the root cannot be a history state"))?;
+                    .ok_or_else(|| Error::config(raw.id, "the root cannot be a history state"))?;
                 // A history `target` is a sibling path, resolved like a plain target written
                 // on the history node itself.
                 let target = match target {
-                    Some(t) => Some(self.resolve_target(sid, t, &raw.id)?),
+                    Some(t) => Some(self.resolve_target(sid, t, raw.id)?),
                     None => None,
                 };
                 NodeKind::History { deep: *deep, target }
@@ -364,7 +305,7 @@ impl Compiler<'_, '_> {
     fn compile_handlers(
         &mut self,
         sid: StateId,
-        raw: &Raw<'_>,
+        raw: &Raw<'_, '_>,
         kind: &NodeKind,
         out: &mut Handlers,
     ) -> Result<()> {
@@ -380,13 +321,13 @@ impl Compiler<'_, '_> {
                     "`onDone` is only valid on compound or parallel states",
                 ));
             }
-            self.add_event(sid, raw, &names::done_state(&raw.id), &cfg.on_done, out)?;
+            self.add_event(sid, raw, &names::done_state(raw.id), &cfg.on_done, out)?;
         }
         self.compile_invokes_and_always(sid, raw, out)
     }
 
     /// Delayed transitions become ordinary transitions on their (normalised) timer event.
-    fn compile_after(&mut self, sid: StateId, raw: &Raw<'_>, out: &mut Handlers) -> Result<()> {
+    fn compile_after(&mut self, sid: StateId, raw: &Raw<'_, '_>, out: &mut Handlers) -> Result<()> {
         for (raw_key, list) in &raw.cfg.after {
             let (delay, key) = Delay::parse_after_key(raw_key).map_err(|why| {
                 Error::config(
@@ -407,8 +348,9 @@ impl Compiler<'_, '_> {
                     ),
                 ));
             }
-            let event = names::after(&key, &raw.id);
-            self.add_event(sid, raw, &event, list, out)?;
+            let event = names::after(&key, raw.id);
+            let ty = self.add_event(sid, raw, &event, list, out)?;
+            out.after_events.push(ty);
             out.after.push(AfterDef { key, delay, event, raw_key: raw_key.clone() });
         }
         Ok(())
@@ -417,7 +359,7 @@ impl Compiler<'_, '_> {
     fn compile_invokes_and_always(
         &mut self,
         sid: StateId,
-        raw: &Raw<'_>,
+        raw: &Raw<'_, '_>,
         out: &mut Handlers,
     ) -> Result<()> {
         let cfg = raw.cfg;
@@ -440,7 +382,7 @@ impl Compiler<'_, '_> {
                 sid,
                 &Trigger::Always,
                 &cfg.always,
-                &raw.id,
+                raw.id,
             )?);
         }
         Ok(())
@@ -449,28 +391,37 @@ impl Compiler<'_, '_> {
     fn add_event(
         &mut self,
         sid: StateId,
-        raw: &Raw<'_>,
+        raw: &Raw<'_, '_>,
         descriptor: &str,
         list: &[TransitionConfig],
         out: &mut Handlers,
-    ) -> Result<()> {
+    ) -> Result<smol_str::SmolStr> {
         let descriptor = smol_str::SmolStr::new(names::normalize(descriptor));
         let compiled =
-            self.compile_transitions(sid, &Trigger::Event(descriptor.clone()), list, &raw.id)?;
+            self.compile_transitions(sid, &Trigger::Event(descriptor.clone()), list, raw.id)?;
+        self.file_event(&descriptor, compiled, out)?;
+        Ok(descriptor)
+    }
+
+    /// File the transitions compiled for `descriptor` under the matching table of `out`.
+    pub(super) fn file_event(
+        &mut self,
+        descriptor: &smol_str::SmolStr,
+        compiled: SmallVec<[TransitionId; 2]>,
+        out: &mut Handlers,
+    ) -> Result<()> {
         if descriptor == names::WILDCARD {
             out.on_wildcard.extend(compiled);
         } else if descriptor.ends_with(".*") {
-            match out.on_partial.iter_mut().find(|(d, _)| *d == descriptor) {
+            match out.on_partial.iter_mut().find(|(d, _)| d == descriptor) {
                 Some((_, ts)) => ts.extend(compiled),
-                None => {
-                    out.on_partial.push((descriptor.to_string(), compiled.into_iter().collect()));
-                }
+                None => out.on_partial.push((descriptor.to_string(), compiled)),
             }
         } else {
-            let key = self.intern_event(&descriptor)?;
+            let key = self.intern_event(descriptor)?;
             match out.on_exact.iter_mut().find(|(k, _)| *k == key) {
                 Some((_, ts)) => ts.extend(compiled),
-                None => out.on_exact.push((key, compiled.into_iter().collect())),
+                None => out.on_exact.push((key, compiled)),
             }
         }
         Ok(())
@@ -485,21 +436,13 @@ impl Compiler<'_, '_> {
     ) -> Result<SmallVec<[TransitionId; 2]>> {
         let mut out = SmallVec::new();
         for t in list {
-            let mut targets = Vec::with_capacity(t.targets.len());
-            for target in &t.targets {
-                let resolved = self.resolve_target(source, target, path)?;
-                if resolved == StateId::ROOT {
-                    return Err(Error::RootTarget { from: self.id_of(source).to_owned() });
-                }
-                targets.push(resolved);
-            }
+            let targets = self.resolve_targets(source, &t.targets, path)?;
             let actions = self.compile_actions(source, &t.actions, path)?;
             let guard = match &t.guard {
                 Some(g) => Some(self.compile_guard(source, g, path)?),
                 None => None,
             };
-            let tid = TransitionId::from_index(self.transitions.len());
-            self.transitions.push(Transition {
+            out.push(self.push_transition(Transition {
                 source,
                 trigger: trigger.clone(),
                 targets,
@@ -510,10 +453,34 @@ impl Compiler<'_, '_> {
                 forbidden: t.forbidden,
                 meta: t.meta.clone(),
                 description: t.description.clone(),
-            });
-            out.push(tid);
+            }));
         }
         Ok(out)
+    }
+
+    /// Resolve the targets written on `source`; the root is never a target.
+    pub(super) fn resolve_targets<T: AsRef<str>>(
+        &mut self,
+        source: StateId,
+        written: &[T],
+        path: &str,
+    ) -> Result<Vec<StateId>> {
+        let mut targets = Vec::with_capacity(written.len());
+        for target in written {
+            let resolved = self.resolve_target(source, target.as_ref(), path)?;
+            if resolved == StateId::ROOT {
+                return Err(Error::RootTarget { from: self.id_of(source).to_owned() });
+            }
+            targets.push(resolved);
+        }
+        Ok(targets)
+    }
+
+    /// Append a compiled transition.
+    pub(super) fn push_transition(&mut self, transition: Transition) -> TransitionId {
+        let tid = TransitionId::from_index(self.transitions.len());
+        self.transitions.push(transition);
+        tid
     }
 
     fn compile_actions(
@@ -632,7 +599,7 @@ impl Compiler<'_, '_> {
             if let Some(sid) = self.descend(source, rest) {
                 return Ok(sid);
             }
-            if let Some(parent) = self.raws[source.index()].parent
+            if let Some(parent) = self.skels[source.index()].parent
                 && let Some(sid) = self.descend(parent, rest)
             {
                 if self.strict_targets {
@@ -657,12 +624,12 @@ impl Compiler<'_, '_> {
         // Plain path: XState resolves it against the parent; the Python dialect also lets it
         // bubble up through further ancestors. The root has no parent, so its own children
         // are the first scope.
-        let mut scope = self.raws[source.index()].parent.or(Some(StateId::ROOT));
+        let mut scope = self.skels[source.index()].parent.or(Some(StateId::ROOT));
         while let Some(s) = scope {
             if let Some(sid) = self.descend(s, target) {
                 return Ok(sid);
             }
-            scope = self.raws[s.index()].parent;
+            scope = self.skels[s.index()].parent;
         }
         if target == self.machine_id {
             return Ok(StateId::ROOT);
@@ -670,7 +637,7 @@ impl Compiler<'_, '_> {
         Err(not_found())
     }
 
-    fn validate(&mut self, states: &[StateNode]) -> Result<()> {
+    fn validate(&self, states: &[StateNode]) -> Result<()> {
         for node in states {
             if let NodeKind::History { .. } = node.kind {
                 let parent = node.parent.map(|p| &states[p.index()]);
@@ -701,6 +668,55 @@ impl Compiler<'_, '_> {
             }
         }
         Ok(())
+    }
+}
+
+/// A state's descriptive parts.
+#[derive(Default)]
+pub(super) struct NodeMeta {
+    pub(super) output: Option<Value>,
+    pub(super) meta: Option<Value>,
+    pub(super) description: Option<String>,
+    pub(super) tags: Vec<String>,
+}
+
+/// A compiled state from its parts.
+pub(super) fn state_node(
+    skel: &Skel<'_>,
+    kind: NodeKind,
+    handlers: Handlers,
+    (entry, exit): (Vec<ActionDef>, Vec<ActionDef>),
+    initial_key: Option<smol_str::SmolStr>,
+    NodeMeta { output, meta, description, tags }: NodeMeta,
+) -> StateNode {
+    let Handlers { on_exact, mut on_partial, on_wildcard, always, after, after_events, invokes } =
+        handlers;
+    on_partial.sort_by_key(|(d, _)| std::cmp::Reverse(d.len()));
+    StateNode {
+        id: Arc::clone(&skel.id),
+        key: smol_str::SmolStr::new(skel.key),
+        parent: skel.parent,
+        children: Vec::new(),
+        depth: skel.depth,
+        kind,
+        subtree_end: 0,
+        on_exact,
+        on_partial,
+        on_wildcard,
+        always,
+        entry,
+        exit,
+        invokes,
+        after_events,
+        after,
+        initial_key,
+        output,
+        meta,
+        description,
+        tags,
+        history_children: SmallVec::new(),
+        subtree_events: crate::engine::bits::StateBits::default(),
+        subtree_wildcards: false,
     }
 }
 

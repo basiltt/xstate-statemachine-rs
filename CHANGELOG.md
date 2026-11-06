@@ -212,6 +212,42 @@ raised only in a minor release.
   - Compilation finds event keys and child states by scanning for machines with up to 8 event
     types / 32 states (hash indexes above) and keeps the flattened state list inline: three
     fewer allocations for the S3 machine (61 to 58).
+- `xstate-core`: third performance pass. Interleaved with the second pass's tree on the same
+  machine (criterion medians, best of seven runs each): S1 -37 %, S2 -18 %, S3 -31 %, S4 -34 %,
+  S5 -43 %, S6 -19 %, S7 -30 %; S1, S3 and S4 now run at more than 100x the Python library.
+  Semantics are unchanged (53 conformance cases, goldens, workspace tests and the Python
+  bindings' tests pass). No public API changed. What changed:
+  - **Plain microsteps.** Per transition the precomputed plans now also record whether taking
+    it alone is *plain*: nothing it can exit has exit actions, `after` timers or invocations,
+    and nothing it enters has entry actions, `after` timers or invocations or is final (and the
+    machine has no history states). A single enabled plain transition skips the general
+    microstep (conflict resolution, exit / entry set construction, history recording,
+    completion checks, per-state effect scans): it clears the exit range's configuration bits,
+    runs the transition's actions and sets the precomputed entry set, with the same report,
+    entry stamps and snapshot-change count. A randomized differential test
+    (`engine::fast_path_tests`, `proptest`: random machines of up to three levels with
+    parallel regions, finals, history, guards, actions, entry / exit actions, `reenter` and
+    guarded `always`, driven by random event sequences) runs every case with the fast path on
+    and off and compares receipts, runtime state and action traces.
+  - **Direct compilation.** `Machine::from_value` / `from_json` compile plain documents straight
+    from the JSON value into the arena (`machine::direct`): the same `Compiler` resolves
+    targets, interns events and builds the tables, but no owned `MachineConfig` is built. Plain
+    means plain states (`id`, `initial`, `states`, `type`, `on`, `always`, `after`, `entry`,
+    `exit`, `description`), transitions as target strings or objects with `target`, `guard`
+    and `actions` by name, `reenter` and `description`, user actions only, and a root with at
+    most `context` and `version` besides; everything else (built-ins, action / guard objects,
+    `invoke`, `onDone`, history, policies, `x-` keys, unknown keys, and every malformed
+    document) goes through the parser as before, which produces every warning and error. A
+    test builds every machine document of the repository (conformance cases, CLI fixtures,
+    agent charts), 79 edge cases and 400 random machines both ways and compares the compiled
+    machines field by field (and the errors). The S3 machine now takes 20 allocations instead
+    of 58. `MachineConfig` and `Machine::from_config` are unchanged.
+  - The initial entry set is computed once per machine (nothing is recorded in history before
+    a machine starts); interpreters built with `SyncInterpreter::new` borrow the process-wide
+    real clock instead of holding an `Arc` to it; a step that requests no effect skips the
+    effect pass; the receipt of a machine without parallel states reads its single leaf off
+    the configuration; event types and implementation names are compared inline instead of
+    through `memcmp`; `send(&str)` builds short event types inline.
 
 - Conformance: the Python engine converged on XState v5 for the eight recorded divergences
   (Python branch `xstate-v5-engine-parity`); `conformance/divergences.generated.md` is empty and

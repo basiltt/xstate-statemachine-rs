@@ -128,7 +128,7 @@ impl Ord for Timer {
 pub struct SyncInterpreter<C: Context = DynContext> {
     machine: Machine,
     logic: MachineLogic<C>,
-    clock: Arc<dyn Clock>,
+    clock: ClockHandle,
     input: Value,
     state: Option<ActiveState<C>>,
     queue: VecDeque<Event>,
@@ -160,12 +160,16 @@ impl<C: Context> SyncInterpreter<C> {
     /// Create an interpreter with a real clock. Call [`start`](Self::start) before sending.
     #[must_use]
     pub fn new(machine: Machine, logic: MachineLogic<C>) -> Self {
-        Self::with_clock(machine, logic, shared_real_clock())
+        Self::with_clock_handle(machine, logic, ClockHandle::Shared(shared_real_clock()))
     }
 
     /// Create an interpreter driven by the given clock.
     #[must_use]
     pub fn with_clock(machine: Machine, logic: MachineLogic<C>, clock: Arc<dyn Clock>) -> Self {
+        Self::with_clock_handle(machine, logic, ClockHandle::Custom(clock))
+    }
+
+    fn with_clock_handle(machine: Machine, logic: MachineLogic<C>, clock: ClockHandle) -> Self {
         Self {
             machine,
             logic,
@@ -468,37 +472,35 @@ impl<C: Context> SyncInterpreter<C> {
         let policy = self.machine.policies().on_unhandled;
         let observed = !self.observers.is_empty()
             || (policy != UnhandledPolicy::Ignore && event.origin == EventOrigin::External);
-        let mut effects = std::mem::take(&mut self.effects);
-        effects.clear();
+        self.effects.clear();
         let Some(state) = self.state.as_mut() else { return Ok(()) };
         let stepped = engine::step_into(
             &self.machine,
             &self.logic,
             state,
             event,
-            &mut effects,
+            &mut self.effects,
             false,
             report,
         );
-        match stepped {
-            Ok(()) => {}
-            Err(err) => {
-                self.effects = effects;
-                for obs in &self.observers {
-                    obs.on_error(&self.machine, &err);
-                }
-                return Err(err);
+        if let Err(err) = stepped {
+            for obs in &self.observers {
+                obs.on_error(&self.machine, &err);
             }
+            return Err(err);
         }
         if observed {
             self.after_step(event, report);
         }
         // Observers saw the report before the effects ran (as before); a soft error from
         // executing them (an unresolved `sendTo`) reaches them as `on_event_dropped` and
-        // the caller through the receipt.
-        self.apply_effects(&mut effects);
-        self.effects = effects;
-        report.soft_error = self.soft_error.take();
+        // the caller through the receipt. Most steps request nothing.
+        if !self.effects.is_empty() {
+            let mut effects = std::mem::take(&mut self.effects);
+            self.apply_effects(&mut effects);
+            self.effects = effects;
+            report.soft_error = self.soft_error.take();
+        }
         Ok(())
     }
 
@@ -697,10 +699,28 @@ fn merge_report(merged: &mut StepReport, report: StepReport) {
 /// Only differences of its readings matter (timer due times), so sharing one origin is
 /// equivalent to a clock per interpreter, and saves an allocation and a clock read per
 /// interpreter.
-fn shared_real_clock() -> Arc<dyn Clock> {
-    static CLOCK: OnceLock<Arc<RealClock>> = OnceLock::new();
-    let clock: Arc<RealClock> = Arc::clone(CLOCK.get_or_init(|| Arc::new(RealClock::new())));
-    clock
+fn shared_real_clock() -> &'static RealClock {
+    static CLOCK: OnceLock<RealClock> = OnceLock::new();
+    CLOCK.get_or_init(RealClock::new)
+}
+
+/// The clock of an interpreter: the shared real clock (borrowed, so creating and dropping an
+/// interpreter touches no reference count) or one the application supplied.
+enum ClockHandle {
+    Shared(&'static RealClock),
+    Custom(Arc<dyn Clock>),
+}
+
+impl std::ops::Deref for ClockHandle {
+    type Target = dyn Clock;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Shared(clock) => *clock,
+            Self::Custom(clock) => &**clock,
+        }
+    }
 }
 
 mod restore;
@@ -708,8 +728,15 @@ mod restore;
 pub use restore::{RestartTimers, RestoreOptions};
 
 impl From<&str> for Event {
+    #[inline]
     fn from(ty: &str) -> Self {
-        Event::new(ty)
+        // Short names are copied inline straight away (`SmolStr::new` first looks for its
+        // whitespace-only representation).
+        if ty.len() <= SMOL_INLINE_CAP {
+            Event::new(smol_str::SmolStr::new_inline(ty))
+        } else {
+            Event::new(ty)
+        }
     }
 }
 
@@ -718,3 +745,6 @@ impl From<String> for Event {
         Event::new(ty)
     }
 }
+
+/// `smol_str`'s inline capacity: names up to this length never allocate.
+const SMOL_INLINE_CAP: usize = 23;

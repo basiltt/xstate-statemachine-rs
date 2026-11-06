@@ -155,43 +155,67 @@ integrating, gating and committing. Commits are on `main` in order:
 scenarios S1–S7 (`benchmarks/competitors/adapters/xstate_sync.py` in the Python repo) and the
 Python per-operation numbers come from its `results.json` measured on 0.12.0:
 
-Second pass (2026-11-06), measured interleaved with the first pass's tree in one session that
-ran ~15 % slower than the first pass's recording (best of three / five runs):
+Third pass (2026-11-06), measured interleaved with the second pass's tree in one session that
+ran ~20 % slower than the second pass's recording (best of seven runs per scenario):
 
-| Scenario | First pass | This pass | Python 0.12.0 | Speed-up | 100× target |
+| Scenario | Second pass | This pass | Python 0.12.0 | Speed-up | 100× target |
 |---|---|---|---|---|---|
-| S1 flat toggle, one `send` | 196 ns | 156 ns | 12.35 µs | 79× | 124 ns |
-| S2 guarded counter (guard + action), one `send` | 282 ns | 215 ns | 10.54 µs | 49× | 105 ns |
-| S3 two-level hierarchy, `CROSS` + `DEEP` | 368 ns | 368 ns | 28.37 µs | 77× | 284 ns |
-| S4 two parallel regions, `TOGGLE1` + `TOGGLE2` | 515 ns | 481 ns | 37.86 µs | 79× | 379 ns |
-| S5 build + `new` + `start` (S3 machine) | 8.96 µs | 7.95 µs | 79.0 µs | 9.9× | 790 ns |
-| S6 per instance: `new` + `start` + one `send` | 738 ns | 383 ns | 21.9 µs | 57× | 219 ns |
-| S7 `SimulatedClock`, build, start, 1 ms timer fires | 6.38 µs | 4.82 µs | 118 µs | 24× | 1.18 µs |
+| S1 flat toggle, one `send` | 186 ns | 116 ns | 12.35 µs | 106× | 124 ns |
+| S2 guarded counter (guard + action), one `send` | 214 ns | 176 ns | 10.54 µs | 60× | 105 ns |
+| S3 two-level hierarchy, `CROSS` + `DEEP` | 367 ns | 252 ns | 28.37 µs | 113× | 284 ns |
+| S4 two parallel regions, `TOGGLE1` + `TOGGLE2` | 456 ns | 302 ns | 37.86 µs | 125× | 379 ns |
+| S5 build + `new` + `start` (S3 machine) | 8.28 µs | 4.76 µs | 79.0 µs | 17× | 790 ns |
+| S6 per instance: `new` + `start` + one `send` | 406 ns | 329 ns | 21.9 µs | 67× | 219 ns |
+| S7 `SimulatedClock`, build, start, 1 ms timer fires | 5.58 µs | 3.89 µs | 118 µs | 30× | 1.18 µs |
 
-`budgets.json` keeps, per benchmark, the lower of the first pass's recording (quieter session:
-S3 354 ns, S4 412 ns, S5 6.87 µs) and this pass's best. Done in the second pass: `Receipt` /
-`StepReport` `actions` became `ActionList` (`SmallVec<[Arc<str>; 2]>`, no allocation per S2
-send); `CancelTimers` is emitted only for exited states with `after` (restore now refuses a
-deadline on a state without `after`), so S6 and plain sends allocate and emit nothing; the logic
-registry scans names instead of hashing (no hash-map seeding per `MachineLogic`); single-transition
-exit sets are appended without searching and planned entry sets borrowed; `start` builds the
-state in place and skips `settle` when nothing can settle; compilation scans event names and
-children for small machines (61 → 58 allocations for S3's machine). Checked and not a cost: the
-S2 self-target without `reenter` exits and enters nothing; the 1-key JSON context lookup takes
-`indexmap`'s single-entry path, no hashing.
+Without the build, S5 is ~0.2 µs (`new` + `start`) and S7 ~0.85 µs (profiler loop). Done in the
+third pass (no public API change):
 
-Remaining levers, in order of expected pay-off: (1) S5/S7 — 58 allocations per build, ~38 of
-them the owned `MachineConfig`; a direct value-to-arena compile path with a fallback to the full
-parser (and a differential test against it over every conformance case) is the large rewrite,
-worth ~2× on S5/S7; the public `Vec`/`Arc<str>` fields of `StateNode` / `Transition` keep ~20
-compile allocations even then. (2) S2/S1 — a dedicated single-transition fast path that skips the
-general microstep (no conflict resolution, no sets, no snapshot-change bookkeeping) for machines
-with plans, no parallel states and no `always`; and a `Receipt` that does not clone the machine
-`Arc` (API change: `state_ids()` / `matches()` would take the machine). (3) S6 — the interpreter
-is ~830 bytes (each JSON `Value` is 80 bytes with `preserve_order`); boxing rarely used parts
-(`input`, `output`, the deferred queue) would cut moves and drops. A process-wide cache of
-compiled machines keyed by the document would make S5/S7 trivially fast but measures a hash
-lookup, not construction; not done.
+- **Plain microsteps** (`engine/algorithm.rs`, `Plans::is_plain` in `engine/sets.rs`): a single
+  enabled transition whose exit range and entry set touch no entry/exit actions, `after`,
+  invokes or final states (machines without history) clears the exit range's bits, runs its
+  actions and sets the planned entry set, with the general path's report, entry stamps and
+  `mutations`. `engine/fast_path_tests.rs` is the proptest differential (random machines with
+  parallel regions, finals, history, guards, actions, `reenter`, guarded `always`; fast path
+  on vs. off per thread via `algorithm::FAST_PATH`, compared on receipts, runtime state and
+  action traces). Mutating the fast path's bookkeeping makes it fail within a few cases.
+- **Direct compilation** (`machine/direct.rs`): `Machine::from_value` / `from_json` read plain
+  documents straight into the shared `Compiler` (`machine/compile.rs`, assembly split into
+  `machine/assemble.rs`); anything outside the plain subset returns `None` and takes the parser
+  path, which produces every warning and error. `machine/direct_tests.rs` builds all 68
+  machine documents in the repository (27 take the direct path), 79 edge cases (25 direct) and
+  400 random machines (~360 direct) both ways and compares every compiled field, `to_json`,
+  the structure hash and the errors. S3's machine: 58 → 20 allocations.
+- Smaller: the initial entry set is cached per machine (`Machine::initial_entry`);
+  `SyncInterpreter::new` borrows the process-wide `RealClock` (`ClockHandle`) instead of holding
+  an `Arc`; `step_event` skips the effect pass when a step requests none; a machine without
+  parallel states reads its single leaf off the configuration for the receipt; event types and
+  registry names are compared inline (`text::name_eq`; `==` on strings calls `memcmp`, which
+  the profiler showed at 5 % of S2); `send(&str)` builds short event types with
+  `SmolStr::new_inline`.
+- Kept although within noise: `send(&str)` via `SmolStr::new_inline` (removes `SmolStr::new`'s
+  whitespace scan, 4–5 % of S1 in the profile; the A/B was inconclusive). Tried and reworked:
+  the first shared-compiler refactor cloned each state's `Arc<str>` into a per-state view and
+  built `StateNode`s in two steps, which made `Machine::from_config` ~5 % slower; borrowing the
+  view and building the node in one expression restored parity. Not attempted: a borrowed
+  `send_ref` receipt (judged not comparable with Python's `send`, which returns a receipt with
+  its state ids); merging region selection of parallel states into a per-leaf walk (S4 is past
+  100× and XState's parallel-node fallback order makes the walk subtle).
+
+Remaining levers, in order of expected pay-off: (1) S2 — resolve the logic once per interpreter
+(an action / guard index per `ActionDef` instead of a name lookup per call) and stop
+reference-counting action names in `ActionList` (API); (2) S1–S4/S6 — a `Receipt` that does not
+clone the machine `Arc` (~11 ns per send; API: `state_ids()` / `matches()` would take the
+machine); (3) S5/S7 — the remaining 20 allocations are public `Arc<str>` / `Vec` fields of
+`StateNode` / `Transition`, the tables, the id index, the source text and the `Arc`; a
+`StateNode` is ~700 bytes, so boxing rarely used parts would cut moves; (4) S6 — the ~830-byte
+interpreter. A process-wide cache of compiled machines would make S5/S7 trivially fast but
+measures a lookup, not construction; not done.
+
+Second pass (2026-11-06), recorded the same way against the first pass: S1 196 → 156 ns, S2
+282 → 215 ns, S3 368 ns, S4 515 → 481 ns, S5 8.96 → 7.95 µs, S6 738 → 383 ns, S7 6.38 →
+4.82 µs (`ActionList` receipts, `CancelTimers` only for states with `after`, name-scan logic
+registry, borrowed planned entry sets, in-place `start`, scanned event / child indexes).
 
 `scripts/perf_gate.py` compares each median with `baseline_p50_ns × allowed_slowdown` (1.25),
 prints the speed-up over Python and the distance to 100×, and fails on a regression;

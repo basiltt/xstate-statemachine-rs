@@ -12,6 +12,7 @@ use crate::error::Result;
 mod parse;
 
 pub use parse::ParseOptions;
+pub(crate) use parse::field;
 
 /// A parsed machine definition.
 #[derive(Debug, Clone)]

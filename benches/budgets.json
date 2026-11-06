@@ -3,29 +3,29 @@
   "allowed_slowdown": 1.25,
   "benchmarks": {
     "send_flat": {
-      "baseline_p50_ns": 173,
+      "baseline_p50_ns": 120,
       "target_p50_ns": 150,
-      "note": "performance pass, 2026-11-06 (was 420 after the allocation pass); second performance pass 2026-11-06: 192 -> 173"
+      "note": "performance pass, 2026-11-06 (was 420 after the allocation pass); second performance pass 2026-11-06: 192 -> 173; third performance pass 2026-11-06: 173 -> 120"
     },
     "send_guard_assign": {
-      "baseline_p50_ns": 239,
+      "baseline_p50_ns": 186,
       "target_p50_ns": 600,
-      "note": "Python: 16000"
+      "note": "Python: 16000; third performance pass 2026-11-06: 239 -> 186"
     },
     "send_nested_3": {
-      "baseline_p50_ns": 212,
+      "baseline_p50_ns": 130,
       "target_p50_ns": 500,
-      "note": "Python: 35000"
+      "note": "Python: 35000; third performance pass 2026-11-06: 212 -> 130"
     },
     "send_parallel_2": {
-      "baseline_p50_ns": 213,
+      "baseline_p50_ns": 169,
       "target_p50_ns": 500,
-      "note": "Python: 39000"
+      "note": "Python: 39000; third performance pass 2026-11-06: 213 -> 169"
     },
     "build_50_states": {
-      "baseline_p50_ns": 128939,
+      "baseline_p50_ns": 89798,
       "target_p50_ns": 40000,
-      "note": "JSON text -> Machine, 50 states; Python S5 (115000) builds a much smaller machine from a parsed dict, not comparable"
+      "note": "JSON text -> Machine, 50 states; Python S5 (115000) builds a much smaller machine from a parsed dict, not comparable; third performance pass 2026-11-06: 128939 -> 89798"
     },
     "snapshot_get": {
       "baseline_p50_ns": 1306,
@@ -42,9 +42,9 @@
       "target_p50_ns": 8000
     },
     "step_flat": {
-      "baseline_p50_ns": 118,
+      "baseline_p50_ns": 82,
       "target_p50_ns": 100,
-      "note": "bare engine::step, no interpreter; second performance pass 2026-11-06: 131 -> 118"
+      "note": "bare engine::step, no interpreter; second performance pass 2026-11-06: 131 -> 118; third performance pass 2026-11-06: 118 -> 82"
     },
     "build_phase_json_value": {
       "baseline_p50_ns": 41891,
@@ -60,46 +60,46 @@
       "note": "second performance pass 2026-11-06: 47425 -> 46834"
     },
     "py_s1_flat_toggle": {
-      "baseline_p50_ns": 156,
+      "baseline_p50_ns": 116,
       "target_p50_ns": 123.5,
       "python_per_op_ns": 12351.8,
-      "note": "S1 flat_toggle: one send on A <-> B; Python 0.12.0 sync: 12.35 us/op (benchmarks/competitors/results.json); target = 100x; second performance pass 2026-11-06: 168 -> 156"
+      "note": "S1 flat_toggle: one send on A <-> B; Python 0.12.0 sync: 12.35 us/op (benchmarks/competitors/results.json); target = 100x; second performance pass 2026-11-06: 168 -> 156; third performance pass 2026-11-06: 156 -> 116"
     },
     "py_s2_guarded_context": {
-      "baseline_p50_ns": 215,
+      "baseline_p50_ns": 176,
       "target_p50_ns": 105.4,
       "python_per_op_ns": 10537.0,
-      "note": "S2 guarded_context: one guarded, counting send (build amortised over 20 000 sends); Python 0.12.0 sync: 10.54 us/op (benchmarks/competitors/results.json); target = 100x; second performance pass 2026-11-06: 268 -> 215"
+      "note": "S2 guarded_context: one guarded, counting send (build amortised over 20 000 sends); Python 0.12.0 sync: 10.54 us/op (benchmarks/competitors/results.json); target = 100x; second performance pass 2026-11-06: 268 -> 215; third performance pass 2026-11-06: 215 -> 176"
     },
     "py_s3_hierarchical": {
-      "baseline_p50_ns": 354,
+      "baseline_p50_ns": 252,
       "target_p50_ns": 283.7,
       "python_per_op_ns": 28367.3,
-      "note": "S3 hierarchical: CROSS + DEEP (two sends); Python 0.12.0 sync: 28.37 us/op (benchmarks/competitors/results.json); target = 100x"
+      "note": "S3 hierarchical: CROSS + DEEP (two sends); Python 0.12.0 sync: 28.37 us/op (benchmarks/competitors/results.json); target = 100x; third performance pass 2026-11-06: 354 -> 252"
     },
     "py_s4_parallel": {
-      "baseline_p50_ns": 412,
+      "baseline_p50_ns": 302,
       "target_p50_ns": 378.6,
       "python_per_op_ns": 37863.1,
-      "note": "S4 parallel: TOGGLE1 + TOGGLE2 (two sends); Python 0.12.0 sync: 37.86 us/op (benchmarks/competitors/results.json); target = 100x"
+      "note": "S4 parallel: TOGGLE1 + TOGGLE2 (two sends); Python 0.12.0 sync: 37.86 us/op (benchmarks/competitors/results.json); target = 100x; third performance pass 2026-11-06: 412 -> 302"
     },
     "py_s5_construction": {
-      "baseline_p50_ns": 6869,
+      "baseline_p50_ns": 4758,
       "target_p50_ns": 789.9,
       "python_per_op_ns": 78994.5,
-      "note": "S5 construction: Machine::from_value(hier) + new + start; Python 0.12.0 sync: 78.99 us/op (benchmarks/competitors/results.json); target = 100x"
+      "note": "S5 construction: Machine::from_value(hier) + new + start; Python 0.12.0 sync: 78.99 us/op (benchmarks/competitors/results.json); target = 100x; third performance pass 2026-11-06: 6869 -> 4758"
     },
     "py_s6_many_instances": {
-      "baseline_p50_ns": 383,
+      "baseline_p50_ns": 329,
       "target_p50_ns": 219.1,
       "python_per_op_ns": 21910.8,
-      "note": "S6 many_instances: new + start + one send, per instance of 1 000; Python 0.12.0 sync: 21.91 us/op (benchmarks/competitors/results.json); target = 100x; second performance pass 2026-11-06: 575 -> 383"
+      "note": "S6 many_instances: new + start + one send, per instance of 1 000; Python 0.12.0 sync: 21.91 us/op (benchmarks/competitors/results.json); target = 100x; second performance pass 2026-11-06: 575 -> 383; third performance pass 2026-11-06: 383 -> 329"
     },
     "py_s7_delayed_transition": {
-      "baseline_p50_ns": 4820,
+      "baseline_p50_ns": 3890,
       "target_p50_ns": 1180.3,
       "python_per_op_ns": 118033.0,
-      "note": "S7 delayed_transition: clock + build + new + start + advance 1 ms; Python 0.12.0 sync: 118.03 us/op (benchmarks/competitors/results.json); target = 100x; second performance pass 2026-11-06: 5677 -> 4820"
+      "note": "S7 delayed_transition: clock + build + new + start + advance 1 ms; Python 0.12.0 sync: 118.03 us/op (benchmarks/competitors/results.json); target = 100x; second performance pass 2026-11-06: 5677 -> 4820; third performance pass 2026-11-06: 4820 -> 3890"
     }
   }
 }

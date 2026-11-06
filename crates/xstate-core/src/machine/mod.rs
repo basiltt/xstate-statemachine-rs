@@ -14,8 +14,12 @@ use crate::config::{ConfigWarning, MachineConfig, ParseOptions, Policies};
 use crate::error::Result;
 use crate::ids::{StateId, TransitionId};
 
+mod assemble;
 pub(crate) mod builtin;
 mod compile;
+mod direct;
+#[cfg(test)]
+mod direct_tests;
 mod source;
 
 pub use builtin::{Builtin, Delay, SendTarget};
@@ -54,6 +58,9 @@ pub(crate) struct MachineData {
     pub(crate) leaf_mask: crate::engine::bits::StateBits,
     /// Precomputed transition domains and entry sets, built on first use.
     pub(crate) plans: std::sync::OnceLock<Option<crate::engine::sets::Plans>>,
+    /// The states `start` enters, in document order, built on first use: nothing is recorded
+    /// in history before the machine starts, so the initial entry set is fixed.
+    pub(crate) initial_entry: std::sync::OnceLock<SmallVec<[StateId; 8]>>,
     /// Exact event types declared on any state, sorted; derived from `event_index` on first
     /// use (strict mode, typed machines).
     pub(crate) declared_events: std::sync::OnceLock<Vec<String>>,
@@ -259,8 +266,11 @@ impl Machine {
     /// Shape errors from parsing and structural errors from compilation.
     pub fn from_json(text: &str) -> Result<Self> {
         let value: Value = serde_json::from_str(text)?;
-        let config = crate::config::parse_without_source(&value, &ParseOptions::default(), None)?;
-        let mut data = compile::compile(config, None)?;
+        let mut data = if let Some(data) = direct::compile(&value) {
+            data
+        } else {
+            Self::compile_parsed(&value, &ParseOptions::default(), None)?
+        };
         data.source = source::Source::Json(text.into());
         Ok(Self { inner: Arc::new(data) })
     }
@@ -288,10 +298,27 @@ impl Machine {
         options: &ParseOptions,
         user_actions: Option<&std::collections::HashSet<String>>,
     ) -> Result<Self> {
-        let config = crate::config::parse_without_source(value, options, user_actions)?;
-        let mut data = compile::compile(config, user_actions)?;
+        // Plain documents compile straight from the value; the parser path handles the rest
+        // (and produces every warning and error).
+        let direct = (options.strict_config.is_none() && user_actions.is_none())
+            .then(|| direct::compile(value))
+            .flatten();
+        let mut data = match direct {
+            Some(data) => data,
+            None => Self::compile_parsed(value, options, user_actions)?,
+        };
         data.source = source::Source::from_value(value);
         Ok(Self { inner: Arc::new(data) })
+    }
+
+    /// The parser path: `value` to [`MachineConfig`] to the compiled arena.
+    fn compile_parsed(
+        value: &Value,
+        options: &ParseOptions,
+        user_actions: Option<&std::collections::HashSet<String>>,
+    ) -> Result<MachineData> {
+        let config = crate::config::parse_without_source(value, options, user_actions)?;
+        compile::compile(config, user_actions)
     }
 
     /// Compile a parsed configuration.
@@ -437,7 +464,7 @@ impl Machine {
         // A machine declares a handful of event types: comparing them beats hashing.
         let names = &self.inner.event_names;
         if names.len() <= EVENT_SCAN_LIMIT {
-            let found = names.iter().position(|n| n.as_str() == event_type);
+            let found = names.iter().position(|n| crate::text::name_eq(n, event_type));
             #[allow(clippy::cast_possible_truncation)] // keys are u32 by construction
             return found.map(|i| i as u32);
         }
@@ -495,6 +522,12 @@ impl Machine {
     #[inline]
     pub(crate) fn plans(&self) -> Option<&crate::engine::sets::Plans> {
         self.inner.plans.get_or_init(|| crate::engine::sets::Plans::compute(self)).as_ref()
+    }
+
+    /// The initial configuration `start` enters, in document order.
+    #[inline]
+    pub(crate) fn initial_entry(&self) -> &[StateId] {
+        self.inner.initial_entry.get_or_init(|| crate::engine::sets::initial_entry_set(self))
     }
 
     /// Exclusive end of `node`'s subtree in the document-order arena: its proper

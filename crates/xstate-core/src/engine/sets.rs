@@ -306,6 +306,15 @@ fn compute_entry_set_dynamic(
     to_enter
 }
 
+/// The entry set of the initial transition: the root and its default descendants. Nothing
+/// is recorded in history before a machine starts, so this is a property of the machine.
+pub(crate) fn initial_entry_set(machine: &Machine) -> smallvec::SmallVec<[StateId; 8]> {
+    let mut to_enter = StateSet::new(machine);
+    to_enter.insert(StateId::ROOT);
+    add_descendants_to_enter(machine, StateId::ROOT, &super::HistoryMap::new(), &mut to_enter);
+    smallvec::SmallVec::from_slice(to_enter.as_slice())
+}
+
 /// XState's `addDescendantStatesToEnter`.
 pub(crate) fn add_descendants_to_enter(
     machine: &Machine,
@@ -373,12 +382,52 @@ fn add_ancestors_to_enter(
     }
 }
 
+/// The states a single transition can exit, as an index range of the arena plus the source
+/// when it re-enters itself: the domain's proper descendants (every state when the domain is
+/// above the root).
+#[inline]
+pub(super) fn exit_range(
+    machine: &Machine,
+    t: &Transition,
+    domain: Option<StateId>,
+) -> (Option<StateId>, usize, usize) {
+    let reentered = (t.reenter && Some(t.source) == domain).then_some(t.source);
+    match domain {
+        Some(d) => (reentered, d.index() + 1, machine.subtree_end(d)),
+        None => (reentered, 0, machine.states().len()),
+    }
+}
+
+/// Whether taking `t` alone does nothing but move configuration bits and run `t`'s actions.
+fn is_plain(machine: &Machine, t: &Transition, domain: Option<StateId>, entry: &[StateId]) -> bool {
+    if t.targets.is_empty() {
+        // Targetless: exits and enters nothing.
+        return true;
+    }
+    let quiet_exit = |s: StateId| {
+        let n = machine.node(s);
+        n.exit.is_empty() && n.after.is_empty() && n.invokes.is_empty()
+    };
+    let (reentered, start, end) = exit_range(machine, t, domain);
+    reentered.is_none_or(quiet_exit)
+        && (start..end).map(StateId::from_index).all(quiet_exit)
+        && entry.iter().all(|&s| {
+            let n = machine.node(s);
+            n.entry.is_empty() && n.after.is_empty() && n.invokes.is_empty() && !n.is_final()
+        })
+}
+
 /// Per-transition data that does not depend on the runtime state, for machines without
-/// history states (where history cannot redirect a target): the transition domain and the
-/// entry set of the transition taken alone.
+/// history states (where history cannot redirect a target): the transition domain, the
+/// entry set of the transition taken alone, and whether taking it alone is *plain*.
 #[derive(Debug)]
 pub(crate) struct Plans {
     domains: smallvec::SmallVec<[Option<StateId>; 8]>,
+    /// Transitions whose microstep, taken alone, is plain: no state it can exit has exit
+    /// actions, `after` timers or invocations, and no state it enters has entry actions,
+    /// `after` timers or invocations or is final. Such a microstep only swaps configuration
+    /// bits around the transition's own actions (see `algorithm::plain_microstep`).
+    plain: super::bits::StateBits,
     /// `entry[starts[t]..starts[t + 1]]` is transition `t`'s entry set, in document order.
     starts: smallvec::SmallVec<[u32; 9]>,
     entry: smallvec::SmallVec<[StateId; 16]>,
@@ -396,24 +445,36 @@ impl Plans {
             domains: smallvec::SmallVec::with_capacity(count),
             starts: smallvec::SmallVec::with_capacity(count + 1),
             entry: smallvec::SmallVec::new(),
+            plain: super::bits::StateBits::with_capacity(count),
         };
         plans.starts.push(0);
         for (i, t) in machine.transitions().iter().enumerate() {
-            plans.domains.push(transition_domain(machine, t, &none));
+            let domain = transition_domain(machine, t, &none);
+            plans.domains.push(domain);
             let tid = TransitionId::from_index(i);
-            plans.entry.extend(compute_entry_set_dynamic(machine, &[tid], &none).iter());
+            let entry = compute_entry_set_dynamic(machine, &[tid], &none);
+            if is_plain(machine, t, domain, entry.as_slice()) {
+                plans.plain.set(i, true);
+            }
+            plans.entry.extend(entry.iter());
             plans.starts.push(u32::try_from(plans.entry.len()).ok()?);
         }
         Some(plans)
     }
 
     #[inline]
-    fn domain(&self, t: TransitionId) -> Option<StateId> {
+    pub(super) fn domain(&self, t: TransitionId) -> Option<StateId> {
         self.domains[t.index()]
     }
 
+    /// Whether `t`, taken alone, is a plain microstep (see [`Plans::plain`]).
     #[inline]
-    fn entry(&self, t: TransitionId) -> &[StateId] {
+    pub(super) fn is_plain(&self, t: TransitionId) -> bool {
+        self.plain.contains(t.index())
+    }
+
+    #[inline]
+    pub(super) fn entry(&self, t: TransitionId) -> &[StateId] {
         let (from, to) = (self.starts[t.index()], self.starts[t.index() + 1]);
         &self.entry[from as usize..to as usize]
     }

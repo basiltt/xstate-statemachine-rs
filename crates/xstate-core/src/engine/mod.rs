@@ -20,6 +20,8 @@ use crate::machine::{Delay, InvokeDef, Machine, SendTarget};
 mod actions;
 mod algorithm;
 pub(crate) mod bits;
+#[cfg(test)]
+pub(crate) mod fast_path_tests;
 mod select;
 pub(crate) mod sets;
 
@@ -132,7 +134,13 @@ impl<C> ActiveState<C> {
     #[must_use]
     pub fn leaves(&self, machine: &Machine) -> smallvec::SmallVec<[StateId; 4]> {
         let mut out = smallvec::SmallVec::new();
-        self.configuration.states_masked_into(machine.leaf_mask(), &mut out);
+        if machine.has_parallel() {
+            self.configuration.states_masked_into(machine.leaf_mask(), &mut out);
+        } else if let Some(last) = self.configuration.last() {
+            // One chain from the root: its deepest member, the last in document order, is
+            // the only leaf.
+            out.push(StateId::from_index(last));
+        }
         out
     }
 

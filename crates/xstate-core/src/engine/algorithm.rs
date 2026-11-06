@@ -6,10 +6,7 @@ use serde_json::Value;
 
 use super::actions::run_actions;
 use super::select::{select_eventless_transitions, select_transitions};
-use super::sets::{
-    Enabled, StateSet, add_descendants_to_enter, compute_entry_set, compute_exit_set,
-    remove_conflicting,
-};
+use super::sets::{Enabled, StateSet, compute_entry_set, compute_exit_set, remove_conflicting};
 use super::{Ctx, Effect, Status};
 use crate::context::Context;
 use crate::error::{Error, Result};
@@ -20,12 +17,10 @@ use crate::machine::{Machine, NodeKind};
 // ----------------------------------------------------------------------------- entry points
 
 pub(super) fn start<C: Context>(cx: &mut Ctx<'_, C>) -> Result<()> {
-    let machine = cx.machine;
     let init = Event::init();
-    let mut to_enter = StateSet::new(machine);
-    to_enter.insert(StateId::ROOT);
-    add_descendants_to_enter(machine, StateId::ROOT, &cx.state.history, &mut to_enter);
-    enter_states(cx, to_enter.as_slice(), &init, false)?;
+    // A fresh state has recorded no history: the initial entry set is the machine's.
+    debug_assert!(cx.state.history.is_empty());
+    enter_states(cx, cx.machine.initial_entry(), &init, false)?;
     exit_all_when_done(cx, &init)?;
     cx.report.microsteps += 1;
     if !cx.machine.has_always() && cx.state.internal_queue.is_empty() {
@@ -64,7 +59,7 @@ pub(super) fn macrostep<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Resul
             return Ok(());
         }
     } else {
-        microstep(cx, &enabled, event, false)?;
+        event_microstep(cx, &enabled, event)?;
     }
     if !cx.machine.has_always() && cx.state.internal_queue.is_empty() {
         // Nothing eventless to select and nothing raised: `settle` would stop at once.
@@ -108,8 +103,10 @@ fn settle<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Result<()> {
             enabled = select_transitions(cx, raised.insert(next))?;
         }
         let before = cx.state.mutations;
-        if !enabled.is_empty() {
-            microstep(cx, &enabled, raised.as_ref().unwrap_or(event), was_eventless)?;
+        if was_eventless {
+            microstep(cx, &enabled, raised.as_ref().unwrap_or(event), true)?;
+        } else if !enabled.is_empty() {
+            event_microstep(cx, &enabled, raised.as_ref().unwrap_or(event))?;
         }
         select_eventless = !was_eventless || cx.state.mutations != before;
     }
@@ -117,6 +114,93 @@ fn settle<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Result<()> {
 }
 
 // ----------------------------------------------------------------------------- microstep
+
+/// The microstep of an event (not eventless): a single plain transition (see
+/// `Plans::is_plain`) takes [`plain_microstep`], anything else the general [`microstep`].
+#[inline]
+fn event_microstep<C: Context>(
+    cx: &mut Ctx<'_, C>,
+    enabled: &[TransitionId],
+    event: &Event,
+) -> Result<()> {
+    if fast_path_enabled()
+        && let [only] = enabled
+        && cx.machine.plans().is_some_and(|plans| plans.is_plain(*only))
+    {
+        return plain_microstep(cx, *only, event);
+    }
+    microstep(cx, enabled, event, false)
+}
+
+/// [`microstep`] for one transition whose microstep is plain: nothing it exits or enters has
+/// actions, timers, invocations or final semantics, and the machine has no history states. It
+/// clears the exit set's bits, runs the transition's actions, and sets the precomputed entry
+/// set's bits, with exactly the bookkeeping the general microstep would do (report, entry
+/// stamps, snapshot-change count).
+fn plain_microstep<C: Context>(
+    cx: &mut Ctx<'_, C>,
+    tid: TransitionId,
+    event: &Event,
+) -> Result<()> {
+    let machine = cx.machine;
+    let Some(plans) = machine.plans() else { return microstep(cx, &[tid], event, false) };
+    let t = machine.transition(tid);
+    cx.report.microsteps += 1;
+    cx.report.transitions.push(tid);
+    let entry = plans.entry(tid);
+    // The exit set is what is active in the exit range; the configuration is preserved when
+    // it equals the entry set.
+    let mut preserved = true;
+    if !t.targets.is_empty() {
+        let (reentered, start, end) = super::sets::exit_range(machine, t, plans.domain(tid));
+        let config = &mut cx.state.configuration;
+        let mut exited = 0;
+        let exit_set = reentered.map(StateId::index).into_iter().chain(config.ones_in(start, end));
+        for s in exit_set {
+            preserved &= entry.get(exited).is_some_and(|e| e.index() == s);
+            exited += 1;
+        }
+        preserved &= exited == entry.len();
+        if let Some(source) = reentered {
+            config.set(source.index(), false);
+        }
+        config.clear_range(start, end);
+        cx.report.changed |= exited > 0;
+    }
+    run_actions(cx, &t.actions, event)?;
+    for &s in entry {
+        cx.state.configuration.set(s.index(), true);
+        if s != StateId::ROOT {
+            cx.state.entry_seq += 1;
+        }
+        if !preserved && let Some(stamp) = cx.state.entered_at.get_mut(s.index()) {
+            *stamp = cx.state.entry_seq;
+        }
+    }
+    cx.report.changed |= !entry.is_empty();
+    if !preserved {
+        cx.state.mutations += 1;
+    }
+    Ok(())
+}
+
+/// Whether event microsteps may take [`plain_microstep`]: always outside tests; unit tests
+/// turn it off per thread to compare both paths (`engine::fast_path_tests`).
+#[cfg(not(test))]
+#[inline]
+fn fast_path_enabled() -> bool {
+    true
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static FAST_PATH: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+#[cfg(test)]
+fn fast_path_enabled() -> bool {
+    FAST_PATH.with(std::cell::Cell::get)
+}
 
 /// One SCXML microstep. `eventless` marks a microstep of the eventless pass, whose "did it
 /// change anything" answer decides whether the macrostep selects eventless transitions again.

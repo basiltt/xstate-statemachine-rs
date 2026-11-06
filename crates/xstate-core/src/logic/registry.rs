@@ -52,7 +52,7 @@ impl<V> Registry<V> {
     fn position(&self, name: &str) -> Option<usize> {
         match &self.index {
             Some(index) => index.get(name).copied(),
-            None => self.entries.iter().position(|(k, _)| k.len() == name.len() && k == name),
+            None => self.entries.iter().position(|(k, _)| crate::text::name_eq(k, name)),
         }
     }
 

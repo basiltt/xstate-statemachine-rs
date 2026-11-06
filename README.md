@@ -134,64 +134,70 @@ same machines, the same logic (JSON context; S2's guard and action are Rust clos
 equivalent of Python's callables) and the same work per operation as the Python `hot()` loop.
 Median (p50) per operation on one developer machine (Intel Core i7-11850H, 31.7 GiB, Windows 11
 Pro, rustc 1.99.1, system allocator; CPython 3.14.6 on the same host). The machine was not
-quiet, so the second performance pass was measured interleaved with the first pass's tree in
-the same session (best of three runs each, five for this pass); that session ran about 15 %
-slower than the one the first pass was recorded in, so compare within a column pair:
+quiet, so each performance pass is measured interleaved with the previous pass's tree in one
+session (best of seven runs each for the scenarios, three for the engine benchmarks). The third
+pass's session ran about 20 % slower than the second pass's recording, so compare within a
+column pair; the speed-up column divides the Python time by this pass's number as measured:
 
-| Scenario | One operation | First pass | This pass | Python 0.12.0 | Speed-up | 100x target |
+| Scenario | One operation | Second pass | This pass | Python 0.12.0 | Speed-up | 100x target |
 |---|---|---|---|---|---|---|
-| S1 `flat_toggle` | one `send` on A ⇄ B | 196 ns | 156 ns | 12.35 µs | 79x | 124 ns |
-| S2 `guarded_context` | one guarded `send` whose action increments `count` | 282 ns | 215 ns | 10.54 µs | 49x | 105 ns |
-| S3 `hierarchical` | `CROSS` + `DEEP` across a two-level hierarchy (two sends) | 368 ns | 368 ns | 28.37 µs | 77x | 284 ns |
-| S4 `parallel` | `TOGGLE1` + `TOGGLE2` on two regions (two sends) | 515 ns | 481 ns | 37.86 µs | 79x | 379 ns |
-| S5 `construction` | `Machine::from_value` of S3's machine + `new` + `start` | 8.96 µs | 7.95 µs | 79.0 µs | 9.9x | 790 ns |
-| S6 `many_instances` | per instance of 1 000: `new` + `start` + one `send` | 738 ns | 383 ns | 21.9 µs | 57x | 219 ns |
-| S7 `delayed_transition` | new `SimulatedClock`, build, `new` + `start`, advance 1 ms, see `done` | 6.38 µs | 4.82 µs | 118 µs | 24x | 1.18 µs |
+| S1 `flat_toggle` | one `send` on A ⇄ B | 186 ns | 116 ns | 12.35 µs | **106x** | 124 ns |
+| S2 `guarded_context` | one guarded `send` whose action increments `count` | 214 ns | 176 ns | 10.54 µs | 60x | 105 ns |
+| S3 `hierarchical` | `CROSS` + `DEEP` across a two-level hierarchy (two sends) | 367 ns | 252 ns | 28.37 µs | **113x** | 284 ns |
+| S4 `parallel` | `TOGGLE1` + `TOGGLE2` on two regions (two sends) | 456 ns | 302 ns | 37.86 µs | **125x** | 379 ns |
+| S5 `construction` | `Machine::from_value` of S3's machine + `new` + `start` | 8.28 µs | 4.76 µs | 79.0 µs | 17x | 790 ns |
+| S6 `many_instances` | per instance of 1 000: `new` + `start` + one `send` | 406 ns | 329 ns | 21.9 µs | 67x | 219 ns |
+| S7 `delayed_transition` | new `SimulatedClock`, build, `new` + `start`, advance 1 ms, see `done` | 5.58 µs | 3.89 µs | 118 µs | 30x | 1.18 µs |
 
-Recorded in the quieter session of the first pass, the same tree measured S1 168 ns, S3 354 ns,
-S4 412 ns (92x) and S5 6.87 µs (11.5x); `benches/budgets.json` keeps the lower of the two
-recordings per benchmark. None of the scenarios reaches 100x yet; dispatch (S1, S3, S4) is
-within 1.1x to 1.3x of it. What bounds the rest:
+`benches/budgets.json` keeps the lower of the recorded baselines per benchmark. S1, S3 and S4
+are past 100x; S2 and S6 are within 1.7x and 1.5x of it; construction (S5, S7) is not, and
+cannot be while every operation builds a machine. What bounds each:
 
-- **Dispatch (S1, S3, S4)** costs the generic macrostep rather than one dictionary lookup:
-  transition selection, XState's exit and entry sets, snapshot-change bookkeeping, and a
-  `Receipt` per `send` (an `Arc` clone of the machine plus the active leaves), each a few
-  nanoseconds; no single item is above about 10 % of a send. A send allocates nothing and emits
-  no effect unless a state with `after` timers or invocations is exited or entered.
-- **S2** is S1's dispatch plus the guard and the action: two registry lookups by name (a
-  length-first comparison of the few registered names), two closure calls that each look `count`
-  up in the JSON context, and an `Arc<str>` clone of the action name into the receipt
-  (`ActionList`, inline up to two actions; it no longer allocates). The counter's self-target
-  without `reenter` exits and enters nothing. Reaching 105 ns needs dispatch itself near 60 ns,
-  i.e. a dedicated single-transition fast path that bypasses the general microstep, and a
-  receipt that does not clone the machine (an API change).
-- **Construction (S5, S7)** is dominated by allocation: `from_value` builds the public, owned
-  `MachineConfig` (about 38 short-lived strings and vectors for S3's machine) and then the
-  compiled arena (about 20 more: a full-id `Arc<str>` per state, child and target lists,
-  the transition table, the source document as compact JSON text, the `Arc` itself); 58 in all.
-  On the Windows system allocator an allocation and its free cost 50 to 100 ns, so they are about
-  half of S5. The remaining lever is a direct parse-and-compile path that reads the JSON value
-  straight into the compiled arena, bypassing `MachineConfig` (kept for users who want it), with
-  a fallback to the full parser on any document it does not handle; expected about 2x on S5 and
-  S7, still well short of 100x. Building a machine once and cloning it (an `Arc`) costs
-  nanoseconds: S7 without the build is about 0.8 µs.
-- **S6** is construction of the interpreter, `start`, one send and the drop of both receipts and
-  the interpreter, with no allocation; what is left is moving and dropping an 830-byte
-  interpreter whose JSON `Value`s are 80 bytes each with `preserve_order`.
+- **Dispatch (S1, S3, S4)**: a send whose single enabled transition is *plain* (nothing it exits
+  or enters has actions, timers, invocations or final semantics, and the machine has no history
+  states) skips the general microstep: it clears the exit range's configuration bits, runs the
+  transition's actions and sets the precomputed entry set. What is left per send is transition
+  selection (the event-key lookup, then a walk up from the active leaf or down the active
+  regions), the report, and the `Receipt`: an `Arc` clone and drop of the machine (about 11 ns
+  of S1's 116 ns) plus the active leaves. A receipt without the machine handle would be an API
+  change (`state_ids()` / `matches()` would need the machine); not done.
+- **S2** is S1's dispatch plus the guard and the action: two registry lookups by name, two
+  closure calls that each look `count` up in the JSON context, and an `Arc<str>` clone of the
+  action name into the receipt's `ActionList` (another atomic pair). Reaching 105 ns needs the
+  logic resolved once per interpreter (an index per action and guard instead of a name lookup)
+  and receipts that name actions without reference counting; both are visible in the API.
+- **Construction (S5, S7)**: plain documents compile straight from the JSON value (20
+  allocations for S3's machine instead of 58; anything else still goes through
+  `MachineConfig`). The rest is the compiled arena itself: a full-id `Arc<str>` per state, the
+  child list of every compound state and the target list of every transition (public `Vec`
+  fields of `StateNode` / `Transition`), the state and transition tables, the id index, the
+  source document as compact JSON text (for `to_json`) and the `Arc`. On the Windows system
+  allocator an allocation and its free cost 50 to 100 ns, and a `StateNode` is about 700 bytes
+  to build and move. S7 adds the `after` entry's strings and the interpreter's timer and effect
+  buffers; without the build it is about 0.85 µs. 100x (0.79 / 1.18 µs) is out of reach for an
+  operation that builds a machine.
+- **S6** is `new` + `start` + one send + dropping two receipts and the interpreter, with no
+  allocation; the initial entry set is now cached per machine and the shared clock borrowed.
+  What remains is constructing, moving and dropping an ~830-byte interpreter, the start
+  macrostep and the two receipts' `Arc` pairs.
 
-The engine benchmarks that predate the parity scenarios, before and after the same pass (medians,
-best of five runs each, same machine):
+The engine benchmarks that predate the parity scenarios, second pass against this pass
+(interleaved in the same session, best of three each):
 
-| Benchmark | Before | After | What it measures |
+| Benchmark | Second pass | This pass | What it measures |
 |---|---|---|---|
-| `send_flat` | 446 ns | 192 ns | one event on a two-state machine, no actions |
-| `step_flat` | 324 ns | 131 ns | the bare `engine::step`, no interpreter |
-| `send_guard_assign` | 493 ns | 239 ns | guard plus a JSON `assign` |
-| `send_nested_3` | 642 ns | 212 ns | three-level hierarchy, cross-branch transition |
-| `send_parallel_2` | 543 ns | 213 ns | two orthogonal regions toggling |
-| `build_50_states` | 203 µs | 129 µs | JSON text to `Machine`, 50 states |
-| `snapshot_get` | 1.32 µs | 1.31 µs | serialise a 50-state machine's snapshot |
-| `snapshot_restore` | 8.98 µs | 8.16 µs | parse, validate and restore |
+| `send_flat` | 222 ns | 120 ns | one event on a two-state machine, no actions |
+| `step_flat` | 135 ns | 82 ns | the bare `engine::step`, no interpreter |
+| `send_guard_assign` | 338 ns | 186 ns | guard plus a JSON `assign` |
+| `send_nested_3` | 254 ns | 130 ns | three-level hierarchy, cross-branch transition |
+| `send_parallel_2` | 288 ns | 169 ns | two orthogonal regions toggling |
+| `build_50_states` | 191 µs | 90 µs | JSON text to `Machine`, 50 states |
+| `snapshot_get` | 2.12 µs | 2.05 µs | serialise a 50-state machine's snapshot |
+| `snapshot_restore` | 12.9 µs | 9.8 µs | parse, validate and restore |
+
+`snapshot_get` and `snapshot_restore` run code this pass barely touched: their differences are
+within the session's run-to-run spread, which the untouched `build_phase_*` benchmarks put at
+about 25 %.
 
 Reproduce both sides:
 

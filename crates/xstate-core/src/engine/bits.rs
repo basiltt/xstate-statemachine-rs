@@ -40,6 +40,20 @@ impl StateBits {
         }
     }
 
+    /// Remove every member in `start..end` (`end` is capped at the capacity).
+    #[inline]
+    pub(crate) fn clear_range(&mut self, start: usize, end: usize) {
+        let end = end.min(self.words.len() * WORD);
+        let mut i = start;
+        while i < end {
+            let (word, bit) = (i / WORD, i % WORD);
+            let span = (WORD - bit).min(end - i);
+            let mask = if span == WORD { u64::MAX } else { ((1u64 << span) - 1) << bit };
+            self.words[word] &= !mask;
+            i += span;
+        }
+    }
+
     /// Add every member of `other` (whose capacity is the same).
     pub(crate) fn union_with(&mut self, other: &StateBits) {
         for (w, o) in self.words.iter_mut().zip(other.words.iter()) {
@@ -147,6 +161,11 @@ mod tests {
         assert!(b.contains(129) && !b.contains(3) && !b.contains(500));
         assert_eq!(b.last(), Some(129));
         assert_eq!(StateBits::with_capacity(70).last(), None);
+        let mut c = b.clone();
+        c.clear_range(63, 71);
+        assert_eq!(c.ones().collect::<Vec<_>>(), [0, 129]);
+        c.clear_range(0, usize::MAX);
+        assert_eq!(c.ones().count(), 0);
         let mut m = StateBits::with_capacity(130);
         m.set(64, true);
         m.set(129, true);

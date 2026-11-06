@@ -45,6 +45,7 @@ pub mod pure;
 pub mod pyjson;
 pub mod redact;
 pub mod snapshot;
+mod text;
 pub mod typed;
 
 pub use clock::{Clock, RealClock, SimulatedClock};
