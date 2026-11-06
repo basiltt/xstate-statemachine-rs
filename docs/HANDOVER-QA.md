@@ -1,14 +1,16 @@
 # QA handover: `xstate-statemachine` for Rust
 
-**Audience.** An autonomous QA / review agent (or engineer) taking over this repository to battle-test
-it end to end before its first public release and to build the documentation site that will serve as
-the library's reference ("the bible").
+**Audience.** An autonomous QA / review agent (or engineer) taking over this repository for an
+**end-to-end review of the complete development and a full battle test of every part of it** before
+its first public release, and to build the documentation site that will serve as the library's
+reference ("the bible"). Nothing here is handed over as trusted: the development was done by AI
+agents under the owner's direction, and this document is the brief for the independent pass.
 
 **Status at handover.** Repository `C:\Users\basil\Desktop\Projects\RustProjects\xstate-statemachine-rs`,
-branch `main` (see `git log` for the head; last big batches: 0.12.0 alignment and the performance
-pass on 2026-11-06), clean tree, **no remote yet** (nothing has been pushed to GitHub; CI has never
-run). Workspace version `0.1.0`, unpublished. Roughly 80k lines of Rust across 15 crates, 20k of
-them tests; ~1100 cargo tests + 32 pytest tests pass; `cargo fmt --check`, clippy pedantic
+branch `main` at `9ec75e0` (2026-11-06; the last four commits are the Python 0.12.0 / XState 5.33.3
+alignment and three performance passes), clean tree, **no remote yet** (nothing has been pushed to
+GitHub; CI has never run). Workspace version `0.1.0`, unpublished. Roughly 80k lines of Rust across
+15 crates, 20k of them tests; ~1120 cargo tests + 32 pytest tests pass; `cargo fmt --check`, clippy pedantic
 with `-D warnings` on all targets/features, rustdoc with `-D warnings` and `cargo deny check` are clean.
 
 ---
@@ -123,10 +125,16 @@ integrating, gating and committing. Commits are on `main` in order:
 | 6 Postgres / NATS / RabbitMQ / live inspector / agents | `813db24`, `24b407e` | PostgresStore/Inbox/Log, NatsBroker, RabbitMqBroker, SseSink + `xsm inspect --live` + `xsm replay`, xstate-agents; fix: `serde_json` `float_roundtrip` (deadlines were one ULP off after a round trip) |
 | 7 SQS / Python bindings / facade / release prep | `a2a8fee`, `eac9a52` | SqsBroker, xstate-py, facade crate, per-crate READMEs, guides, CHANGELOG, CI/release workflows, cargo-deny clean, 0.1.0 |
 | Pre-release review | `d247434` | three independent reviews (security, Rust quality, correctness/parity) and fixes — see §5 |
+| First handover | `116c65e` … `07cd16a` | this document; the Python 0.12.0 implicit-invoke-input divergence recorded, then noted as fixed on the Python side |
+| Python ↔ XState convergence | `eed5e35`, `1abec8d`, `cfb0817` | while the owner converged the Python engine on XState (18 recorded differences, all fixed in Python 0.12.0), the Rust engine was fixed where it was the one that differed: exit actions when `start()` lands in a final state; `always` selected in entry order (`ActiveState::entered_at`); an eventless microstep that changes nothing is not re-selected; a parallel state whose child is a history node still completes; cases `038`–`050` added |
+| 0.12.0 alignment | `6caa8ab`, `90e3815` | port of the behaviour changes from the Python 0.12.0 review round (engine rules, config validation, redaction, receipts, persistence, EDA, CLI — the list is in `CHANGELOG.md` under `Unreleased` and in §5 below); cases `051`–`053`; xstate oracle on 5.33.3; `conformance/divergences.generated.md` empty; cargo-deny ignore for RUSTSEC-2026-0441 |
+| Performance pass 1 | `5efc80e` | `benches/python_parity.rs` (S1–S7 mirroring the Python competitor benchmarks), `scripts/perf_gate.py` + CI `bench-gate`; precomputed exit/entry sets, inline bitset configuration, per-node handled-event index, compact source text, interned event names: 2–3× on dispatch and construction |
+| Performance pass 2 | `6c4e652` | `ActionList` receipts (inline `SmallVec` — **public type change** in `StepReport`/`Receipt`), lazy `CancelTimers` (only states with `after`; `from_snapshot` refuses deadlines on states without `after`), name-scan logic registry (`logic/registry.rs`), in-place `start` |
+| Performance pass 3 | `9ec75e0` | single-transition "plain microstep" fast path (`engine/algorithm.rs`, differential proptest `engine/fast_path_tests.rs`), direct JSON → compiled machine path (`machine/direct.rs`, equivalence test `machine/direct_tests.rs`), cached initial entry set, inline name compare (`text.rs`): S1/S3/S4 past 100× Python |
 
 ### How correctness was established
 
-- **Conformance suite** (`conformance/`): 50 JSON cases, each run through the real XState v5 engine
+- **Conformance suite** (`conformance/`): 53 JSON cases, each run through the real XState v5 engine
   (Node, `conformance/tools/xstate_oracle`) and the Python library
   (`conformance/tools/generate_expected.py`), producing expected traces, Python `machine_hash` and
   Python snapshot text. `crates/xstate-conformance/tests` asserts the Rust engine matches XState on
@@ -314,8 +322,8 @@ Three independent reviews (security · Rust quality · correctness/parity) found
 ### Known gaps and deliberate deviations (verify, do not rediscover)
 
 Engine / core
-- The eight recorded Python-vs-XState divergences are fixed on the Python `xstate-v5-engine-parity`
-  branch (unreleased); `conformance/divergences.generated.md` is empty. The six further engine
+- The eight recorded Python-vs-XState divergences are fixed in the released Python 0.12.0 (the
+  `xstate-v5-engine-parity` branch was merged before the release); `conformance/divergences.generated.md` is empty. The six further engine
   differences (microstep conflict preemption and grouping, `done.state.*` queue, guard evaluation
   order, `assign` ordering, compound self-target without `reenter`, JSON `assign` without an
   `assignment` wrapper) are fixed there too and pinned by cases `038`–`045`; the case format gained
@@ -334,6 +342,26 @@ Engine / core
   final state now runs the exit actions (XState does; `crates/xstate-core/tests/start_in_final.rs`).
 - `RestoreOptions::default()` resumes timers; Python's bare `from_snapshot` parks them (`persisted()`
   resumes in both).
+- Deliberate differences kept when porting the Python 0.12.0 review fixes (each is documented in
+  `docs/guide/migrating-from-python.md`; verify the documentation, do not "fix" them silently):
+  the params check for built-in action names shadowed by user actions needs
+  `Machine::from_value_with_logic` (the plain constructors cannot see the registry); an
+  unregistered delay *name* is still an error, only a failing or non-finite delay *value* disables
+  its one timer; `maxIterations` rejects the string `"5"` (Python coerces); an unresolved
+  `sendTo`/`forwardTo`/`sendParent`/`escalate` target is reported through
+  `on_event_dropped("unresolved_target")` and `Receipt::error` (`StepReport::soft_error`), never
+  as a failed step; there is no fuzzy actor addressing; the tokio interpreter has no pluggable
+  clock; a NaN payload becomes `null` upstream of the `Envelope`.
+- Performance-pass invariants that a reviewer should try to break: the plain-microstep fast path
+  must be unobservable (toggle `algorithm::FAST_PATH` per thread, as `engine/fast_path_tests.rs`
+  does, and extend the generator — history states, `after`, invokes and finals are *excluded* from
+  the fast path and must stay excluded); the direct compile path must produce the same compiled
+  machine, `to_json`, structure hash, warnings and errors as the parser path for every document
+  (`machine/direct_tests.rs` covers 68 repository documents, 79 edge cases and 400 random machines;
+  anything it rejects must fall back, never silently differ); `CancelTimers` is emitted only for
+  states that declare `after`, so a snapshot with a deadline on a state without `after` must be
+  refused by `from_snapshot`; the logic registry's name scan switches to hashing above 16 entries
+  (both paths must agree); `Machine::initial_entry` is cached per machine and must be immutable.
 - Mermaid export renames a node whose id is the reserved word `end` (Python emits invalid Mermaid).
 - `xstate-testing` is a skeleton.
 
@@ -346,6 +374,12 @@ Persistence
   with Python).
 - Redis `{p}:keys` set retains expired members until `list_keys`/`forget` prune them.
 - `postgres` feature needs Rust 1.94 (sqlx 0.9); MSRV job skips it.
+- From the 0.12.0 alignment: `SqliteStore` accepts only `JournalMode::Wal | Delete` (the other
+  variants were removed — breaking within 0.1.0, fine before the first release);
+  `PersistedOptions::expected_machine_hash` was added (struct literal users must update);
+  `FileStore` fsyncs the directory after delete/forget on Unix only and that branch has never
+  run on Linux; `DueTimerScanner::validate` / `last_result` and the zero-interval refusal are new
+  and lightly tested.
 
 EDA
 - No Kafka adapter (`rdkafka` needs cmake/librdkafka, absent on the build machine; pure-Rust clients
@@ -357,6 +391,11 @@ EDA
   (`ordered=false`).
 - Broker options differ from Python's `on_disconnect`/`on_reconnect`/`dead_letters` hooks
   (`healthy()` + `on_undecodable` instead).
+- From the 0.12.0 alignment: `HandlerError::Requeue` (store outage: no attempt counted, envelope
+  redelivered) is new and only unit-tested against the fake broker; a corrupt SQLite outbox row is
+  parked under the owner `xsm:poison` and never relayed (Python does the same; check `list`/`stats`
+  show it); `replay` refuses redacted dead letters unless forced; `OutboxPlugin` warns on a
+  missing `data` field instead of failing.
 
 Patterns / agents
 - Choreography is sync-only; the breaker has `wrap` instead of a decorator; decorrelated jitter's
@@ -384,7 +423,9 @@ Python bindings
 
 Release
 - The crates.io name `xsm` is taken → package `xstate-statemachine-cli`, binary `xsm`.
-- One ignored advisory (RUSTSEC-2025-0134 via lapin 3; lapin 4 breaks the adapter API).
+- Two ignored advisories in `deny.toml` (RUSTSEC-2025-0134 `rustls-pemfile` via lapin 3 — lapin 4
+  breaks the adapter API; RUSTSEC-2026-0441 `pin-utils` unmaintained via `aws-smithy-http`).
+  Re-check both; drop an ignore as soon as the upstream crate moves.
 - CI/release workflows have never executed; the integration job's Python install list is best-effort.
 - No GitHub Pages site exists. The docs are Markdown under `docs/guide/`, `docs/adr/`, per-crate
   READMEs and rustdoc.
@@ -395,6 +436,43 @@ Treat every claim in this document, the README, the CHANGELOG, the guides and th
 **unverified until you have exercised it**. The goal is a release the owner can trust and a
 documentation site users can rely on. Work in this order; each item ends with a written report
 section (format in §8) and, where you fix something, a commit that passes all gates.
+
+### 6.0 End-to-end review of the development
+
+Before testing anything, review the whole thing as a senior engineer would review a large pull
+request from a contractor:
+
+- **Read every commit** in `git log --reverse` with its diff (the table in §3 is the map). For each,
+  check that the commit message describes what the diff does, that tests were added with the
+  behaviour, and that nothing unrelated slipped in. Pay particular attention to the last four
+  commits (`6caa8ab` … `9ec75e0`): they touched the hot paths of the engine and the parser and were
+  gated by equivalence tests that the same agents wrote.
+- **Audit the three performance passes** for correctness, not speed: the fast path
+  (`engine/algorithm.rs`, `engine/sets.rs::Plans::is_plain`), the direct compiler
+  (`machine/direct.rs`, `machine/assemble.rs`, `machine/compile.rs`), the bitset
+  (`engine/bits.rs`), the per-node event index and selection (`engine/select.rs`), the logic
+  registry (`logic/registry.rs`), the interned text helpers (`text.rs`) and the lazy
+  `CancelTimers`. For each: is the invariant stated, is it tested, can you construct an input the
+  equivalence test's generator never produces? Run the differential and equivalence tests with
+  `PROPTEST_CASES=100000`. Then run the whole conformance suite and every golden with the fast
+  path disabled (`algorithm::FAST_PATH`) to confirm both paths agree on the real cases.
+- **Audit the 0.12.0 alignment** item by item: the Python `CHANGELOG.md` entry for 0.12.0 (in the
+  Python checkout) is the source list; `CHANGELOG.md` here under `Unreleased` is the claimed port.
+  For each item confirm there is a Rust test, that the behaviour matches Python (write the
+  Python one-liner and compare), or that `docs/guide/migrating-from-python.md` records the
+  deliberate difference. Items with no test and no entry are findings.
+- **Review the public API** of every crate (`cargo doc --open`, `cargo public-api` if installable)
+  against the Rust API Guidelines; list every type and function a user can reach, decide whether
+  it should be public before 0.1.0 ships (what is `pub` today is the semver surface), and check
+  that the performance-driven public type change (`ActionList`, a `SmallVec<[Arc<str>; 2]>`, in
+  `StepReport::actions` and `Receipt::actions`) is documented and ergonomic; `SyncInterpreter`
+  also stopped holding an `Arc<RealClock>` (private `ClockHandle`), which must not have changed
+  `with_clock` behaviour.
+- **Review the tests themselves**: a test that asserts the implementation's own output (goldens
+  regenerated from the code under test, snapshots accepted blind) proves nothing. Every golden
+  must come from Python or the Node oracle; check the generator scripts actually call them.
+- **Review the documentation claims** (README performance table, feature matrix, guides) against
+  what you measured and ran, and the CHANGELOG against `git log`.
 
 ### 6.1 Build, gates and repository hygiene
 
@@ -524,13 +602,22 @@ implementation's behaviour, and keep any test that found a bug. Minimum matrices
 
 ### 6.3 Non-functional
 
-- **Performance**: run the criterion suite on a quiet machine, compare to `benches/budgets.json`,
-  and build the missing **perf gate** (a script or `xtask` that fails CI when p50 regresses beyond
-  `allowed_slowdown`). Add benches for persistence stores, dispatcher, envelope encode/decode,
-  inspector encoding, macros-generated machines. Profile allocations on `send` (the earlier
-  allocation pass used `allocprof`; `dhat` or `heaptrack` on Linux). Compare against the Python
-  benchmarks (`benchmarks/competitors` in the Python repo) and update the README table with
-  reproducible numbers and the exact command.
+- **Performance**: reproduce the S1–S7 table in §3 on a **quiet machine** (nothing else building)
+  with `python scripts/perf_gate.py` (absolute mode) and `cargo bench -p xstate-core --bench
+  python_parity`; the owner's target is **100× the Python 0.12.0 numbers on every scenario**.
+  S1/S3/S4 are past it, S2/S6 are 60–70×, S5/S7 (construction-bound) 17–30×. Verify the Python
+  side too: re-run the Python competitor benchmark (`benchmarks/competitors` in the Python repo,
+  same machine, same day) so the ratio is not two machines' numbers divided. Decide with the owner
+  whether the remaining levers listed in §3 (receipt without the machine `Arc` clone, resolved
+  logic indexes per `ActionDef`, boxing cold `StateNode` fields, a smaller interpreter) are worth
+  their API cost; do **not** add a compiled-machine cache to win S5/S7. Then widen the suite: add
+  benches for persistence stores, dispatcher, envelope encode/decode, inspector encoding,
+  macros-generated machines, the tokio interpreter and the Python bindings. Profile allocations on
+  `send` and on `Machine::from_json` (`dhat` or `heaptrack` on Linux); `send` on a flat machine
+  should allocate nothing and `from_json` for the S3 machine ~20 times. Make the perf gate
+  trustworthy in CI (`bench-gate` is advisory because runner hardware varies; a self-hosted or
+  relative-mode gate with a tighter `allowed_slowdown` is the goal) and update the README table
+  with the reproduced numbers and the exact command.
 - **Memory and resource leaks**: long-running actors, dispatcher with 1M envelopes, SSE server with
   churned clients, Python bindings.
 - **Error handling**: every `Error` variant reachable and documented; no `Other(String)` where a
@@ -549,6 +636,11 @@ implementation's behaviour, and keep any test that found a bug. Minimum matrices
   (`C-*` items: naming, `#[non_exhaustive]`, `Debug`/`Clone`/`Send`/`Sync` on public types,
   builder conventions, error types implementing `std::error::Error` + `Send + Sync`), MSRV policy
   statement.
+- **Fuzzing** (`cargo fuzz`, Linux): targets for `Machine::from_json` (both the direct and the
+  parser path must agree or the direct path must decline), `Snapshot::from_json` →
+  `SyncInterpreter::from_snapshot`, `Envelope::from_json`, the CloudEvents extension-name grammar,
+  the `SseSink` HTTP parser, the inspector recording reader and the CLI argument surface. Run each
+  for at least an hour; keep the corpus in the repository.
 - **Code standards**: `cargo clippy -- -W clippy::nursery -W clippy::cargo` as advisory;
   `cargo udeps`, `cargo machete` (unused deps), `cargo semver-checks` baseline, `cargo
   llvm-cov` coverage report per crate (target ≥ 80%; identify untested public functions),
@@ -599,15 +691,18 @@ provider integrations, Python-only CLI commands (`list-templates`), `xsm` intera
 
 ## 7. Suggested order of work
 
-1. Fresh-clone builds on both OSes; create the GitHub repo; make CI and a release dry run green;
+1. The end-to-end review of §6.0 (commit by commit, performance passes, 0.12.0 alignment, public
+   API, tests, docs) — write its findings down before changing anything.
+2. Fresh-clone builds on both OSes; create the GitHub repo; make CI and a release dry run green;
    publish the Pages skeleton (so the site URL exists from day one).
-2. Coverage report + contract test suites for stores and brokers (cheap, finds the most).
-3. Engine fuzzing and property tests; Stately editor exports.
-4. HTTP security/load suite; inspector browser verification.
-5. Performance gate and benchmark reproduction; README numbers.
-6. Agents, patterns, macros adversarial tests.
-7. Documentation site to completion with examples; parity audit table.
-8. Final release checklist (§8) and the 0.1.0 tag.
+3. Coverage report + contract test suites for stores and brokers (cheap, finds the most).
+4. Engine fuzzing and property tests (fast path and direct compiler first); Stately editor exports.
+5. HTTP security/load suite; inspector browser verification.
+6. Performance reproduction on a quiet machine, Python side re-measured, perf gate hardened;
+   README numbers.
+7. Agents, patterns, macros adversarial tests.
+8. Documentation site to completion with examples; parity audit table.
+9. Final release checklist (§9) and the 0.1.0 tag.
 
 ## 8. Reporting and fixing
 
@@ -629,7 +724,8 @@ provider integrations, Python-only CLI commands (`list-templates`), `xsm` intera
 - [ ] CI green on main for three OSes, MSRV, integration, deny, docs, python-bindings, facade-only, fixtures
 - [ ] `release.yml` dry run green on a `v0.1.0-rc` tag; `scripts/publish.sh --dry-run` green
 - [ ] Coverage ≥ 80% per crate; fuzz targets run ≥ 1 h each without findings
-- [ ] Perf gate in CI; README numbers reproduced with the stated command
+- [ ] End-to-end review (§6.0) written up; every finding fixed or accepted by the owner
+- [ ] Perf gate in CI; README S1–S7 numbers reproduced with the stated command on a quiet machine; Python side re-measured
 - [ ] Security review re-run; threat model and SECURITY.md published; `cargo audit` clean
 - [ ] Parity table published; every known gap listed in the docs
 - [ ] GitHub Pages live, link-checked, every page verified against code, examples compile in CI
@@ -645,7 +741,12 @@ provider integrations, Python-only CLI commands (`list-templates`), `xsm` intera
 | Guides | `docs/guide/{getting-started,stately-editor,persistence,eda,migrating-from-python,features}.md` |
 | Conformance cases, schema, oracles, divergences | `conformance/{cases,schema,tools,divergences.generated.md,README.md}` |
 | Golden generators | `conformance/tools/{generate_expected,inspect_golden,eda_golden,patterns_golden,agents_golden,export_golden}.py` |
-| Benchmarks and budgets | `crates/xstate-core/benches/core.rs`, `benches/{budgets.json,budgets.schema.json,README.md}` |
+| Benchmarks, budgets, perf gate | `crates/xstate-core/benches/{core,python_parity}.rs`, `benches/{budgets.json,budgets.schema.json,README.md}`, `scripts/perf_gate.py` |
+| Engine hot paths (review these) | `crates/xstate-core/src/engine/{algorithm,select,sets,bits,actions}.rs`, fast-path differential test `engine/fast_path_tests.rs` |
+| Direct compiler (review this) | `crates/xstate-core/src/machine/{direct,assemble,compile,source,builtin}.rs`, equivalence test `machine/direct_tests.rs` |
+| Logic registry, interned names, restore | `crates/xstate-core/src/logic/registry.rs`, `src/text.rs`, `src/interpreter/restore.rs` |
+| Config validation (0.12.0 rules) | `crates/xstate-core/src/config/parse.rs`, `config/parse/{items,tests}.rs`, redaction `src/redact.rs` |
+| Python 0.12.0 changelog (source of the alignment) | `C:\Users\basil\Desktop\Projects\PythonProjects\xstate-statemachine\CHANGELOG.md` (section `0.12.0`) |
 | CI / release | `.github/workflows/{ci,release}.yml`, `scripts/{publish.sh,publish-order.txt}`, `deny.toml` |
 | Facade features | `crates/xstate-statemachine/Cargo.toml` (`tokio persistence sqlite redis postgres eda redis-streams nats rabbitmq sqs patterns observability inspect macros axum agents testing full`) |
 | Python bindings | `crates/xstate-py/{src,python,tests,bench,pyproject.toml}` |
