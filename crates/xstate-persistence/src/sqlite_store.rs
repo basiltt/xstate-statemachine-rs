@@ -27,8 +27,8 @@ use crate::memory_store::{
 };
 use crate::store::Result;
 use crate::store::{
-    DEFAULT_MAX_SNAPSHOT_BYTES, ForgetReport, Health, LockGuard, SaveOptions, StateStore,
-    StoreError, StoredSnapshot, validate_key, wall_now,
+    DEFAULT_MAX_SNAPSHOT_BYTES, ForgetReport, Health, LockGuard, MAX_KEY_LEN, SaveOptions,
+    StateStore, StoreError, StoredSnapshot, validate_key, wall_now,
 };
 
 /// Schema version written by this library. Bump together with an entry in `upgrade_steps`.
@@ -733,12 +733,23 @@ impl StateStore for SqliteStore {
             return Ok(Vec::new());
         }
         let mut keys: Vec<String> = self.inner.with_conn("<db>", |conn, _| {
+            // Rows a foreign writer planted under a key `load()` would refuse are filtered in
+            // SQL, before `LIMIT`: otherwise an invalid key that sorts first (the empty string)
+            // consumes a slot and starves the valid keys behind it.
             let mut statement = conn.prepare(
-                "SELECT key FROM statecharts WHERE substr(key, 1, ?1) = ?2 ORDER BY key LIMIT ?3",
+                "SELECT key FROM statecharts WHERE substr(key, 1, ?1) = ?2 \
+                 AND key <> '' AND length(key) <= ?3 \
+                 AND instr(CAST(key AS BLOB), X'00') = 0 \
+                 ORDER BY key LIMIT ?4",
             )?;
             let rows = statement
                 .query_map(
-                    params![sql_count(prefix.chars().count()), prefix, sql_count(limit)],
+                    params![
+                        sql_count(prefix.chars().count()),
+                        prefix,
+                        sql_count(MAX_KEY_LEN),
+                        sql_count(limit)
+                    ],
                     |r| r.get(0),
                 )?
                 .collect::<rusqlite::Result<Vec<String>>>()?;

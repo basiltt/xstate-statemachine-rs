@@ -11,7 +11,9 @@ use xstate_core::snapshot::Deadline;
 
 use super::db::FailResult;
 use crate::memory_store::{check_record_fields, deadline_from_value, delay_ms_as_i64};
-use crate::store::{ForgetReport, SaveOptions, StoreError, StoredSnapshot, wall_now};
+use crate::store::{
+    ForgetReport, MAX_KEY_LEN, SaveOptions, StoreError, StoredSnapshot, wall_now,
+};
 
 /// The snapshot table: its plain name (the `source` of deadline and lock rows) and the quoted
 /// form spliced into statements.
@@ -116,12 +118,15 @@ pub(super) async fn list_keys(
     limit: usize,
 ) -> FailResult<Vec<String>> {
     let sql = format!(
-        "SELECT key FROM {} WHERE key LIKE $1 ESCAPE '\\' ORDER BY key COLLATE \"C\" LIMIT $2",
+        "SELECT key FROM {} WHERE key LIKE $1 ESCAPE '\\' \
+         AND key <> '' AND char_length(key) <= $3 \
+         ORDER BY key COLLATE \"C\" LIMIT $2",
         t.sql
     );
     let keys = sqlx::query_scalar(AssertSqlSafe(sql))
         .bind(like_prefix(prefix))
         .bind(sql_count(limit))
+        .bind(sql_count(MAX_KEY_LEN))
         .fetch_all(pool)
         .await?;
     Ok(keys)

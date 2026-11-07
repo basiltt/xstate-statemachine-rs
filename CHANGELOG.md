@@ -59,6 +59,10 @@ raised only in a minor release.
 
 ### Fixed
 
+- `xstate-persistence`: `list_keys` on the SQLite and PostgreSQL stores now drops keys that
+  `load()` would refuse *before* applying `LIMIT`, matching the Redis store. A foreign writer
+  that planted an empty key (which sorts first) used to consume the limit slot, so
+  `list_keys(_, 1)` could return no valid key at all.
 - `SECURITY.md` now names a working private-reporting channel (GitHub's private vulnerability
   reporting) instead of an author email the Cargo manifest does not contain, and links a real
   threat-model page (`docs/book/src/operations/security.md`) covering the parser, snapshot
