@@ -514,13 +514,44 @@ impl StatechartRegistry {
     pub fn origin_allowed(&self, headers: &HeaderMap) -> bool {
         let Some(origin) = headers.get(header::ORIGIN) else { return true };
         let Ok(origin) = origin.to_str() else { return false };
-        if self.settings.allowed_origins.contains(origin) {
-            return true;
-        }
-        let Some(host) = headers.get(header::HOST).and_then(|h| h.to_str().ok()) else {
-            return false;
-        };
-        let bare = origin.split_once("://").map_or(origin, |(_, rest)| rest);
-        !host.is_empty() && bare.trim_end_matches('/') == host
+        let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
+        origin_is_allowed(origin, host, &self.settings.allowed_origins)
+    }
+}
+
+/// X0.7's rule (Python's shared `origin_is_allowed`): an allow-listed origin matches exactly;
+/// otherwise the origin's host must equal `Host`, compared case-insensitively (host names are
+/// case-insensitive). The scheme is not compared; a deployment that needs scheme-exact matching
+/// lists the full origin in `allowed_origins`.
+fn origin_is_allowed(origin: &str, host: Option<&str>, allowed: &HashSet<String>) -> bool {
+    if allowed.contains(origin) {
+        return true;
+    }
+    let Some(host) = host else { return false };
+    let bare = origin.split_once("://").map_or(origin, |(_, rest)| rest);
+    !host.is_empty() && bare.trim_end_matches('/').eq_ignore_ascii_case(host)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::origin_is_allowed;
+
+    #[test]
+    fn origin_host_comparison_is_case_insensitive() {
+        let allowed = HashSet::new();
+        assert!(origin_is_allowed("https://Example.COM", Some("example.com"), &allowed));
+        assert!(origin_is_allowed("https://example.com", Some("EXAMPLE.COM"), &allowed));
+        assert!(origin_is_allowed("https://example.com/", Some("example.com"), &allowed));
+        assert!(!origin_is_allowed("https://evil.example", Some("example.com"), &allowed));
+        assert!(!origin_is_allowed("https://example.com", None, &allowed));
+    }
+
+    #[test]
+    fn allow_listed_origins_still_match_exactly() {
+        let allowed = HashSet::from(["https://x.test".to_owned()]);
+        assert!(origin_is_allowed("https://x.test", Some("y.test"), &allowed));
+        assert!(!origin_is_allowed("https://x.test.evil", None, &allowed));
     }
 }

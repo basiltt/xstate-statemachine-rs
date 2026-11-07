@@ -65,6 +65,9 @@ raised only in a minor release.
 
 ### Fixed
 
+- `xstate-axum`: the same-origin check compares the `Origin` host with `Host`
+  case-insensitively, matching Python's shared `origin_is_allowed` rule; a mixed-case `Host`
+  header was a false refusal. Allow-listed origins still match exactly.
 - `xstate-eda`: a settle (`ack` / `drop_message`) that the transport fails now leaves the
   delivery in flight, so the caller can retry it with the same `Delivery` instead of getting a
   silent no-op; and the RabbitMQ transport releases its un-acked slot even when the broker
