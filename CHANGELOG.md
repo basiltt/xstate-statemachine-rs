@@ -11,6 +11,10 @@ raised only in a minor release.
 
 ### Changed
 
+- `xstate-tokio`'s test suite now carries the §6.2 actor matrix: paused-clock timers and
+  cancellation, every mailbox overflow policy, sends to finished/stopped actors, child and
+  invoke lifecycles, `systemId` collisions, panic containment, restart/drain and observers (32
+  tests pass).
 - `xstate-axum`'s test suite now carries the §6.2 HTTP battle matrix: problem-details leak
   checks, Origin/content-type edges, 408/413, authorization-before-existence, resident
   persistence, per-event WebSocket authorization, build-time option validation and inspector
