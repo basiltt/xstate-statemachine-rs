@@ -11,80 +11,20 @@ use super::record::{Disposition, Origin, TransitionLogStore, TransitionRecord};
 use crate::receipts::ReceiptErrorKind;
 use crate::store::wall_now;
 
-/// Payload keys masked by default (case-insensitive substring match, `-` read as `_`): the
-/// Python `DEFAULT_REDACT_KEYS`.
-pub const DEFAULT_REDACT_KEYS: &[&str] = &[
-    "password",
-    "passwd",
-    "pwd",
-    "secret",
-    "token",
-    "api_key",
-    "apikey",
-    "authorization",
-    "auth",
-    "bearer",
-    "credential",
-    "private_key",
-    "cookie",
-    "session",
-    "signature",
-    "otp",
-    "pin",
-    "card",
-    "cvv",
-    "cvc",
-    "pan",
-    "iban",
-    "account_number",
-    "account_no",
-    "routing",
-    "swift",
-    "mnemonic",
-    "seed_phrase",
-    "seed",
-    "ssn",
-    "dob",
-    "date_of_birth",
-    "email",
-    "phone",
-    "passport",
-];
+/// Payload keys masked by default: the Python `DEFAULT_REDACT_KEYS`, as compiled by
+/// [`xstate_core::redact::RedactKeys`].
+pub use xstate_core::redact::DEFAULT_REDACT_KEYS;
 
 /// A shared `null`, borrowed where an event has no payload.
 static NULL: Value = Value::Null;
 
-/// Replacement for a redacted value.
-const MASK: &str = "***";
-
-fn normalise(key: &str) -> String {
-    key.to_lowercase().replace('-', "_")
-}
-
-/// A copy of `value` with every object member whose key contains one of `keys` (case-insensitive
-/// substring, `-` treated as `_` on both sides) replaced by `"***"`. Recurses into objects and
+/// A copy of `value` with every object member whose key is sensitive (per
+/// [`xstate_core::redact::RedactKeys`]: short entries match whole words, long entries
+/// substrings, case- and dash-insensitively) replaced by `"***"`. Recurses into objects and
 /// arrays; never mutates its input.
 #[must_use]
 pub fn redact<S: AsRef<str>>(value: &Value, keys: &[S]) -> Value {
-    let normalised: Vec<String> = keys.iter().map(|k| normalise(k.as_ref())).collect();
-    redact_with(value, &normalised)
-}
-
-fn redact_with(value: &Value, keys: &[String]) -> Value {
-    match value {
-        Value::Object(map) => Value::Object(
-            map.iter()
-                .map(|(k, v)| {
-                    let key = normalise(k);
-                    let masked = keys.iter().any(|needle| key.contains(needle.as_str()));
-                    let v = if masked { Value::String(MASK.into()) } else { redact_with(v, keys) };
-                    (k.clone(), v)
-                })
-                .collect(),
-        ),
-        Value::Array(items) => Value::Array(items.iter().map(|v| redact_with(v, keys)).collect()),
-        other => other.clone(),
-    }
+    xstate_core::redact::RedactKeys::new(keys).redact(value)
 }
 
 /// Payload keys the observer reads the audit fields from (the Python `AuditPlugin`).
@@ -286,10 +226,9 @@ impl TransitionLogObserver {
                 other => json_object([("value", other.clone())]),
             },
         };
-        match redact_with(
-            &Value::Object(payload),
-            &self.redact_keys.iter().map(|k| normalise(k)).collect::<Vec<_>>(),
-        ) {
+        match xstate_core::redact::RedactKeys::new(&self.redact_keys)
+            .redact(&Value::Object(payload))
+        {
             Value::Object(map) => map,
             _ => Map::new(),
         }

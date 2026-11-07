@@ -30,6 +30,7 @@ pub const DEFAULT_REDACT_KEYS: &[&str] = &[
     "apikey",
     "authorization",
     "auth",
+    "oauth",
     "bearer",
     "credential",
     "private_key",
@@ -40,6 +41,8 @@ pub const DEFAULT_REDACT_KEYS: &[&str] = &[
     "pin",
     // payment / banking
     "card",
+    "creditcard",
+    "cardnumber",
     "cvv",
     "cvc",
     "pan",
@@ -175,6 +178,14 @@ mod tests {
         }
         for key in ["name", "count", "user", "id"] {
             assert!(!keys.matches(key), "{key} should not match");
+        }
+    }
+
+    #[test]
+    fn python_0120_denylist_entries_are_present() {
+        let keys = RedactKeys::default();
+        for key in ["oauth", "oauthToken", "creditcard", "cardnumber", "cardNumber"] {
+            assert!(keys.matches(key), "{key} should match");
         }
     }
 

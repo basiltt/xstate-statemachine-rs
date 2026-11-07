@@ -389,6 +389,29 @@ fn redact_masks_sensitive_keys_recursively_without_mutating() {
     assert_eq!(redact(&json!({"password": 1}), &[] as &[&str]), json!({"password": 1}));
 }
 
+#[test]
+fn redact_uses_the_python_0120_word_rule_and_entries() {
+    // The observer's helper must not keep its own copy of the rule: 0.12.0 made short entries
+    // match whole words only (so these ordinary keys survive) and added oauth / creditcard /
+    // cardnumber to the denylist.
+    let out = redact(
+        &json!({
+            "shipping": 1, "company": 1, "author": 1, "spinner": 1,
+            "oauth": 1, "creditcard": 1, "cardnumber": 1,
+            "pin": 1, "user_pin": 1, "sessionId": 1
+        }),
+        DEFAULT_REDACT_KEYS,
+    );
+    assert_eq!(
+        out,
+        json!({
+            "shipping": 1, "company": 1, "author": 1, "spinner": 1,
+            "oauth": "***", "creditcard": "***", "cardnumber": "***",
+            "pin": "***", "user_pin": "***", "sessionId": "***"
+        })
+    );
+}
+
 // ---------------------------------------------------------------------------------- observer
 
 const MACHINE: &str = r#"{"id":"m","version":"1.0","initial":"a","states":{

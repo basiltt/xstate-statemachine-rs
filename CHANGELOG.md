@@ -65,6 +65,11 @@ raised only in a minor release.
 
 ### Fixed
 
+- `xstate-core` / `xstate-persistence`: redaction now matches Python 0.12.0 exactly. The core
+  denylist gained `oauth`, `creditcard` and `cardnumber` (they were leaking through the
+  inspector, dead-letter and outbox redaction), and the transition-log observer no longer keeps
+  its own pre-0.12.0 copy of the rule — it delegates to `xstate_core::redact::RedactKeys` — so
+  ordinary keys such as `shipping`, `company`, `author` and `spinner` are no longer over-redacted.
 - `xstate-persistence`: `list_keys` on the SQLite and PostgreSQL stores now drops keys that
   `load()` would refuse *before* applying `LIMIT`, matching the Redis store. A foreign writer
   that planted an empty key (which sorts first) used to consume the limit slot, so
