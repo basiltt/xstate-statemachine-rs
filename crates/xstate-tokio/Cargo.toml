@@ -14,13 +14,14 @@ categories.workspace = true
 [dependencies]
 xstate-core = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+futures-util = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 smallvec = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "test-util"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util"] }
 
 [lints]
 workspace = true

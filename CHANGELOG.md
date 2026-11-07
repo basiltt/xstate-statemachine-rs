@@ -73,6 +73,12 @@ raised only in a minor release.
 
 ### Fixed
 
+- `xstate-tokio`: a panic in an action, guard, timer effect or service no longer kills the
+  actor task silently. The panic is contained: the actor enters `Status::Error` with the panic
+  message and tears its children/services down, and a panicking async service reaches the parent
+  as `error.actor` instead of hanging the invoke. `send_and_wait` now applies the overflow
+  policy (`Reject` → `LimitExceeded`, `DropNewest` → drop with `LimitExceeded`) instead of always
+  blocking. `ActiveState::fail` is the new core helper for drivers that contain a panic.
 - `xstate-axum`: a request body carrying `idempotency_key` is refused with 422, matching
   Python's adapter-owned payload keys. It previously reached the idempotency inbox and could
   deduplicate a request without the validated `Idempotency-Key` header (bypassing its length and

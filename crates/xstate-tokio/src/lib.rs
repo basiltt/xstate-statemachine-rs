@@ -200,11 +200,40 @@ impl<C: Context> Interpreter<C> {
     /// Queue an event and wait until it (and everything it triggered synchronously) has been
     /// processed.
     ///
+    /// The overflow policy applies before waiting: under [`Overflow::Reject`] a full mailbox is
+    /// [`Error::LimitExceeded`] (never a block), and under [`Overflow::DropNewest`] the event is
+    /// dropped and the call returns `LimitExceeded` naming the drop because there is no receipt
+    /// to wait for.
+    ///
     /// # Errors
-    /// Engine errors from processing the event, or the actor stopping first.
+    /// Engine errors from processing the event, the actor stopping first, or the mailbox being
+    /// full under a non-blocking overflow policy.
     pub async fn send_and_wait(&self, event: impl Into<Event>) -> Result<Receipt> {
+        let event = event.into();
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx.send(Msg::Event(event.into(), Some(reply_tx))).await.map_err(|_| stopped())?;
+        let msg = Msg::Event(event, Some(reply_tx));
+        match self.overflow {
+            Overflow::Block => {
+                self.tx.send(msg).await.map_err(|_| stopped())?;
+            }
+            Overflow::DropNewest | Overflow::Reject => match self.tx.try_send(msg) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Closed(_)) => return Err(stopped()),
+                Err(mpsc::error::TrySendError::Full(Msg::Event(ev, _))) => {
+                    if self.overflow == Overflow::DropNewest {
+                        tracing::warn!(target: "xstate", event = %ev.ty, "mailbox full; event dropped");
+                        return Err(Error::LimitExceeded("mailbox full; event dropped".into()));
+                    }
+                    return Err(Error::LimitExceeded(format!(
+                        "mailbox full ({} events)",
+                        self.tx.max_capacity()
+                    )));
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    return Err(Error::LimitExceeded("mailbox full".into()));
+                }
+            },
+        }
         reply_rx.await.map_err(|_| stopped())?
     }
 

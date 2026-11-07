@@ -115,6 +115,20 @@ impl<C> ActiveState<C> {
         self.error.as_deref()
     }
 
+    /// Move a running state to [`Status::Error`] with `message`.
+    ///
+    /// The step engine only errors through its own error path; this is for drivers that contain
+    /// a panic from user logic and must fail the actor rather than leave it `Running`. It is a
+    /// no-op unless the state is running, and clears the internal queue like the engine's error
+    /// path does.
+    pub fn fail(&mut self, message: impl Into<String>) {
+        if self.status == Status::Running {
+            self.status = Status::Error;
+            self.error = Some(message.into());
+            self.internal_queue.clear();
+        }
+    }
+
     /// Every active state (ancestors included) in document order.
     pub fn configuration(&self) -> impl Iterator<Item = StateId> + '_ {
         self.configuration.states()

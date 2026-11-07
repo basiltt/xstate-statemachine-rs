@@ -1,8 +1,10 @@
 //! The actor task: owns the runtime state, drives the step engine and executes effects.
 
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
+use futures_util::FutureExt;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
@@ -16,6 +18,35 @@ use xstate_core::{
 };
 
 use crate::{Interpreter, Msg, Options, View};
+
+/// The text of a panic payload, for the actor's error path and log lines.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panic in user logic".to_owned())
+}
+
+/// Run `f`, routing a panic in user logic through the actor's error path (`error.actor`,
+/// `Status::Error`, child/service teardown) instead of unwinding the actor task and leaving the
+/// handle reporting a stale `Running` view.
+fn contained<C: Context>(core: &mut Core<C>, f: impl FnOnce(&mut Core<C>)) {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| f(core))) {
+        fail_contained(core, payload.as_ref());
+    }
+}
+
+fn fail_contained<C: Context>(core: &mut Core<C>, payload: &(dyn std::any::Any + Send)) {
+    let message = panic_message(payload);
+    // A panic is not a recoverable action error: fail the actor directly (an `onError` handler
+    // is for engine errors, not for a broken invariant) and tear the children down.
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        core.state.fail(format!("user logic panicked: {message}"));
+        core.check_finished();
+        core.publish();
+    }));
+}
 
 /// Registry of actors addressable by `systemId`, shared by an actor tree.
 #[derive(Debug, Clone, Default)]
@@ -185,13 +216,19 @@ async fn run<C: Context>(
             biased;
             internal = internal_rx.recv() => {
                 if let Some(msg) = internal {
-                    core.on_internal(msg);
+                    contained(&mut core, |core| core.on_internal(msg));
                 }
             }
             msg = rx.recv() => match msg {
                 None => core.shutdown(),
                 Some(Msg::Event(event, reply)) => {
-                    let outcome = core.process(event);
+                    let outcome = match catch_unwind(AssertUnwindSafe(|| core.process(event))) {
+                        Ok(outcome) => outcome,
+                        Err(payload) => {
+                            fail_contained(&mut core, payload.as_ref());
+                            Err(Error::Logic("user logic panicked".into()))
+                        }
+                    };
                     if let Some(reply) = reply {
                         let _ = reply.send(outcome);
                     }
@@ -205,7 +242,7 @@ async fn run<C: Context>(
                 }
             },
             () = async { tokio::time::sleep_until(next_due.unwrap_or_else(Instant::now)).await }, if next_due.is_some() => {
-                core.fire_due_timers();
+                contained(&mut core, Core::fire_due_timers);
             }
         }
     }
@@ -559,7 +596,15 @@ impl<C: Context> Core<C> {
                 let id = id.to_owned();
                 let task_id = id.clone();
                 let handle = tokio::spawn(async move {
-                    let result = fut.await;
+                    // A panic in the service must reach the parent as `error.actor`; letting it
+                    // unwind the task would never send `ServiceDone` and hang the invoke.
+                    let result = match AssertUnwindSafe(fut).catch_unwind().await {
+                        Ok(result) => result,
+                        Err(payload) => Err(Error::Logic(format!(
+                            "service panicked: {}",
+                            panic_message(payload.as_ref())
+                        ))),
+                    };
                     let _ = tx.send(Internal::ServiceDone { id: task_id, result });
                 });
                 self.services.insert(id, handle);
