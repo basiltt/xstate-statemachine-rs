@@ -46,6 +46,10 @@ raised only in a minor release.
 
 ### Fixed
 
+- `SECURITY.md` now names a working private-reporting channel (GitHub's private vulnerability
+  reporting) instead of an author email the Cargo manifest does not contain, and links a real
+  threat-model page (`docs/book/src/operations/security.md`) covering the parser, snapshot
+  restore, EDA envelopes, the SSE inspector and the axum surfaces.
 - `xstate-core`: a machine document nested deeper than 128 state levels (root counted as 0)
   is refused with `Error::LimitExceeded` instead of overflowing the thread stack (an
   uncatchable process abort) when a programmatically built `Value` is compiled; both the
