@@ -1,6 +1,6 @@
 # Security hardening and threat model
 
-This page is the threat model behind [`SECURITY.md`](../../../../SECURITY.md). It covers the
+This page is the threat model behind [`SECURITY.md`](https://github.com/basiltt/xstate-statemachine-rs/blob/main/SECURITY.md). It covers the
 surfaces the library itself owns when it is embedded in an application. Deployment hardening
 (TLS termination, network policy, secret storage) belongs to the operator and is summarised at
 the end.
@@ -68,5 +68,5 @@ address, so a retry is not mistaken for a replay of a different payload.
 
 ## Reporting a vulnerability
 
-See [`SECURITY.md`](../../../../SECURITY.md) for the private reporting channel and expected
+See [`SECURITY.md`](https://github.com/basiltt/xstate-statemachine-rs/blob/main/SECURITY.md) for the private reporting channel and expected
 response times.

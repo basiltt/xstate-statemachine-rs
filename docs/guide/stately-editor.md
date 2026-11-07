@@ -115,7 +115,7 @@ The editor exports data; JavaScript functions never appear in it, and neither ca
   errors unless you pass `--lenient`.
 
 Where the Python library and XState v5 disagree, the Rust engine follows XState; the list is in
-[`conformance/divergences.generated.md`](../../conformance/divergences.generated.md) and
+[`conformance/divergences.generated.md`](https://github.com/basiltt/xstate-statemachine-rs/blob/main/conformance/divergences.generated.md) and
 summarised in [migrating-from-python.md](migrating-from-python.md).
 
 ## Typed alternative

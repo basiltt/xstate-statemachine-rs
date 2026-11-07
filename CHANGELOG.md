@@ -11,6 +11,10 @@ raised only in a minor release.
 
 ### Changed
 
+- The documentation site builds: `docs/book/` is now a 35-page mdBook folding in the existing
+  guides, ADRs, crate READMEs, CONTRIBUTING and CHANGELOG, with a stdlib link checker
+  (`scripts/linkcheck.py`) and a `pages.yml` workflow that publishes the book plus rustdoc under
+  `/api/`. It has never run (the GitHub remote does not exist yet).
 - `xstate-core` gains a `fast-path` cargo feature (on by default) gating the single-transition
   fast path; `xstate-conformance` forwards it and CI now runs
   `cargo test -p xstate-conformance --no-default-features`, which exercises every conformance

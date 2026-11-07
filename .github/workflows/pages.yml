@@ -1,0 +1,56 @@
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build the book and rustdoc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install mdBook 0.5.4
+        uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@0.5.4
+      - name: Build the book
+        run: mdbook build docs/book
+      - name: Check the book's internal links
+        run: python3 scripts/linkcheck.py docs/book/book
+      - name: Build rustdoc for all crates
+        run: cargo doc --workspace --no-deps --all-features --locked
+      - name: Assemble the site (book at the root, rustdoc under /api/)
+        run: |
+          mkdir -p site
+          cp -r docs/book/book/. site/
+          cp -r target/doc site/api
+          touch site/.nojekyll
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

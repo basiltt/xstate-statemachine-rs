@@ -1,0 +1,11 @@
+[book]
+authors = ["Basil T T"]
+language = "en"
+src = "src"
+title = "xstate-statemachine for Rust"
+description = "A super-fast XState v5 compatible statechart runtime for Rust, interoperable with the Python xstate-statemachine library."
+
+[output.html]
+additional-css = ["src/theme/custom.css"]
+git-repository-url = "https://github.com/basiltt/xstate-statemachine-rs"
+edit-url-template = "https://github.com/basiltt/xstate-statemachine-rs/edit/main/{path}"

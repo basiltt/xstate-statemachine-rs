@@ -4,7 +4,7 @@
 It follows the Python library's design, and its on-disk and on-wire layouts are the Python
 library's too (ADR-0003): a SQLite file, a directory of `.xsm.json` records, a Redis keyspace or
 a PostgreSQL schema can be shared by Rust and Python workers, in both directions. Cross-language
-tests (`XSM_PYTHON`, see the [README](../../README.md#development)) verify this against the real
+tests (`XSM_PYTHON`, see the [README](https://github.com/basiltt/xstate-statemachine-rs/blob/main/README.md#development)) verify this against the real
 Python library.
 
 ## The model: create, act, persist, discard
@@ -145,5 +145,5 @@ the `version` of the machine JSON (an unversioned machine or an unlabelled recor
 be read; there is no `memory://`.
 
 Backends other than memory, file and SQLite are tested against live servers; see the
-[development section](../../README.md#development) for the `XSM_REDIS_URL` and `XSM_POSTGRES_URL`
+[development section](https://github.com/basiltt/xstate-statemachine-rs/blob/main/README.md#development) for the `XSM_REDIS_URL` and `XSM_POSTGRES_URL`
 variables and how to start them with Docker.

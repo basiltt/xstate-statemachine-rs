@@ -1,0 +1,13 @@
+/* Documentation site theme tweaks for xstate-statemachine-rs. */
+
+.content main {
+  max-width: 900px;
+}
+
+table {
+  width: 100%;
+}
+
+td, th {
+  padding: 0.35rem 0.6rem;
+}

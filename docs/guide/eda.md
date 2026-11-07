@@ -163,5 +163,5 @@ Enable its feature, open it, and hand it to the dispatcher or the relay.
 
 Every broker's options carry an `io_timeout` (30 s by default): a poll, publish or ack that does
 not complete in that time fails instead of hanging the consumer. Kafka is not supported yet. All four are exercised against real servers in CI (see the
-[development section](../../README.md#development)) and, when the Python library is installed,
+[development section](https://github.com/basiltt/xstate-statemachine-rs/blob/main/README.md#development)) and, when the Python library is installed,
 against its own adapters on the same server.
