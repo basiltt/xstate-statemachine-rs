@@ -111,6 +111,9 @@ the two libraries still differ, on purpose:
   name is an invoke / spawn id of the sender's own children, then a `systemId`, and `parent`
   always means the parent, so Python's grandchild and `parent`-shadowing fixes have nothing to
   fix here.
+- **Missing implementations.** `MachineLogic::validate` returns the first missing guard, action,
+  service or delay in document order; Python 0.12.0 raises one `ImplementationMissingError`
+  listing every missing name. Fix the reported name and validate again.
 - **Snapshot time on tokio.** The tokio interpreter has no pluggable clock; `taken_at` and
   deadlines use the system wall clock, which is its only clock. `SyncInterpreter` uses the
   interpreter's `Clock::wall_now`, as Python 0.12.0 does.
@@ -128,6 +131,11 @@ the two libraries still differ, on purpose:
   `input=` callables / `event_payload`) are not ported, and neither are `output` factories.
 - **Implementations are checked at `start()`.** A missing guard / action / service / delay is an
   `ImplementationMissing` error naming it, before the first event.
+- **Python utilities with structural equivalents.** A few helpers have no Rust symbol because the
+  design removes the need: `has_dormant_timers` → dormancy is an explicit restore choice
+  (`RestartTimers::Parked`); `Clock.pump_filtered(owner)` → timers belong to one interpreter or
+  actor, so there is no shared pump; `SQLiteStore.close()` → connections close on `Drop`;
+  `register_global(...)` → attach an `Observer` instead of a process-global plugin registry.
 - **One algorithm, two drivers (ADR-0004).** The step engine is sans-I/O; `SyncInterpreter` and
   the tokio `Interpreter` execute its effects. There is no `send_threadsafe` or
   `WrongThreadError`: the tokio handle is `Clone + Send`, and thread misuse is a compile error.

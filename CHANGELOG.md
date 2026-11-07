@@ -69,6 +69,10 @@ raised only in a minor release.
 
 ### Fixed
 
+- Documentation: the migration guide records that `MachineLogic::validate` reports the first
+  missing implementation (Python lists every name), and maps the Python-only utilities
+  (`has_dormant_timers`, `Clock.pump_filtered`, `SQLiteStore.close`, `register_global`) to their
+  Rust structural answers.
 - Documentation: the persistence parity mapping now names the real counterparts
   (`IdempotencyGuard` is the Python `IdempotencyPlugin`'s decision logic; adoption is
   `adopt::from_state_ids`, not an `adopt` symbol), the coverage claim is limited to the static
