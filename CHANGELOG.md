@@ -65,6 +65,10 @@ raised only in a minor release.
 
 ### Fixed
 
+- `xstate-eda`: a settle (`ack` / `drop_message`) that the transport fails now leaves the
+  delivery in flight, so the caller can retry it with the same `Delivery` instead of getting a
+  silent no-op; and the RabbitMQ transport releases its un-acked slot even when the broker
+  rejects the settle, so a failed ack can no longer shrink `prefetch` until `fetch` stalls.
 - `xstate-core` / `xstate-persistence`: redaction now matches Python 0.12.0 exactly. The core
   denylist gained `oauth`, `creditcard` and `cardnumber` (they were leaking through the
   inspector, dead-letter and outbox redaction), and the transition-log observer no longer keeps

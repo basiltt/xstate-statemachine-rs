@@ -364,17 +364,20 @@ impl Transport for RabbitTransport {
     }
 
     async fn ack(&self, native: &Native) -> Result<(), BrokerError> {
-        native.ack(BasicAckOptions::default()).await.map_err(failed)?;
+        // Release the slot whatever the broker says: the delivery is no longer held by the
+        // core either way, and a leaked slot would shrink `prefetch` until fetch stalls.
+        let settled = native.ack(BasicAckOptions::default()).await.map(|_| ()).map_err(failed);
         self.release();
-        Ok(())
+        settled
     }
 
     /// `basic.reject` without requeue: a broker-side dead-letter exchange, if configured, sees
     /// the reject.
     async fn drop_message(&self, native: &Native) -> Result<(), BrokerError> {
-        native.reject(BasicRejectOptions { requeue: false }).await.map_err(failed)?;
+        let settled =
+            native.reject(BasicRejectOptions { requeue: false }).await.map(|_| ()).map_err(failed);
         self.release();
-        Ok(())
+        settled
     }
 
     /// Close a connection the adapter opened (a channel the caller manages is left alone).

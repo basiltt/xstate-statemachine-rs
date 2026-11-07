@@ -247,15 +247,15 @@ impl<T: Transport> Core<T> {
     }
 
     /// Settle a delivery as processed (a delivery of another broker, or one already settled, is
-    /// a no-op).
+    /// a no-op). A settle the transport failed leaves the delivery in flight, so the caller can
+    /// retry it with the same [`Delivery`].
     async fn ack(&self, delivery: &Delivery) -> Result<(), BrokerError> {
-        match self.claim(delivery) {
-            Some(held) => {
-                let acked = self.bounded(Duration::ZERO, self.transport.ack(&held.native)).await;
-                self.record(acked)
-            }
-            None => Ok(()),
+        let Some(held) = self.claim(delivery) else { return Ok(()) };
+        let acked = self.bounded(Duration::ZERO, self.transport.ack(&held.native)).await;
+        if acked.is_err() {
+            self.restore(delivery.tag, held);
         }
+        self.record(acked)
     }
 
     /// Requeue the delivery locally at the head of its topic with `attempt + 1` (saturating).
@@ -270,16 +270,15 @@ impl<T: Transport> Core<T> {
         });
     }
 
-    /// Settle the delivery without redelivery: dead-lettering is the dispatcher's job.
+    /// Settle the delivery without redelivery: dead-lettering is the dispatcher's job. A failed
+    /// settle leaves the delivery in flight, so the caller can retry it.
     async fn drop_delivery(&self, delivery: &Delivery) -> Result<(), BrokerError> {
-        match self.claim(delivery) {
-            Some(held) => {
-                let dropped =
-                    self.bounded(Duration::ZERO, self.transport.drop_message(&held.native)).await;
-                self.record(dropped)
-            }
-            None => Ok(()),
+        let Some(held) = self.claim(delivery) else { return Ok(()) };
+        let dropped = self.bounded(Duration::ZERO, self.transport.drop_message(&held.native)).await;
+        if dropped.is_err() {
+            self.restore(delivery.tag, held);
         }
+        self.record(dropped)
     }
 
     /// Close the client connection the transport opened.
@@ -292,6 +291,11 @@ impl<T: Transport> Core<T> {
             return None;
         }
         self.state().inflight.remove(&delivery.tag)
+    }
+
+    /// Put a claimed delivery back after a failed settle, so the caller can retry it.
+    fn restore(&self, tag: u64, held: Inflight<T::Native>) {
+        self.state().inflight.entry(tag).or_insert(held);
     }
 
     /// Start `op` on the native handle of a delivery that is handed out and not yet settled,
@@ -768,3 +772,89 @@ macro_rules! impl_broker_traits {
 }
 
 pub(crate) use impl_broker_traits;
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+
+    use super::*;
+
+    /// A transport whose first `ack` fails and whose second succeeds; `fetch` always offers one
+    /// message.
+    struct FailOnceAck {
+        acks: AtomicUsize,
+    }
+
+    impl Transport for FailOnceAck {
+        type Native = ();
+
+        const NAME: &'static str = "fail-once";
+
+        fn redelivery_window(&self) -> Duration {
+            Duration::ZERO
+        }
+
+        fn max_bytes(&self) -> usize {
+            1 << 20
+        }
+
+        fn io_timeout(&self) -> Duration {
+            Duration::from_secs(1)
+        }
+
+        fn send(
+            &self,
+            _topic: &str,
+            _envelope: &Envelope,
+        ) -> impl Future<Output = Result<(), BrokerError>> + Send {
+            std::future::ready(Ok(()))
+        }
+
+        fn fetch(
+            &self,
+            _topic: &str,
+            _wait: Duration,
+        ) -> impl Future<Output = Result<Vec<Raw<()>>, BrokerError>> + Send {
+            let envelope = Envelope::new("t").build().expect("envelope");
+            let body = envelope.to_json(self.max_bytes()).expect("json").into_bytes();
+            std::future::ready(Ok(vec![Raw { body, native: (), attempts: 0 }]))
+        }
+
+        fn ack(&self, _native: &()) -> impl Future<Output = Result<(), BrokerError>> + Send {
+            let acked = if self.acks.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(BrokerError::Other("ack failed".into()))
+            } else {
+                Ok(())
+            };
+            std::future::ready(acked)
+        }
+
+        fn drop_message(
+            &self,
+            _native: &(),
+        ) -> impl Future<Output = Result<(), BrokerError>> + Send {
+            std::future::ready(Ok(()))
+        }
+
+        fn close(&self) -> impl Future<Output = Result<(), BrokerError>> + Send {
+            std::future::ready(Ok(()))
+        }
+    }
+
+    #[test]
+    fn a_failed_ack_leaves_the_delivery_retriable() {
+        let broker = Broker::new(FailOnceAck { acks: AtomicUsize::new(0) }, None).expect("broker");
+        let delivery = broker
+            .poll_blocking("topic", Some(Duration::from_secs(1)))
+            .expect("poll")
+            .expect("a delivery");
+        assert_eq!(broker.in_flight(), 1);
+
+        let err = broker.ack_blocking(&delivery).expect_err("the first ack fails");
+        assert!(err.to_string().contains("ack failed"), "{err}");
+        assert_eq!(broker.in_flight(), 1, "a failed ack must leave the delivery retriable");
+
+        broker.ack_blocking(&delivery).expect("the retry succeeds");
+        assert_eq!(broker.in_flight(), 0);
+    }
+}
