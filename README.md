@@ -328,8 +328,9 @@ python conformance/tools/generate_expected.py
 python conformance/tools/export_golden.py
 ```
 
-CI installs the Python library from its GitHub repository (`main`), because 0.12.0 is not on PyPI
-yet (PyPI has 0.11.0).
+CI installs the Python library from PyPI, pinned to the released version the conformance fixtures
+were generated from (0.12.1), so the fixture-freshness checks cannot silently drift onto
+unreleased Python behaviour.
 
 A release is a `vX.Y.Z` tag: `.github/workflows/release.yml` runs the gates, the whole CI workflow
 (so the integration job and the fixture-freshness checks must be green) and

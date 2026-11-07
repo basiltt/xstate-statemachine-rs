@@ -17,7 +17,13 @@ raised only in a minor release.
   so the common case — one process taking its own lock again and again — skips a write that an
   on-access antivirus rescans when the handle closes (matching the Python library's
   `FileStore._stamp_is_fresh`; the OS lock stays the source of truth). A stamp by another pid, an
-  unparseable one, an older one or one dated in the future is rewritten as before.
+  unparseable one, an older one or one dated in the future is rewritten as before (the Python
+  side released this change as 0.12.1 on 2026-11-07).
+
+- Conformance fixtures were regenerated against Python 0.12.1 (released 2026-11-07), and CI now
+  pins the Python oracle to `xstate-statemachine==0.12.1` instead of installing `main`. The
+  regeneration changed only the recorded Python version string in the 53 case files — zero
+  behavioural differences (53 cases, 0 divergent, 0 stale).
 
 ### Added
 

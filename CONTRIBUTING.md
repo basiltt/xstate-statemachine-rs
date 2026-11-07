@@ -9,7 +9,7 @@ Python `xstate-statemachine` library with an XState v5 compatible engine; see `R
 - Stable Rust as pinned by `rust-toolchain.toml` (components rustfmt, clippy,
   llvm-tools-preview). The workspace MSRV is 1.88; the `postgres` feature needs 1.94 (sqlx 0.9).
 - The conformance suite regenerates expectations from two oracles: the real XState v5 engine
-  under Node (`conformance/tools/xstate_oracle`) and the Python library 0.12.0
+  under Node (`conformance/tools/xstate_oracle`) and the Python library (pinned to 0.12.1)
   (`conformance/tools/generate_expected.py`). Golden fixtures are generated from the Python
   library; never hand-edit a golden.
 - Docker services for the backend tests: see §4 of `docs/HANDOVER-QA.md` for the exact

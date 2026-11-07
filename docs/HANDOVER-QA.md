@@ -14,6 +14,13 @@ GitHub; CI has never run). Workspace version `0.1.0`, unpublished. Roughly 80k l
 15 crates, 20k of them tests; ~1120 cargo tests + 32 pytest tests pass; `cargo fmt --check`, clippy pedantic
 with `-D warnings` on all targets/features, rustdoc with `-D warnings` and `cargo deny check` are clean.
 
+**QA addendum (2026-11-07).** Since handover, `main` gained three commits (`4625e5a`, `cf541e6`,
+`2850cf8`). The Python library released **0.12.1** (2026-11-07), which contains the FileStore change
+ported in `e194300`. The QA pass pinned the CI oracle to `xstate-statemachine==0.12.1` (PyPI) and
+regenerated all 53 conformance fixtures against it — the only diff was the recorded version string.
+The running review report is `docs/qa/REPORT.md` (sections under `docs/qa/sections/`); findings there
+supersede any claim in this document that the review disproved.
+
 ---
 
 ## 1. Why this exists
@@ -142,7 +149,7 @@ integrating, gating and committing. Commits are on `main` in order:
   Python snapshot text. `crates/xstate-conformance/tests` asserts the Rust engine matches XState on
   every case and reproduces Python's hash and snapshot (text equal modulo Python's 2-space
   indentation). `generate_expected.py --check` reports 53 cases, 0 divergent, 0 stale against the
-  released Python 0.12.0 (the venv has it installed).
+  released Python 0.12.1 (the venv has it installed).
 - **Golden fixtures generated from the Python library** (regenerate with
   `"<python venv>" -I conformance/tools/<script>.py`; all currently drift-free):
   `inspect_golden.py` (3 inspector recordings, byte-identical), `eda_golden.py` (envelopes, dead
@@ -241,7 +248,7 @@ else building.
 - Windows 11, PowerShell/Git Bash; stable Rust 1.99 installed (`rust-toolchain.toml` pins the
   channel), MSRV 1.88 declared.
 - Python reference library + venv: `C:\Users\basil\Desktop\Projects\PythonProjects\xstate-statemachine\.venv\Scripts\python.exe`
-  (Python 3.14; has `xstate_statemachine` 0.12.0 importable, `redis`, `boto3`, `nats-py`,
+  (Python 3.14; has `xstate_statemachine` 0.12.1 importable, `redis`, `boto3`, `nats-py`,
   `aio-pika`, `sqlalchemy`+`psycopg`, `maturin`, `pytest`, `pydantic`). Always run it with `-I`.
   Tests that call Python read `XSM_PYTHON`; the default assumes the sibling-directory layout above.
 - Node: `conformance/tools/xstate_oracle` (xstate 5.33.x installed under `node_modules`).
@@ -323,13 +330,13 @@ Three independent reviews (security · Rust quality · correctness/parity) found
 
 ### Known gaps and deliberate deviations (verify, do not rediscover)
 
-The Python library has unreleased changes on top of 0.12.0 (its `CHANGELOG.md` `[Unreleased]`). These
-were reviewed on 2026-11-07: only one touches library behaviour — the `FileStore` lock-stamp freshness
-skip — and it is ported (`e194300`, below). The `SyncInterpreter.send()` fast paths are Python-internal
-optimisation with no semantic change (the Rust engine is already faster); the documentation-diagram and
-benchmark entries are docs only; the `xsm` console stdout fix repairs Python's process-wide cached
-`get_console()`, which the Rust CLI does not have (a fresh process rebuilds `Ui` per invocation and
-prints through `println!`). The reviewing agent need not re-derive these.
+The Python library's changes on top of 0.12.0 shipped as **0.12.1 on 2026-11-07**. They were
+reviewed: only one touches library behaviour — the `FileStore` lock-stamp freshness skip — and it
+is ported (`e194300`, below). The `SyncInterpreter.send()` fast paths are Python-internal
+optimisation with no semantic change (the Rust engine is already faster); the documentation-diagram
+and benchmark entries are docs only; the `xsm` console stdout fix repairs Python's process-wide
+cached `get_console()`, which the Rust CLI does not have (a fresh process rebuilds `Ui` per
+invocation and prints through `println!`). The reviewing agent need not re-derive these.
 
 Engine / core
 - The eight recorded Python-vs-XState divergences are fixed in the released Python 0.12.0 (the

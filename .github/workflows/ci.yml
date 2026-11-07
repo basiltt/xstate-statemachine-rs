@@ -16,10 +16,11 @@ env:
   RUSTFLAGS: -D warnings
   RUSTDOCFLAGS: -D warnings
   CARGO_INCREMENTAL: 0
-  # The Python reference library. 0.12.0 is not on PyPI yet (PyPI has 0.11.0) and the
-  # repository carries no v0.12.0 tag, so CI installs it from the repository. Move this to a
-  # tag (`@v0.12.0`) or to `==0.12.0` once it is published.
-  XSM_PYTHON_REQ: "git+https://github.com/basiltt/xstate-statemachine.git@main"
+  # The Python reference library is pinned to a released version so CI never tests against
+  # unreleased Python behaviour. Bump both pins together with the conformance fixtures when a
+  # newer Python release is ported.
+  XSM_PYTHON_REQ: "xstate-statemachine==0.12.1"
+  XSM_PYTHON_EXTRAS_REQ: "xstate-statemachine[redis,sqlalchemy,nats,rabbitmq,sqs]==0.12.1"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -136,7 +137,7 @@ jobs:
           python -m venv .venv-py
           .venv-py/bin/python -m pip install --upgrade pip
           .venv-py/bin/python -m pip install \
-            "xstate-statemachine[redis,sqlalchemy,nats,rabbitmq,sqs] @ ${XSM_PYTHON_REQ}" \
+            "${XSM_PYTHON_EXTRAS_REQ}" \
             "psycopg[binary]"
       - name: Wait for the services
         run: |
@@ -234,7 +235,7 @@ jobs:
         run: |
           npm ci --prefix conformance/tools/xstate_oracle
           python -m pip install --upgrade pip
-          python -m pip install "xstate-statemachine @ ${XSM_PYTHON_REQ}"
+          python -m pip install "${XSM_PYTHON_REQ}"
       - name: Regenerate expectations
         run: |
           python conformance/tools/generate_expected.py --check
