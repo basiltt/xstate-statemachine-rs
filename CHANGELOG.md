@@ -41,6 +41,11 @@ raised only in a minor release.
 
 ### Fixed
 
+- `xstate-core`: a machine document nested deeper than 128 state levels (root counted as 0)
+  is refused with `Error::LimitExceeded` instead of overflowing the thread stack (an
+  uncatchable process abort) when a programmatically built `Value` is compiled; both the
+  direct compiler and the parser enforce the bound, and the direct compiler falls back to the
+  parser's typed error (serde_json's own 128-level cap already protects JSON text).
 - `xstate-core`: a state `type` outside `atomic`/`compound`/`parallel`/`final`/`history`
   (`"Final"`, `"paralel"`) and a `compound` / `parallel` state without child states are
   `InvalidConfig` errors naming the state and value; an `atomic` / `final` / `history` state

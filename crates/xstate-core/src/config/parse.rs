@@ -19,6 +19,13 @@ mod items;
 
 pub(crate) use items::{parse_actions_at, parse_guard_at};
 
+/// The deepest state nesting a document may declare, counting the root as 0.
+///
+/// Both compile paths enforce this before recursing, so a programmatically built `Value`
+/// cannot overflow the stack in the parser (`serde_json`'s own 128-level limit only bounds
+/// untrusted JSON text, where every state level costs two or more JSON levels).
+pub(crate) const MAX_STATE_NESTING: u32 = 128;
+
 /// Parser options.
 #[derive(Debug, Clone, Default)]
 pub struct ParseOptions {
@@ -186,7 +193,7 @@ pub(super) fn parse_machine_with(
     }
 
     parser.check_keys(obj, &root_path, STATE_KEYS, ROOT_ONLY_KEYS)?;
-    let root = parser.parse_state(obj, id.clone(), &mut id, &root_path)?;
+    let root = parser.parse_state(obj, id.clone(), &mut id, &root_path, 0)?;
     let context = field(obj, "context").cloned().unwrap_or(Value::Null);
     if context.is_string() {
         parser.warn(
@@ -350,14 +357,22 @@ impl Parser<'_> {
     }
 
     /// Parse one state node. `id` holds the node's full id; it is extended in place for the
-    /// children and restored before they return.
+    /// children and restored before they return. `depth` is the node's state nesting (root 0);
+    /// a document past [`MAX_STATE_NESTING`] is refused before the recursion can exhaust the
+    /// stack.
     fn parse_state(
         &mut self,
         obj: &Map<String, Value>,
         key: String,
         id: &mut String,
         path: &Path<'_>,
+        depth: u32,
     ) -> Result<StateConfig> {
+        if depth > MAX_STATE_NESTING {
+            return Err(Error::LimitExceeded(format!(
+                "State '{id}': state nesting exceeds {MAX_STATE_NESTING} levels"
+            )));
+        }
         let mut state = StateConfig::new(key);
         let is_root = matches!(path.seg, Seg::Root);
 
@@ -387,7 +402,8 @@ impl Parser<'_> {
                 let len = id.len();
                 id.push('.');
                 id.push_str(child_key);
-                let child = self.parse_state(child_obj, child_key.clone(), id, &child_path)?;
+                let child =
+                    self.parse_state(child_obj, child_key.clone(), id, &child_path, depth + 1)?;
                 id.truncate(len);
                 state.states.push(child);
             }

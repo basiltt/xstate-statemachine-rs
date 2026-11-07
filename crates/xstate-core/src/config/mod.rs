@@ -12,7 +12,7 @@ use crate::error::Result;
 mod parse;
 
 pub use parse::ParseOptions;
-pub(crate) use parse::field;
+pub(crate) use parse::{MAX_STATE_NESTING, field};
 
 /// A parsed machine definition.
 #[derive(Debug, Clone)]

@@ -14,8 +14,8 @@ use super::{
     ActionDef, AfterDef, Guard, InvokeDef, MachineData, NodeKind, StateNode, Transition, Trigger,
 };
 use crate::config::{
-    ActionConfig, ConfigWarning, GuardConfig, MachineConfig, StateConfig, StateKind,
-    TransitionConfig,
+    ActionConfig, ConfigWarning, GuardConfig, MAX_STATE_NESTING, MachineConfig, StateConfig,
+    StateKind, TransitionConfig,
 };
 use crate::error::{Error, Result};
 use crate::event::names;
@@ -45,6 +45,13 @@ pub(super) fn compile(
     config: MachineConfig,
     user_actions: Option<&HashSet<String>>,
 ) -> Result<MachineData> {
+    // A `MachineConfig` can also be assembled by hand (every field is public), so the nesting
+    // bound the parser enforces is enforced here as well, before any recursive walk.
+    if !nesting_within_bound(&config.root) {
+        return Err(Error::LimitExceeded(format!(
+            "state nesting exceeds {MAX_STATE_NESTING} levels"
+        )));
+    }
     let count = count_states(&config.root);
     let mut cfgs: SmallVec<[&StateConfig; 16]> = SmallVec::with_capacity(count);
     let mut skels: SmallVec<[Skel<'_>; 16]> = SmallVec::with_capacity(count);
@@ -89,6 +96,19 @@ pub(super) fn finish(cx: Compiler<'_, '_>, mut states: Vec<StateNode>) -> Result
 /// Number of states in the subtree of `cfg`, itself included.
 fn count_states(cfg: &StateConfig) -> usize {
     1 + cfg.states.iter().map(count_states).sum::<usize>()
+}
+
+/// Whether every state in the subtree sits at or below [`MAX_STATE_NESTING`] (root 0).
+/// Iterative, so it cannot overflow the stack itself on a hand-built deep configuration.
+fn nesting_within_bound(root: &StateConfig) -> bool {
+    let mut stack = vec![(root, 0_u32)];
+    while let Some((cfg, depth)) = stack.pop() {
+        if depth > MAX_STATE_NESTING {
+            return false;
+        }
+        stack.extend(cfg.states.iter().map(|child| (child, depth + 1)));
+    }
+    true
 }
 
 /// Append `cfg` and its subtree in document (pre-)order. `id` holds the node's full id; it is

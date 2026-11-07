@@ -203,3 +203,49 @@ fn initial_must_name_a_child_with_a_hint() {
     assert!(err.contains("'initial' 'idel' is not one of its child states"), "{err}");
     assert!(err.contains("Did you mean 'idle'?"), "{err}");
 }
+
+/// A machine whose deepest state node sits at state nesting `depth` (the root is 0).
+fn nested_machine(depth: u32) -> Value {
+    let mut state = serde_json::json!({});
+    for _ in 1..depth {
+        state = serde_json::json!({ "states": { "s": state } });
+    }
+    serde_json::json!({ "id": "m", "initial": "s", "states": { "s": state } })
+}
+
+#[test]
+fn state_nesting_is_bounded() {
+    // Exactly at the bound is accepted on both compile paths.
+    let at_bound = nested_machine(MAX_STATE_NESTING);
+    let cfg = MachineConfig::from_value(&at_bound).expect("nesting at the bound parses");
+    assert_eq!(cfg.root.states.len(), 1);
+    crate::machine::Machine::from_value(&at_bound).expect("nesting at the bound compiles");
+
+    // One level past it is a typed error, not a stack overflow. The direct path runs first
+    // and must fall back to the parser here instead of recursing.
+    let past_bound = nested_machine(MAX_STATE_NESTING + 1);
+    let err = MachineConfig::from_value(&past_bound).expect_err("must be refused");
+    assert_eq!(err.kind(), crate::error::ErrorKind::LimitExceeded, "{err}");
+    assert!(err.to_string().contains("nesting exceeds 128"), "{err}");
+    let err = crate::machine::Machine::from_value(&past_bound).expect_err("must be refused");
+    assert_eq!(err.kind(), crate::error::ErrorKind::LimitExceeded, "{err}");
+}
+
+#[test]
+fn hand_built_config_nesting_is_bounded() {
+    fn deepen(cfg: &mut StateConfig) {
+        if let Some(first) = cfg.states.first_mut() {
+            deepen(first);
+        } else {
+            let mut extra = cfg.clone();
+            extra.key = "extra".to_owned();
+            cfg.states.push(extra);
+        }
+    }
+    // Every field of `MachineConfig` / `StateConfig` is public, so `from_config` can receive a
+    // document the parser never saw; the compiler bounds it too.
+    let mut config = MachineConfig::from_value(&nested_machine(MAX_STATE_NESTING)).expect("parses");
+    deepen(&mut config.root);
+    let err = crate::machine::Machine::from_config(config).expect_err("must be refused");
+    assert_eq!(err.kind(), crate::error::ErrorKind::LimitExceeded, "{err}");
+}

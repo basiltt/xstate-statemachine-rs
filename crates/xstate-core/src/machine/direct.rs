@@ -24,7 +24,7 @@ use super::assemble::{self, Parts};
 use super::builtin::{self, Delay};
 use super::compile::{self, Compiler, Handlers, Skel};
 use super::{ActionDef, AfterDef, Guard, MachineData, NodeKind, StateNode, Transition, Trigger};
-use crate::config::{Policies, field};
+use crate::config::{MAX_STATE_NESTING, Policies, field};
 use crate::event::names;
 use crate::ids::{StateId, TransitionId};
 
@@ -116,6 +116,11 @@ impl<'v> Flat<'_, 'v> {
         parent: Option<StateId>,
         depth: u32,
     ) -> Option<()> {
+        // Past the nesting bound, hand the document to the parser, which refuses it with a
+        // typed error (this path must never recurse deeper than the parser would).
+        if depth > MAX_STATE_NESTING {
+            return None;
+        }
         let is_root = parent.is_none();
         let known = |k: &String| {
             STATE_KEYS.contains(&k.as_str()) || (is_root && ROOT_KEYS.contains(&k.as_str()))
