@@ -11,6 +11,10 @@ raised only in a minor release.
 
 ### Changed
 
+- `xstate-axum`'s test suite now carries the §6.2 HTTP battle matrix: problem-details leak
+  checks, Origin/content-type edges, 408/413, authorization-before-existence, resident
+  persistence, per-event WebSocket authorization, build-time option validation and inspector
+  token precedence (73 tests pass).
 - The documentation site builds: `docs/book/` is now a 35-page mdBook folding in the existing
   guides, ADRs, crate READMEs, CONTRIBUTING and CHANGELOG, with a stdlib link checker
   (`scripts/linkcheck.py`) and a `pages.yml` workflow that publishes the book plus rustdoc under
