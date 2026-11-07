@@ -16,6 +16,12 @@ raised only in a minor release.
   `cargo test -p xstate-conformance --no-default-features`, which exercises every conformance
   case and golden on the general microstep.
 
+- `xstate-persistence`'s test suite now carries the §6.2 battle matrix: 50 pessimistic and 50
+  optimistic concurrent writers, lock release on panic, durable timers fired from a second
+  store instance, every `RestartTimers` variant, FileStore Windows path edges, 50-way inbox
+  claims, scope escaping, and ~400 KB / unicode / stale-version cross-language cases against
+  Python 0.12.1 (384 tests with the Docker services up).
+
 - `xstate-core` now pins `maxIterations` behaviour in tests: a self-raising `always` chain stops
   with `Error::RunawayChain` (and a failed `start()` ends stopped), while a context-changing
   `always` that settles within the budget runs to completion.
