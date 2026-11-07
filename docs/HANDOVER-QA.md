@@ -7,8 +7,9 @@ reference ("the bible"). Nothing here is handed over as trusted: the development
 agents under the owner's direction, and this document is the brief for the independent pass.
 
 **Status at handover.** Repository `C:\Users\basil\Desktop\Projects\RustProjects\xstate-statemachine-rs`,
-branch `main` at `9ec75e0` (2026-11-06; the last four commits are the Python 0.12.0 / XState 5.33.3
-alignment and three performance passes), clean tree, **no remote yet** (nothing has been pushed to
+branch `main` at `e194300` (2026-11-07; on top of the Python 0.12.0 / XState 5.33.3 alignment and three
+performance passes, the last commit ports the one library change in the Python repo's unreleased work
+— the FileStore lock-stamp freshness skip), clean tree, **no remote yet** (nothing has been pushed to
 GitHub; CI has never run). Workspace version `0.1.0`, unpublished. Roughly 80k lines of Rust across
 15 crates, 20k of them tests; ~1120 cargo tests + 32 pytest tests pass; `cargo fmt --check`, clippy pedantic
 with `-D warnings` on all targets/features, rustdoc with `-D warnings` and `cargo deny check` are clean.
@@ -131,6 +132,7 @@ integrating, gating and committing. Commits are on `main` in order:
 | Performance pass 1 | `5efc80e` | `benches/python_parity.rs` (S1–S7 mirroring the Python competitor benchmarks), `scripts/perf_gate.py` + CI `bench-gate`; precomputed exit/entry sets, inline bitset configuration, per-node handled-event index, compact source text, interned event names: 2–3× on dispatch and construction |
 | Performance pass 2 | `6c4e652` | `ActionList` receipts (inline `SmallVec` — **public type change** in `StepReport`/`Receipt`), lazy `CancelTimers` (only states with `after`; `from_snapshot` refuses deadlines on states without `after`), name-scan logic registry (`logic/registry.rs`), in-place `start` |
 | Performance pass 3 | `9ec75e0` | single-transition "plain microstep" fast path (`engine/algorithm.rs`, differential proptest `engine/fast_path_tests.rs`), direct JSON → compiled machine path (`machine/direct.rs`, equivalence test `machine/direct_tests.rs`), cached initial entry set, inline name compare (`text.rs`): S1/S3/S4 past 100× Python |
+| Python unreleased (FileStore) | `e194300` | reviewed the Python repo's `[Unreleased]` changes since 0.12.0 and ported the one library change: `FileStore` reads its holder stamp first and skips the rewrite when it already names this process and is younger than `stale_lock_after / 2` (removes the per-lock on-access-antivirus rescan); the rest — `send()` fast paths, self-drawn docs diagrams, benchmark corrections, the CLI console stdout fix — are Python-internal or docs-only and need no Rust port |
 
 ### How correctness was established
 
@@ -321,6 +323,14 @@ Three independent reviews (security · Rust quality · correctness/parity) found
 
 ### Known gaps and deliberate deviations (verify, do not rediscover)
 
+The Python library has unreleased changes on top of 0.12.0 (its `CHANGELOG.md` `[Unreleased]`). These
+were reviewed on 2026-11-07: only one touches library behaviour — the `FileStore` lock-stamp freshness
+skip — and it is ported (`e194300`, below). The `SyncInterpreter.send()` fast paths are Python-internal
+optimisation with no semantic change (the Rust engine is already faster); the documentation-diagram and
+benchmark entries are docs only; the `xsm` console stdout fix repairs Python's process-wide cached
+`get_console()`, which the Rust CLI does not have (a fresh process rebuilds `Ui` per invocation and
+prints through `println!`). The reviewing agent need not re-derive these.
+
 Engine / core
 - The eight recorded Python-vs-XState divergences are fixed in the released Python 0.12.0 (the
   `xstate-v5-engine-parity` branch was merged before the release); `conformance/divergences.generated.md` is empty. The six further engine
@@ -380,6 +390,12 @@ Persistence
   `FileStore` fsyncs the directory after delete/forget on Unix only and that branch has never
   run on Linux; `DueTimerScanner::validate` / `last_result` and the zero-interval refusal are new
   and lightly tested.
+- Python-unreleased port (`e194300`): the lock file's holder stamp is now read before it is written
+  and left alone when it already names this process and is younger than `stale_lock_after / 2`, so
+  the common single-process relock path no longer rewrites the `.lock` file. Consequence to verify:
+  the stamp's timestamp is now the holder's *last refresh* (at most `stale_lock_after / 2` before the
+  acquisition), not every acquisition — confirm `holder_info` and `LockTimeoutError` still name a
+  live holder, and that a hold shorter than `stale_lock_after / 2` can never read as stale.
 
 EDA
 - No Kafka adapter (`rdkafka` needs cmake/librdkafka, absent on the build machine; pure-Rust clients
