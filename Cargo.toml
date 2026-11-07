@@ -48,7 +48,7 @@ xstate-statemachine = { path = "crates/xstate-statemachine", version = "0.1.0" }
 
 # core
 serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"] }
+serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip", "unbounded_depth"] }
 thiserror = "2.0"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 smallvec = { version = "1.13", features = ["union", "const_generics"] }

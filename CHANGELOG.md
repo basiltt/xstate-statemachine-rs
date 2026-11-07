@@ -46,6 +46,10 @@ raised only in a minor release.
   uncatchable process abort) when a programmatically built `Value` is compiled; both the
   direct compiler and the parser enforce the bound, and the direct compiler falls back to the
   parser's typed error (serde_json's own 128-level cap already protects JSON text).
+- `xstate-core`: `Machine::to_json` / `to_json_string` no longer return `null` for a source
+  document nested past serde_json's 128-level reparse limit. The stored text was written by
+  this process, so it is reparsed with the recursion limit disabled (JSON text from callers
+  keeps the default limit).
 - `xstate-core`: a state `type` outside `atomic`/`compound`/`parallel`/`final`/`history`
   (`"Final"`, `"paralel"`) and a `compound` / `parallel` state without child states are
   `InvalidConfig` errors naming the state and value; an `atomic` / `final` / `history` state
