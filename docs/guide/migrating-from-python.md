@@ -30,14 +30,14 @@ behaviour is **not** the same.
 | `contrib.redis` stores | `RedisStore::open(url, &RedisStoreOptions::new(prefix))` (`redis`) |
 | `contrib.sqlalchemy` stores | `PostgresStore::connect(url, &PostgresStoreOptions::default())` (`postgres`; PostgreSQL only) |
 | `OptimisticLock`, `PessimisticLock` | the same names |
-| `DueTimerScanner`, `IdempotencyGuard`, `SnapshotMigrator`, `adopt` | the same names |
+| `DueTimerScanner`, `SnapshotMigrator`, `adopt.from_state_ids` | the same names; the idempotency decision logic is `IdempotencyGuard` (the Python `IdempotencyPlugin` without the plugin plumbing), and `adopt::from_state_ids` is Python's `adopt.from_state_ids` |
 | `Envelope.new(type)`, `InboundDispatcher`, `OutboxPlugin`, `OutboxRelay` | `Envelope::new(type)`, `InboundDispatcher::new`, `OutboxPlugin::new`, `OutboxRelay::new` |
 | `DeadLetterPlugin`, `asyncapi_document`, `replay_dead_letter` | the same names |
 | Redis Streams, NATS, RabbitMQ, SQS brokers | `RedisStreamsBroker`, `NatsBroker`, `RabbitMqBroker`, `SqsBroker` (features `redis-streams`, `nats`, `rabbitmq`, `sqs`); Kafka not yet |
 | `RetryPolicy`, `CircuitBreaker`, `SagaBuilder`, `ChoreographyRouter` | the same names (`patterns`); the breaker is applied with `wrap(breaker, f)` (there is no decorator), and `ChoreographyRouter` drives blocking brokers only |
 | `contrib.starlette`, `contrib.fastapi` | `xstate-axum`: `StatechartRegistry`, `router`, `inspector_router` |
 | `contrib.agents` | `xstate-agents` (`agents`) |
-| `testing_utils.stub_logic`, `graph` helpers, coverage | `xstate_core::graph` (`stub_logic`, `reachable_states`, `shortest_paths`, `simple_paths`, coverage targets) |
+| `testing_utils.stub_logic`, `graph` helpers, coverage | `xstate_core::graph` (`stub_logic`, `reachable_states`, `shortest_paths`, `simple_paths`, static coverage targets); there is no runtime coverage collector |
 | `xsm` CLI | `xsm` (a subset of the commands, see the README matrix); `xsm snapshots --stale` compares `machine_version` labels like Python, `--stale-by hash` compares structure hashes |
 | exceptions (`ImplementationMissingError`, `InvalidConfigError`, ...) | `xstate_core::Error` and its `ErrorKind`; `StoreError`, `EdaError`, `BrokerError`, `AgentError` per crate |
 

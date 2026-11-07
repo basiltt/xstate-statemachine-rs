@@ -103,7 +103,7 @@ surfaced by the facade as `tokio`, `persistence`, `sqlite`, `redis`, `postgres`,
 
 ## Feature parity with the Python library
 
-Against `xstate-statemachine` 0.12.0. "Yes" means ported with the same behaviour at the wire and
+Against `xstate-statemachine` 0.12.1. "Yes" means ported with the same behaviour at the wire and
 storage level; differences in engine semantics are in
 [`docs/guide/migrating-from-python.md`](docs/guide/migrating-from-python.md).
 
@@ -123,7 +123,7 @@ storage level; differences in engine semantics are in
 | HTTP | Yes (axum) | Registry, REST and per-event routes, SSE, WebSocket, RFC 9457 problem details, idempotency keys; Flask, Django, DRF, Litestar, Channels, Celery integrations are Python-framework specific and not ported |
 | Agents | Yes (core) | Tool-loop, supervisor, pipeline and debate charts, budgets, allow-lists, approvals, structured output, trace; provider adapters and framework bridges are out of scope |
 | Python bindings | In progress | `xstate-py` (PyO3): the Python API backed by the Rust engine |
-| Testing helpers | Partial | Graph walking, coverage targets and `stub_logic` in `xstate-core`; the pytest plugin has no Rust counterpart (`cargo test`) |
+| Testing helpers | Partial | Graph walking, static coverage targets and `stub_logic` in `xstate-core`; there is no runtime coverage collector, and the pytest plugin has no Rust counterpart (`cargo test`) |
 
 ## Performance
 

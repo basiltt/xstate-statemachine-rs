@@ -69,6 +69,11 @@ raised only in a minor release.
 
 ### Fixed
 
+- Documentation: the persistence parity mapping now names the real counterparts
+  (`IdempotencyGuard` is the Python `IdempotencyPlugin`'s decision logic; adoption is
+  `adopt::from_state_ids`, not an `adopt` symbol), the coverage claim is limited to the static
+  targets that exist (there is no runtime collector), and the README parity table targets
+  Python 0.12.1.
 - Documentation: the migration guide no longer claims that `invoke` `input` / `output` factories
   exist — they are a recorded parity gap (`invoke.input` is static JSON; Python 0.12.0's
   event-driven input factory and `output` factories are not ported) — and its engine-semantics
