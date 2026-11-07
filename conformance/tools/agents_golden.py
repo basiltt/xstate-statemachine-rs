@@ -166,7 +166,9 @@ def main():
     }
     for name, data in scenarios.items():
         path = GOLDEN / f"{name}.json"
-        path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        path.write_text(
+            json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+        )
         print(f"wrote {path}")
 
 
