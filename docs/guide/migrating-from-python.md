@@ -1,7 +1,7 @@
 # Migrating from the Python library
 
 The Rust crates are a port of [`xstate-statemachine`](https://github.com/basiltt/xstate-statemachine)
-0.12.0: same JSON dialect, same snapshot layout, same store layouts, same wire formats, same CLI
+0.12.1: same JSON dialect, same snapshot layout, same store layouts, same wire formats, same CLI
 shape. A Rust worker can resume an instance a Python worker saved and the other way round, so you
 can migrate one service at a time. This page maps the API and collects the places where the
 behaviour is **not** the same.
@@ -50,31 +50,30 @@ Sentry observers, and the LLM provider adapters and framework bridges of the age
 ### Engine semantics: both engines follow XState v5
 
 ADR-0001: the headline promise is that a chart behaves as it does in the Stately editor's
-simulator, which is the real XState v5 engine. The Python library's engine converged on the same
-semantics on its `xstate-v5-engine-parity` branch (unreleased after 0.12.0): the eight
-divergences that the conformance suite had recorded -- exit order, parallel entry order,
-wildcards matching engine events, sibling-region targets, exit actions on completion, `reenter`
-into a descendant, multi-target transitions into parallel regions, and the JSON-form `choose` --
-are fixed there. So are ten further engine differences, each now pinned by a conformance case
-(`038`–`050`): transitions selected for one event form one microstep with conflict preemption
-(grouped exit, then actions, then entry), `done.state.*` goes to the internal queue, guards are
-evaluated in XState's selection order (cases may record guard evaluations with
-`logic.record_guards`), one `assign` computes every property against the context before it, a
-compound self-target without `reenter` resets its children, a JSON `assign` without the
-`assignment` wrapper is applied, `always` transitions are selected in the order their states were
-entered (not document order), history is recorded only when the state that owns it is exited, an
-eventless microstep that changes nothing (a self-targeting `always`) is not re-selected, and
-`done.state.*` is raised for the compound parent and every completed parallel ancestor (never a
-compound grandparent). `conformance/divergences.generated.md` is empty, and the Python
-repository replays the same 50 cases in `tests/test_xstate_conformance_cases.py`. Against
-released Python 0.12.0 the old table still applies; it is kept in that release's changelog.
+simulator, which is the real XState v5 engine. The Python library converged on the same
+semantics in 0.12.0 (released 2026-11-05): the eight divergences that the conformance suite had
+recorded -- exit order, parallel entry order, wildcards matching engine events, sibling-region
+targets, exit actions on completion, `reenter` into a descendant, multi-target transitions into
+parallel regions, and the JSON-form `choose` -- are fixed there. So are ten further engine
+differences, each now pinned by a conformance case (`038`–`050`): transitions selected for one
+event form one microstep with conflict preemption (grouped exit, then actions, then entry),
+`done.state.*` goes to the internal queue, guards are evaluated in XState's selection order
+(cases may record guard evaluations with `logic.record_guards`), one `assign` computes every
+property against the context before it, a compound self-target without `reenter` resets its
+children, a JSON `assign` without the `assignment` wrapper is applied, `always` transitions are
+selected in the order their states were entered (not document order), history is recorded only
+when the state that owns it is exited, an eventless microstep that changes nothing (a
+self-targeting `always`) is not re-selected, and `done.state.*` is raised for the compound parent
+and every completed parallel ancestor (never a compound grandparent).
+`conformance/divergences.generated.md` is empty against Python 0.12.1 and XState 5.33.3, and the
+Python repository replays the same cases in `tests/test_xstate_conformance_cases.py`.
 
 Differences that remain, by design or because no conformance case pins them yet:
 
 | Behaviour | Python (parity branch) | Rust (XState v5) |
 |---|---|---|
 | Event names | v4 (`done.invoke.*`, `error.platform.*`) | v5 (`xstate.done.actor.*`, `xstate.error.actor.*`) in memory; v4 spellings are accepted on input |
-| `invoke` without `input` | `{}` (0.12.0 briefly forwarded the triggering payload; reverted, `event_payload` is the explicit opt-in) | `null`, as XState passes `undefined`; a declared `input` factory sees the event in both |
+| `invoke` without `input` | `{}` (0.12.0 briefly forwarded the triggering payload; reverted, `event_payload` is the explicit opt-in) | `null`, as XState passes `undefined`; `invoke.input` is static JSON, and no input factory exists yet (the Python 0.12.0 `input` factory that sees the triggering event is **not ported**) |
 | Multi-target transitions in diagrams, graph and coverage | only the first target is shown | every target |
 
 These rows describe the engines' designs (ADR-0001, ADR-0002) and are not pinned by a
@@ -123,8 +122,10 @@ the two libraries still differ, on purpose:
   makes the engine generic over your context and event types. Actions receive `&mut` context,
   guards `&` context. `actionErrorPolicy: "rollback"` needs a cloneable context.
 - **No callables in configuration.** Property-level `assign` functions, `input` / `output`
-  factories, computed delays and callable `sendTo` targets exist only as *named, registered
-  logic*, never as config values. JSON stays pure data, as in XState v5.
+  factories and computed delays exist only as *named, registered logic*, never as config
+  values. JSON stays pure data, as in XState v5. `invoke.input` is a static value today: named
+  input factories that compute it from the context and the triggering event (Python 0.12.0's
+  `input=` callables / `event_payload`) are not ported, and neither are `output` factories.
 - **Implementations are checked at `start()`.** A missing guard / action / service / delay is an
   `ImplementationMissing` error naming it, before the first event.
 - **One algorithm, two drivers (ADR-0004).** The step engine is sans-I/O; `SyncInterpreter` and
@@ -174,7 +175,7 @@ recordings, saga and circuit-breaker chart JSON, AsyncAPI documents, Mermaid and
 and the `Idempotency-Key` / problem-details HTTP behaviour. Stores and brokers are tested in both
 directions against the real Python library; the other formats are pinned by goldens generated by
 Python and compared with Rust's output. See the interoperability section of the
-[README](../../README.md#interoperability-with-the-python-library).
+[README](https://github.com/basiltt/xstate-statemachine-rs/blob/main/README.md#interoperability-with-the-python-library).
 
 ## A migration order that works
 

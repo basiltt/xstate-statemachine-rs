@@ -65,6 +65,11 @@ raised only in a minor release.
 
 ### Fixed
 
+- Documentation: the migration guide no longer claims that `invoke` `input` / `output` factories
+  exist — they are a recorded parity gap (`invoke.input` is static JSON; Python 0.12.0's
+  event-driven input factory and `output` factories are not ported) — and its engine-semantics
+  section now records that the XState v5 convergence shipped in Python 0.12.0 rather than an
+  unreleased branch. The port target is stated as Python 0.12.1.
 - `xstate-axum`: the same-origin check compares the `Origin` host with `Host`
   case-insensitively, matching Python's shared `origin_is_allowed` rule; a mixed-case `Host`
   header was a false refusal. Allow-listed origins still match exactly.

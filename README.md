@@ -109,7 +109,7 @@ storage level; differences in engine semantics are in
 
 | Area | Rust | Notes |
 |---|---|---|
-| Engine | Yes | XState v5 JSON (hierarchy, parallel, history, final, `after`, `always`, `invoke`, actors, `systemId`, every built-in action, composite guards), snapshots layout v4, structure hash, pure API, builder, JSON / Mermaid / PlantUML export, graph utilities. Follows XState v5 where Python diverges (ADR-0001) |
+| Engine | Yes | XState v5 JSON (hierarchy, parallel, history, final, `after`, `always`, `invoke`, actors, `systemId`, every built-in action, composite guards), snapshots layout v4, structure hash, pure API, builder, JSON / Mermaid / PlantUML export, graph utilities. `invoke.input` is a static JSON value: the Python 0.12.0 input/output factories are not ported. Follows XState v5 where Python diverges (ADR-0001) |
 | Async actors | Yes | `xstate-tokio`: bounded mailbox with overflow policies, `after` on `tokio::time`, async services, child machines, `sendTo` / `sendParent` |
 | Persistence stores | Yes | Memory, file, SQLite, Redis, PostgreSQL (the SQLAlchemy layout; no MySQL, Django or other ORM stores) |
 | Locks, timers, inbox, log | Yes | Optimistic and pessimistic locking, `persisted`, durable deadlines and scanner, idempotency inbox, transition log, snapshot migrations, `adopt` |
