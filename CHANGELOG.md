@@ -16,6 +16,10 @@ raised only in a minor release.
   `cargo test -p xstate-conformance --no-default-features`, which exercises every conformance
   case and golden on the general microstep.
 
+- `xstate-core` now pins `maxIterations` behaviour in tests: a self-raising `always` chain stops
+  with `Error::RunawayChain` (and a failed `start()` ends stopped), while a context-changing
+  `always` that settles within the budget runs to completion.
+
 - `xstate-core` now fuzzes its parser in-process: proptest feeds arbitrary JSON values and
   arbitrary text through `MachineConfig::from_value`, `Machine::from_value`,
   `Machine::from_json` and `Snapshot::from_json` and asserts they never panic (2000 cases per

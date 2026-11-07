@@ -181,3 +181,43 @@ fn rollback_policy_restores_the_previous_state() {
     assert_eq!(i.context().unwrap()["n"], 0);
     assert_eq!(i.status(), Status::Running);
 }
+
+#[test]
+fn runaway_always_chain_stops_at_max_iterations() {
+    // Every `raise` in the macrostep feeds another one: the budget must stop the chain with a
+    // typed error instead of looping forever.
+    let m = Machine::from_json(
+        r#"{"id":"m","initial":"a","maxIterations":4,"states":{
+            "a":{"always":{"actions":[{"type":"raise","params":{"event":"PING"}}]},
+                 "on":{"PING":{"actions":[{"type":"raise","params":{"event":"PING"}}]}}}}}"#,
+    )
+    .unwrap();
+    let mut i = SyncInterpreter::new(m, MachineLogic::dynamic());
+    let err = i.start().expect_err("runaway chain must stop");
+    assert_eq!(err.kind(), ErrorKind::RunawayChain);
+    // A start-up failure ends stopped (Python 0.12.0 alignment), not running or error.
+    assert_eq!(i.status(), Status::Stopped);
+}
+
+#[test]
+fn a_bounded_always_chain_settles_within_the_budget() {
+    // A context-changing `always` re-selects until its guard fails; that is not a runaway.
+    let m = Machine::from_json(
+        r#"{"id":"m","initial":"a","maxIterations":50,"context":{"n":0},"states":{
+            "a":{"always":{"guard":"more","actions":"bump"}}}}"#,
+    )
+    .unwrap();
+    let logic = MachineLogic::dynamic()
+        .guard("more", |ctx, _, _| {
+            Ok(ctx.get("n").and_then(serde_json::Value::as_u64).unwrap_or(0) < 3)
+        })
+        .action("bump", |scope| {
+            let n = scope.context.get("n").and_then(serde_json::Value::as_u64).unwrap_or(0);
+            scope.context["n"] = serde_json::json!(n + 1);
+            Ok(())
+        });
+    let mut i = SyncInterpreter::new(m, logic);
+    i.start().expect("a bounded chain settles");
+    assert_eq!(i.context().unwrap()["n"], 3);
+    assert_eq!(i.status(), Status::Running);
+}
