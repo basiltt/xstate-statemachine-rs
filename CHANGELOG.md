@@ -69,6 +69,10 @@ raised only in a minor release.
 
 ### Fixed
 
+- `xstate-axum`: a request body carrying `idempotency_key` is refused with 422, matching
+  Python's adapter-owned payload keys. It previously reached the idempotency inbox and could
+  deduplicate a request without the validated `Idempotency-Key` header (bypassing its length and
+  charset checks). A body `id` remains ordinary event data.
 - Documentation: the migration guide records that `MachineLogic::validate` reports the first
   missing implementation (Python lists every name), and maps the Python-only utilities
   (`has_dormant_timers`, `Clock.pump_filtered`, `SQLiteStore.close`, `register_global`) to their

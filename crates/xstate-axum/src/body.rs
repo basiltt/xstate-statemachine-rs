@@ -19,6 +19,12 @@ pub const IDEMPOTENCY_HEADER: &str = "Idempotency-Key";
 /// `send()` keyword options a client body may never carry (X0.7).
 pub const RESERVED_SEND_KEYS: [&str; 2] = ["wait", "priority"];
 
+/// Payload keys the adapter owns. `idempotency_key` comes only from the validated
+/// `Idempotency-Key` header: a body that carried one skipped the header's length/charset check
+/// and the "no inbox" refusal, so an over-long key produced a 200 whose event never ran (Python
+/// review CW-04). A body `id` is ordinary event data and stays allowed.
+pub const ADAPTER_OWNED_PAYLOAD_KEYS: [&str; 1] = ["idempotency_key"];
+
 /// Default upper bound on reading one request body (battle #277-a).
 pub const DEFAULT_BODY_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -41,12 +47,15 @@ pub fn idempotency_key_from(headers: &HeaderMap) -> Result<Option<String>, ApiEr
     Ok(Some(value.to_owned()))
 }
 
-/// Refuse a payload that names a `send()` option (`wait`, `priority`).
+/// Refuse a payload that names a `send()` option (`wait`, `priority`) or an adapter-owned key
+/// (`idempotency_key`).
 ///
 /// # Errors
 /// [`ApiError::ReservedKey`] (422).
 pub fn refuse_reserved_send_keys(payload: &Map<String, Value>) -> Result<(), ApiError> {
-    if RESERVED_SEND_KEYS.iter().any(|k| payload.contains_key(*k)) {
+    if RESERVED_SEND_KEYS.iter().any(|k| payload.contains_key(*k))
+        || ADAPTER_OWNED_PAYLOAD_KEYS.iter().any(|k| payload.contains_key(*k))
+    {
         return Err(ApiError::ReservedKey);
     }
     Ok(())
@@ -202,6 +211,14 @@ mod tests {
         assert!(refuse_reserved_send_keys(&payload).is_ok());
         payload.insert("priority".into(), Value::Bool(true));
         assert!(matches!(refuse_reserved_send_keys(&payload), Err(ApiError::ReservedKey)));
+        // Adapter-owned: the key comes only from the validated header (Python CW-04).
+        let mut payload = Map::new();
+        payload.insert("idempotency_key".into(), Value::from("k"));
+        assert!(matches!(refuse_reserved_send_keys(&payload), Err(ApiError::ReservedKey)));
+        // `id` is ordinary event data and stays allowed (the inbox may fall back to it).
+        let mut payload = Map::new();
+        payload.insert("id".into(), Value::from("k"));
+        assert!(refuse_reserved_send_keys(&payload).is_ok());
     }
 
     #[test]
