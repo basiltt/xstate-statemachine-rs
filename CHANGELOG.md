@@ -16,6 +16,11 @@ raised only in a minor release.
   `cargo test -p xstate-conformance --no-default-features`, which exercises every conformance
   case and golden on the general microstep.
 
+- `xstate-core` now fuzzes its parser in-process: proptest feeds arbitrary JSON values and
+  arbitrary text through `MachineConfig::from_value`, `Machine::from_value`,
+  `Machine::from_json` and `Snapshot::from_json` and asserts they never panic (2000 cases per
+  run, in CI).
+
 - `xstate-core`'s test suite now carries the 17-machine fast-path adversarial matrix and the
   34 adversarial direct-compiler documents from the QA audit, so they run in CI instead of
   living in a scratch copy.
