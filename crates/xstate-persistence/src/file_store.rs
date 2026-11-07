@@ -55,6 +55,9 @@ const SAVE_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 const LOCK_POLL: Duration = Duration::from_millis(5);
 /// Width of the holder-info block written after the locked byte 0 of a lock file.
 const HOLDER_INFO_LEN: usize = 63;
+/// A stamp that already names the acquiring process and is younger than this fraction of
+/// `stale_lock_after` is left alone instead of rewritten (Python `_STAMP_FRESH_FRACTION`).
+const STAMP_FRESH_FRACTION: f64 = 0.5;
 const WINDOWS_RESERVED: [&str; 22] = [
     "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
     "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
@@ -354,12 +357,39 @@ fn open_lock_file(path: &Path) -> io::Result<File> {
     options.open(path)
 }
 
+/// Whether the holder stamp at byte 1 already names THIS process with a timestamp recent enough
+/// to leave alone: `0 <= now - ts < stale_lock_after / 2` (Python `FileStore._stamp_is_fresh`).
+/// A stamp by another pid, an unparseable one, an older one or one dated in the future (a clock
+/// step) is not fresh and is rewritten.
+fn stamp_is_fresh(file: &mut File, stale_lock_after: Duration) -> bool {
+    let mut buf = [0u8; HOLDER_INFO_LEN];
+    if file.seek(SeekFrom::Start(1)).is_err() {
+        return false;
+    }
+    let Ok(n) = file.read(&mut buf) else { return false };
+    let raw = String::from_utf8_lossy(&buf[..n]);
+    let mut parts = raw.split_whitespace();
+    let (Some(pid_s), Some(ts_s), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    let (Ok(pid), Ok(ts)) = (pid_s.parse::<u32>(), ts_s.parse::<f64>()) else {
+        return false;
+    };
+    if pid != std::process::id() {
+        return false;
+    }
+    let age = wall_now() - ts;
+    let bound = stale_lock_after.as_secs_f64() * STAMP_FRESH_FRACTION;
+    (0.0..bound).contains(&age)
+}
+
 /// Run `f` while holding the exclusive advisory lock on `lock_path` (byte 0, like Python's
 /// `flock` / `msvcrt.locking`), polling until `deadline`. The holder's pid and time go after the
 /// locked byte for diagnosis by waiters.
 fn with_os_lock<T>(
     lock_path: &Path,
     deadline: Instant,
+    stale_lock_after: Duration,
     f: impl FnOnce() -> T,
 ) -> std::result::Result<T, OsLockError> {
     let file = open_lock_file(lock_path).map_err(OsLockError::Io)?;
@@ -367,11 +397,17 @@ fn with_os_lock<T>(
     loop {
         match lock.try_write() {
             Ok(mut guard) => {
-                let info = format!("{} {:.3}\n", std::process::id(), wall_now());
-                let _ = guard
-                    .seek(SeekFrom::Start(1))
-                    .and_then(|_| guard.write_all(format!("{info:<HOLDER_INFO_LEN$}").as_bytes()))
-                    .and_then(|()| guard.seek(SeekFrom::Start(0)).map(|_| ()));
+                // The stamp is rewritten only when it does not already name THIS process with a
+                // fresh timestamp: a modified lock file is rescanned by on-access antivirus when
+                // its handle closes (Python `_stamp_is_fresh`). Reading the stamp does not dirty
+                // the file.
+                if !stamp_is_fresh(&mut guard, stale_lock_after) {
+                    let info = format!("{} {:.3}\n", std::process::id(), wall_now());
+                    let _ = guard.seek(SeekFrom::Start(1)).and_then(|_| {
+                        guard.write_all(format!("{info:<HOLDER_INFO_LEN$}").as_bytes())
+                    });
+                }
+                let _ = guard.seek(SeekFrom::Start(0));
                 return Ok(f());
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
@@ -426,6 +462,7 @@ pub struct FileStore {
     dir: PathBuf,
     fsync: bool,
     policy: StorePolicy,
+    stale_lock_after: Duration,
     locks: KeyLocks,
 }
 
@@ -454,6 +491,7 @@ impl FileStore {
             dir,
             fsync: options.fsync,
             policy: StorePolicy::with_max_snapshot_bytes(options.max_snapshot_bytes),
+            stale_lock_after: options.stale_lock_after,
             locks: KeyLocks::default(),
         };
         store.sweep_orphan_temps(options.stale_lock_after);
@@ -616,7 +654,8 @@ impl FileStore {
                 timeout: SAVE_LOCK_TIMEOUT,
                 holder: holder_info(&lock_path),
             })?;
-        with_os_lock(&lock_path, deadline, f).map_err(|e| e.into_store(key, SAVE_LOCK_TIMEOUT))?
+        with_os_lock(&lock_path, deadline, self.stale_lock_after, f)
+            .map_err(|e| e.into_store(key, SAVE_LOCK_TIMEOUT))?
     }
 
     fn key_from_name(&self, path: &Path, name: &str) -> Option<String> {
@@ -743,8 +782,9 @@ impl StateStore for FileStore {
         let (ready_tx, ready_rx) = mpsc::channel::<std::result::Result<(), OsLockError>>();
         let (release_tx, release_rx) = mpsc::channel::<()>();
         let path = lock_path.clone();
+        let stale_lock_after = self.stale_lock_after;
         let holder = thread::Builder::new().name("xsm-file-lock".to_owned()).spawn(move || {
-            let held = with_os_lock(&path, deadline, || {
+            let held = with_os_lock(&path, deadline, stale_lock_after, || {
                 let _ = ready_tx.send(Ok(()));
                 let _ = release_rx.recv(); // returns when the guard drops its sender
             });
@@ -782,5 +822,64 @@ impl StateStore for FileStore {
 
     fn max_snapshot_bytes(&self) -> usize {
         self.policy.max_snapshot_bytes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stamp_file(content: &[u8]) -> (File, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let path = dir.path().join("key.lock");
+        let mut f = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap_or_else(|e| panic!("{e}"));
+        f.write_all(&[0u8]).unwrap_or_else(|e| panic!("{e}")); // byte 0 = the locked byte
+        f.write_all(content).unwrap_or_else(|e| panic!("{e}"));
+        (f, dir)
+    }
+
+    fn stamp(pid: u32, ts: f64) -> String {
+        format!("{pid} {ts:.3}\n")
+    }
+
+    #[test]
+    fn stamp_is_fresh_accepts_own_recent_stamp_only() {
+        let stale = Duration::from_secs(60);
+        let now = wall_now();
+
+        // own pid, recently: fresh (one second back, so sub-millisecond rounding cannot read as future)
+        let (mut f, _d) = stamp_file(stamp(std::process::id(), now - 1.0).as_bytes());
+        assert!(stamp_is_fresh(&mut f, stale));
+
+        // own pid but older than half the bound: not fresh
+        let (mut f, _d) = stamp_file(stamp(std::process::id(), now - 31.0).as_bytes());
+        assert!(!stamp_is_fresh(&mut f, stale));
+
+        // another pid, recent: not fresh
+        let (mut f, _d) = stamp_file(stamp(std::process::id() ^ 1, now).as_bytes());
+        assert!(!stamp_is_fresh(&mut f, stale));
+
+        // future timestamp (a clock step): not fresh
+        let (mut f, _d) = stamp_file(stamp(std::process::id(), now + 5.0).as_bytes());
+        assert!(!stamp_is_fresh(&mut f, stale));
+
+        // unparseable: not fresh
+        let (mut f, _d) = stamp_file(b"not a stamp");
+        assert!(!stamp_is_fresh(&mut f, stale));
+    }
+
+    #[test]
+    fn stamp_is_fresh_within_half_bound() {
+        let stale = Duration::from_secs(60);
+        let now = wall_now();
+        // own pid, 20s ago (< 30s bound): still fresh
+        let (mut f, _d) = stamp_file(stamp(std::process::id(), now - 20.0).as_bytes());
+        assert!(stamp_is_fresh(&mut f, stale));
     }
 }

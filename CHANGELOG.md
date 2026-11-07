@@ -9,6 +9,16 @@ raised only in a minor release.
 
 ## [Unreleased]
 
+### Changed
+
+- `xstate-persistence`: `FileStore` no longer rewrites a lock file's holder stamp on every
+  acquisition. The stamp (`<pid> <wall time>`, from byte 1 of the `.lock` file) is read first and
+  left alone when it already names the acquiring process and is younger than `stale_lock_after / 2`,
+  so the common case — one process taking its own lock again and again — skips a write that an
+  on-access antivirus rescans when the handle closes (matching the Python library's
+  `FileStore._stamp_is_fresh`; the OS lock stays the source of truth). A stamp by another pid, an
+  unparseable one, an older one or one dated in the future is rewritten as before.
+
 ### Added
 
 - `xstate-core`: `benches/python_parity.rs` mirrors the Python library's cross-library benchmark
