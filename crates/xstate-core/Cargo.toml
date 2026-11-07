@@ -11,6 +11,12 @@ keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
 
+[features]
+default = ["fast-path"]
+# Compile in the single-transition fast path (`engine::algorithm::plain_microstep`). On by
+# default; xstate-conformance turns it off to run every golden on the general microstep.
+fast-path = []
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }

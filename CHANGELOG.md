@@ -11,6 +11,11 @@ raised only in a minor release.
 
 ### Changed
 
+- `xstate-core` gains a `fast-path` cargo feature (on by default) gating the single-transition
+  fast path; `xstate-conformance` forwards it and CI now runs
+  `cargo test -p xstate-conformance --no-default-features`, which exercises every conformance
+  case and golden on the general microstep.
+
 - `xstate-persistence`: `FileStore` no longer rewrites a lock file's holder stamp on every
   acquisition. The stamp (`<pid> <wall time>`, from byte 1 of the `.lock` file) is read first and
   left alone when it already names the acquiring process and is younger than `stale_lock_after / 2`,

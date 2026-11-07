@@ -23,7 +23,12 @@ python conformance/tools/generate_expected.py
 
 ## Features
 
-None.
+- `fast-path` (default): forwards `xstate-core/fast-path`, the single-transition fast path.
+  Build with `--no-default-features` to run the whole suite on the general microstep:
+
+```bash
+cargo test -p xstate-conformance --no-default-features
+```
 
 ## Python counterpart
 

@@ -10,11 +10,19 @@ authors.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = ["fast-path"]
+# Forward the engine's single-transition fast path. `cargo test -p xstate-conformance
+# --no-default-features` runs the whole suite on the general microstep.
+fast-path = ["xstate-core/fast-path"]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-xstate-core = { workspace = true }
+# Not `workspace = true`: cargo 1.88 (the MSRV) refuses a member's `default-features = false`
+# when the workspace dependency does not declare it, so this one dependency is spelled out.
+xstate-core = { path = "../xstate-core", version = "0.1.0", default-features = false }
 
 [lints]
 workspace = true

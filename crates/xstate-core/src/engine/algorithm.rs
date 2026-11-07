@@ -184,12 +184,14 @@ fn plain_microstep<C: Context>(
     Ok(())
 }
 
-/// Whether event microsteps may take [`plain_microstep`]: always outside tests; unit tests
-/// turn it off per thread to compare both paths (`engine::fast_path_tests`).
+/// Whether event microsteps may take [`plain_microstep`]: the `fast-path` cargo feature, on by
+/// default. Unit tests turn it off per thread to compare both paths
+/// (`engine::fast_path_tests`); `xstate-conformance` built with `--no-default-features` turns
+/// it off at compile time so every golden runs on the general microstep.
 #[cfg(not(test))]
 #[inline]
 fn fast_path_enabled() -> bool {
-    true
+    cfg!(feature = "fast-path")
 }
 
 #[cfg(test)]
