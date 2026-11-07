@@ -11,6 +11,12 @@ raised only in a minor release.
 
 ### Changed
 
+- Performance baselines were re-measured on the same quiet machine with the Python 0.12.1
+  oracle: Python S1–S7 are 18.69 / 11.42 / 36.06 / 47.66 / 115 / 45.2 / 190 µs per operation and
+  the Rust p50 is 106 / 161 / 215 / 283 / 4.11 µs / 300 ns / 3.39 µs. S1, S3, S4 and S6 are past
+  100x Python (177x, 168x, 169x, 151x), S2 is 71x, S7 56x and S5 28x. The README tables,
+  `benches/README.md` and `benches/budgets.json` (`python_per_op_ns`, baselines and 100x
+  targets) now carry these values; the retracted 0.12.0 numbers are gone.
 - `xstate-tokio`'s test suite now carries the §6.2 actor matrix: paused-clock timers and
   cancellation, every mailbox overflow policy, sends to finished/stopped actors, child and
   invoke lifecycles, `systemId` collisions, panic containment, restart/drain and observers (32

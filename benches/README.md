@@ -35,23 +35,24 @@ CPU-heavy process running), with the default absolute mode, and refresh the base
 
 `crates/xstate-core/benches/python_parity.rs` mirrors scenarios S1 to S7 of the Python library's
 cross-library benchmark (`benchmarks/competitors/adapters/xstate_sync.py` of xstate-statemachine
-0.12.0): the same machines, the same logic (a `DynContext` JSON context; S2's guard and action are
+0.12.1): the same machines, the same logic (a `DynContext` JSON context; S2's guard and action are
 Rust closures registered on `MachineLogic`, the equivalent of Python's callables) and the same work
 per operation as the Python `hot()` loop:
 
-| id | one operation | Python 0.12.0 per op |
+| id | one operation | Python 0.12.1 per op |
 |---|---|---|
-| `py_s1_flat_toggle` | one `send("NEXT")` on A ⇄ B | 12.35 µs |
-| `py_s2_guarded_context` | one guarded, counting `send("INC")` (build + start amortised over 20 000 sends) | 10.54 µs |
-| `py_s3_hierarchical` | `send("CROSS")` + `send("DEEP")` across a two-level hierarchy | 28.37 µs |
-| `py_s4_parallel` | `send("TOGGLE1")` + `send("TOGGLE2")` on two regions | 37.86 µs |
-| `py_s5_construction` | `Machine::from_value` (hier) + `SyncInterpreter::new` + `start` | 79.0 µs |
-| `py_s6_many_instances` | per instance of 1 000: `new` + `start`, then one `send` | 21.9 µs |
-| `py_s7_delayed_transition` | new `SimulatedClock`, build, `new` + `start`, advance 1 ms, observe `done` | 118 µs |
+| `py_s1_flat_toggle` | one `send("NEXT")` on A ⇄ B | 18.69 µs |
+| `py_s2_guarded_context` | one guarded, counting `send("INC")` (build + start amortised over 20 000 sends) | 11.42 µs |
+| `py_s3_hierarchical` | `send("CROSS")` + `send("DEEP")` across a two-level hierarchy | 36.06 µs |
+| `py_s4_parallel` | `send("TOGGLE1")` + `send("TOGGLE2")` on two regions | 47.66 µs |
+| `py_s5_construction` | `Machine::from_value` (hier) + `SyncInterpreter::new` + `start` | 115 µs |
+| `py_s6_many_instances` | per instance of 1 000: `new` + `start`, then one `send` | 45.2 µs |
+| `py_s7_delayed_transition` | new `SimulatedClock`, build, `new` + `start`, advance 1 ms, observe `done` | 190 µs |
 
-The Python numbers are `median_s / n` from `benchmarks/competitors/results.json`
-(`xstate-statemachine (sync)`, CPython 3.14.6, same i7-11850H host). Reproduce them with
-`python benchmarks/competitors/run.py --lib xstate_sync` in the Python repository.
+The Python numbers are `median_s / n` measured on 2026-11-07 with the 0.12.1 venv (CPython
+3.14.6, the same host as the Rust numbers); `benches/budgets.json` records them as
+`python_per_op_ns`. Reproduce them with `python benchmarks/competitors/run.py --lib xstate_sync`
+in the Python repository.
 
 `crates/xstate-core/benches/core.rs` holds the older engine benchmarks:
 
