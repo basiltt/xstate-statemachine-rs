@@ -16,6 +16,10 @@ raised only in a minor release.
   `cargo test -p xstate-conformance --no-default-features`, which exercises every conformance
   case and golden on the general microstep.
 
+- `xstate-core`'s test suite now carries the 17-machine fast-path adversarial matrix and the
+  34 adversarial direct-compiler documents from the QA audit, so they run in CI instead of
+  living in a scratch copy.
+
 - `xstate-persistence`: `FileStore` no longer rewrites a lock file's holder stamp on every
   acquisition. The stamp (`<pid> <wall time>`, from byte 1 of the `.lock` file) is read first and
   left alone when it already names the acquiring process and is younger than `stale_lock_after / 2`,

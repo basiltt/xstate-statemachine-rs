@@ -257,3 +257,168 @@ fn the_benchmark_machines_take_the_direct_path() {
         assert!(check(&format!("bench {i}"), m), "bench machine {i} fell back: {m}");
     }
 }
+
+/// Adversarial documents for the QA audit: structural gaps the existing corpus does not
+/// cover. `expected_direct` documents the claimed qualification; the parity assertion is
+/// what matters (direct-accepted documents must equal the parser path exactly).
+// One table, so every document is visible side by side during review.
+#[allow(clippy::too_many_lines)]
+fn qa_adversarial_documents() -> Vec<(&'static str, Value, bool)> {
+    vec![
+        (
+            "root_after",
+            json!({"id":"m","initial":"a","after":{"10":"a"},"states":{"a":{"on":{"E":"b"}},"b":{}}}),
+            true,
+        ),
+        (
+            "root_entry_exit",
+            json!({"id":"m","initial":"a","entry":["act"],"exit":["act"],"states":{"a":{}}}),
+            true,
+        ),
+        (
+            "root_on_wildcard",
+            json!({"id":"m","initial":"a","on":{"*":"a"},"states":{"a":{"on":{"E":"b"}},"b":{}}}),
+            true,
+        ),
+        (
+            "invoke_fallback",
+            json!({"id":"m","initial":"a","states":{"a":{"invoke":{"src":"s"},"on":{"E":"b"}},"b":{}}}),
+            false,
+        ),
+        (
+            "ondone_fallback",
+            json!({"id":"m","initial":"a","states":{"a":{"onDone":"b"},"b":{}}}),
+            false,
+        ),
+        (
+            "output_fallback",
+            json!({"id":"m","initial":"a","states":{"a":{"output":{"x":1}}}}),
+            false,
+        ),
+        ("meta_fallback", json!({"id":"m","initial":"a","states":{"a":{"meta":{"v":1}}}}), false),
+        ("tags_fallback", json!({"id":"m","initial":"a","states":{"a":{"tags":["t"]}}}), false),
+        (
+            "policies_fallback",
+            json!({"id":"m","initial":"a","maxIterations":5,"states":{"a":{}}}),
+            false,
+        ),
+        (
+            "strictconfig_fallback",
+            json!({"id":"m","initial":"a","strictConfig":true,"states":{"a":{}}}),
+            false,
+        ),
+        (
+            "xkeys_fallback",
+            json!({"id":"m","initial":"a","x-note":1,"states":{"a":{"x-note":2}}}),
+            false,
+        ),
+        (
+            "parallel_with_initial",
+            json!({"id":"m","type":"parallel","initial":"r1","states":{"r1":{"states":{"a":{}}},"r2":{"states":{"b":{}}}}}),
+            true,
+        ),
+        ("single_child_inference", json!({"id":"m","states":{"a":{}}}), true),
+        (
+            "guard_named_and",
+            json!({"id":"m","initial":"a","states":{"a":{"on":{"E":{"target":"a","guard":"and"}}}}}),
+            true,
+        ),
+        (
+            "guard_named_or",
+            json!({"id":"m","initial":"a","states":{"a":{"on":{"E":{"target":"a","guard":"or"}}}}}),
+            true,
+        ),
+        (
+            "action_builtin_spelled_strings",
+            json!({"id":"m","initial":"a","states":{"a":{"entry":"assign","exit":["xstate.log","cancel"],"on":{"E":{"target":"a","actions":"sendTo"}}}}}),
+            false,
+        ),
+        (
+            "engine_descriptor_names",
+            json!({"id":"m","initial":"a","states":{"a":{"on":{"done.state.x":"a","xstate.after.5.m.a":"a"}}}}),
+            true,
+        ),
+        (
+            "after_space_key",
+            json!({"id":"m","initial":"a","states":{"a":{"after":{" 100 ":"b"}},"b":{}}}),
+            true,
+        ),
+        (
+            "after_huge_key",
+            json!({"id":"m","initial":"a","states":{"a":{"after":{"9999999999999999":"b"}},"b":{}}}),
+            false,
+        ),
+        (
+            "after_inf_nan_names",
+            json!({"id":"m","initial":"a","states":{"a":{"after":{"inf":"b","NaN":"b","1_0":"b"}},"b":{}}}),
+            true,
+        ),
+        ("version_float", json!({"id":"m","initial":"a","version":1e3,"states":{"a":{}}}), true),
+        (
+            "context_scalars",
+            json!({"id":"m","initial":"a","context":[1,true],"states":{"a":{}}}),
+            true,
+        ),
+        (
+            "unicode_ids",
+            json!({"id":"m\u{1F600}","initial":"\u{00E9}","states":{"\u{00E9}":{"on":{"E":"b"}},"b":{}}}),
+            true,
+        ),
+        ("always_null", json!({"id":"m","initial":"a","states":{"a":{"always":null}}}), true),
+        (
+            "on_empty_descriptor",
+            json!({"id":"m","initial":"a","states":{"a":{"on":{"":"b"}}}}),
+            false,
+        ),
+        (
+            "transition_xkey",
+            json!({"id":"m","initial":"a","states":{"a":{"on":{"E":{"target":"b","x-extra":1}}},"b":{}}}),
+            false,
+        ),
+        (
+            "transition_meta",
+            json!({"id":"m","initial":"a","states":{"a":{"on":{"E":{"target":"b","meta":{"k":1}}}},"b":{}}}),
+            false,
+        ),
+        ("root_final_type", json!({"id":"m","type":"final","states":{"a":{}}}), false),
+        (
+            "dup_custom_ids",
+            json!({"id":"m","initial":"a","states":{"a":{"id":"dup"},"b":{"id":"dup"}}}),
+            false,
+        ),
+        ("root_id_empty", json!({"id":"","initial":"a","states":{"a":{}}}), false),
+        ("states_non_object", json!({"id":"m","states":[]}), false),
+        ("initial_names_missing_child", json!({"id":"m","initial":"x","states":{"a":{}}}), false),
+        (
+            "after_root_and_state",
+            json!({"id":"m","initial":"a","after":{"10":"a"},"states":{"a":{"after":{"20":"a"},"on":{"E":"b"}},"b":{}}}),
+            true,
+        ),
+        (
+            "always_guarded_self",
+            json!({"id":"m","initial":"a","states":{"a":{"always":{"target":"a","guard":"g"}}}}),
+            true,
+        ),
+        (
+            "always_unguarded_self",
+            json!({"id":"m","initial":"a","states":{"a":{"always":"a"}}}),
+            false,
+        ),
+        (
+            "final_with_ondone_invalid",
+            json!({"id":"m","initial":"a","states":{"a":{"on":{"E":"f"}},"f":{"type":"final","onDone":{"target":"a"}}}}),
+            false,
+        ),
+    ]
+}
+
+#[test]
+fn qa_adversarial_documents_compile_identically_both_ways() {
+    for (name, value, expected_direct) in qa_adversarial_documents() {
+        let took_direct = check(name, &value);
+        assert_eq!(
+            took_direct, expected_direct,
+            "{name}: expected direct={expected_direct}, got {took_direct} for {value}"
+        );
+    }
+}

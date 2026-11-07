@@ -22,6 +22,8 @@ mod algorithm;
 pub(crate) mod bits;
 #[cfg(test)]
 pub(crate) mod fast_path_tests;
+#[cfg(test)]
+pub(crate) mod qa_audit;
 mod select;
 pub(crate) mod sets;
 
