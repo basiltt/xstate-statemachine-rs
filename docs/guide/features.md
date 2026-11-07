@@ -1,8 +1,9 @@
 # Feature flags
 
-Cargo features across the workspace. The engine (`xstate-core`) has none: it is always the same
-small, I/O-free crate. Backends and integrations are opt-in so that a program pays, in compile
-time and dependencies, only for what it uses, which is the same contract as the Python library's
+Cargo features across the workspace. The engine (`xstate-core`) has one build feature,
+`fast-path` (on by default), and is otherwise the same small, I/O-free crate. Backends and
+integrations are opt-in so that a program pays, in compile time and dependencies, only for what
+it uses, which is the same contract as the Python library's
 `pip install "xstate-statemachine[extra]"`.
 
 ## The facade: `xstate-statemachine`
@@ -55,6 +56,16 @@ A few points:
 If you depend on the individual crates, these are all of their features. A crate not listed has
 none.
 
+### `xstate-core`
+
+| Feature | Default | Adds |
+|---|---|---|
+| `fast-path` | yes | the single-transition microstep fast path (on unless `default-features = false`) |
+
+`--no-default-features` compiles the fast path out, so every step goes through the general
+microstep. The conformance suite runs both ways in CI; the two paths are also compared
+case-by-case by the crate's own differential tests.
+
 ### `xstate-persistence`
 
 | Feature | Default | Adds | Dependencies |
@@ -78,7 +89,7 @@ it does not drag SQLite in.
 
 ### Crates without features
 
-`xstate-core`, `xstate-tokio`, `xstate-testing`, `xstate-inspect`, `xstate-observability`,
+`xstate-tokio`, `xstate-testing`, `xstate-inspect`, `xstate-observability`,
 `xstate-patterns`, `xstate-macros`, `xstate-axum`, `xstate-agents` and the `xsm` binary (package `xstate-statemachine-cli`). The
 `xstate-conformance` (test harness) and `xstate-py` (Python bindings) crates are not published to
 crates.io.
