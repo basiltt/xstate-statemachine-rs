@@ -11,9 +11,7 @@ use xstate_core::snapshot::Deadline;
 
 use super::db::FailResult;
 use crate::memory_store::{check_record_fields, deadline_from_value, delay_ms_as_i64};
-use crate::store::{
-    ForgetReport, MAX_KEY_LEN, SaveOptions, StoreError, StoredSnapshot, wall_now,
-};
+use crate::store::{ForgetReport, MAX_KEY_LEN, SaveOptions, StoreError, StoredSnapshot, wall_now};
 
 /// The snapshot table: its plain name (the `source` of deadline and lock rows) and the quoted
 /// form spliced into statements.
