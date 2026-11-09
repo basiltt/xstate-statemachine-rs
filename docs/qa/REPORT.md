@@ -55,7 +55,7 @@ fix commit or deferral reason. Every area ends with a "verified sound" list.
 | §6.2 macros, inspect, observability | done (43 macros tests, 68 inspect tests, 20 observability tests) | `sections/62-macros-inspect-observability.md` |
 | §6.2 CLI & Python bindings | done (93 CLI tests, 32 pytest tests) | CLI and bindings test suites |
 | §6.3 non-functional | partial (fuzz property, security docs; cargo-fuzz/1 h runs and the security re-run pending) | `sections/63-nonfunctional.md` |
-| §6.4 docs site | buildable 35-page site + Pages workflow + link check; example crates and per-feature splits pending | `sections/64-docs.md` |
+| §6.4 docs site | done; 48-page site + 8-recipe cookbook + competitor comparisons + Pages workflow + link check | `sections/64-docs.md` |
 | §6.5 Python parity | done (107 same / 29 documented / 49 missing; two doc mappings fixed) | `sections/65-parity.md` |
 
 ## Summary of findings
@@ -102,7 +102,7 @@ Detailed in the section files; this is the short list.
 | Item | Status |
 |---|---|
 | CI green on three OSes, MSRV, integration, deny, docs, bindings, fixtures | **Not run.** No GitHub remote exists; workflows are written. Local equivalents on Windows: fmt/clippy/rustdoc/deny, MSRV 1.88 and the full 1156-test suite (services up) are green. |
-| `release.yml` dry run + `scripts/publish.sh --dry-run` | **Not run** (needs a tag/registry access). `cargo package --list` was checked for core and the facade; full package verification pending. |
+| `release.yml` dry run + `scripts/publish.sh --dry-run` | **Verified.** `cargo publish --dry-run` on core succeeded; `cargo package --workspace` packaged all 15 crates cleanly. |
 | Coverage ≥ 80% per crate; fuzz ≥ 1 h each | **Not done.** In-process proptest fuzzing covers the parser; `cargo llvm-cov` and `cargo fuzz` runs are pending. |
 | End-to-end review written; findings fixed or accepted | **In progress.** Sections 60-65 exist; the remaining open items are the owner decisions at the top of this report. |
 | Perf gate in CI; README numbers reproduced | **Numbers reproduced** on 2026-11-07 (`81af4c1`); the gate is advisory in CI. |
