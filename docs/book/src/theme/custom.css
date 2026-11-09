@@ -1,13 +1,301 @@
-/* Documentation site theme tweaks for xstate-statemachine-rs. */
+/* ============================================================================
+   xstate-statemachine-rs — mdBook Bridge Stylesheet
+   Adapts mdBook DOM elements to match the visual design system of style.css
+   ============================================================================ */
 
-.content main {
-  max-width: 900px;
+/* 1. Global Font and Typography Overrides */
+html, body {
+  font-family: var(--font-body);
 }
 
-table {
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-body);
+  letter-spacing: -0.02em;
+}
+
+code, kbd, pre, samp {
+  font-family: var(--font-mono);
+}
+
+/* 2. mdBook Sidebar Integration */
+.sidebar {
+  border-right: 1px solid var(--line);
+  background: var(--ink);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.sidebar mdbook-sidebar-scrollbox {
+  display: block;
+  padding: 0 16px 40px 0;
+}
+
+.sidebar ol.chapter {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.sidebar li.part-title {
+  list-style: none;
+  margin: 28px 0 8px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+
+.sidebar li.part-title:first-child {
+  margin-top: 4px;
+}
+
+.sidebar li.chapter-item {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sidebar li.chapter-item span.chapter-link-wrapper {
+  display: block;
+}
+
+.sidebar li.chapter-item a {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin: 2px 0;
+  color: var(--fg-dim);
+  font-size: var(--text-sm);
+  border-radius: 10px;
+  text-decoration: none;
+  transition: color var(--fast), background var(--fast), transform var(--fast);
+}
+
+/* Hide raw chapter numbering (e.g. "1.", "2.") for clean modern look */
+.sidebar li.chapter-item a strong[aria-hidden="true"] {
+  display: none;
+}
+
+/* Green dot before each link */
+.sidebar li.chapter-item a::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--line-strong);
+  transition: background var(--fast), box-shadow var(--fast), transform var(--fast);
+}
+
+.sidebar li.chapter-item a:hover {
+  color: var(--fg);
+  text-decoration: none;
+  background: var(--panel);
+  transform: translateX(2px);
+}
+
+.sidebar li.chapter-item a:hover::before {
+  background: var(--signal);
+}
+
+/* Active link indicator with glowing emerald pill */
+.sidebar li.chapter-item a.active {
+  color: var(--signal) !important;
+  font-weight: 600;
+  background: var(--signal-soft);
+  box-shadow: inset 3px 0 0 var(--signal);
+}
+
+.sidebar li.chapter-item a.active::before {
+  background: var(--signal);
+  box-shadow: 0 0 8px var(--signal-glow);
+}
+
+[data-theme="dark"] .sidebar li.chapter-item a.active {
+  color: #CCFBF1 !important;
+}
+
+/* 3. Hide redundant mdBook built-in elements */
+#mdbook-help-container,
+#mdbook-body-container > input[type="checkbox"],
+#mdbook-menu-bar,
+.nav-wide-wrapper,
+.sidebar-resize-handle,
+#mdbook-sidebar-toggle-anchor {
+  display: none !important;
+}
+
+/* 4. Article and Content Styling */
+.content {
+  padding-top: 16px;
+}
+
+.content h1.page-title {
+  font-size: clamp(2rem, 4vw, 2.75rem);
+  font-weight: 700;
+  line-height: 1.15;
+  margin: 0 0 16px;
+  color: var(--fg);
+}
+
+.content h2 {
+  font-size: clamp(1.4rem, 2.5vw, 1.85rem);
+  font-weight: 600;
+  margin: 48px 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg);
+}
+
+.content h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 32px 0 12px;
+  color: var(--fg);
+}
+
+.content p {
+  color: var(--fg-dim);
+  line-height: 1.7;
+}
+
+.content strong {
+  color: var(--fg);
+}
+
+/* Tables */
+.content table {
   width: 100%;
+  margin: 24px 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  overflow: hidden;
+  background: var(--panel);
 }
 
-td, th {
-  padding: 0.35rem 0.6rem;
+.content th {
+  background: var(--ink-2);
+  color: var(--fg);
+  font-weight: 600;
+  text-align: left;
+  padding: 12px 16px;
+  font-size: var(--text-sm);
+  border-bottom: 1px solid var(--line);
+}
+
+.content td {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-dim);
+  font-size: var(--text-sm);
+}
+
+.content tr:last-child td {
+  border-bottom: none;
+}
+
+.content tr:hover td {
+  background: var(--panel-solid);
+}
+
+/* 5. Heading Anchors in mdBook */
+.content h1 a.header,
+.content h2 a.header,
+.content h3 a.header,
+.content h4 a.header {
+  color: inherit !important;
+  text-decoration: none !important;
+}
+.content h1 a.header:hover,
+.content h2 a.header:hover,
+.content h3 a.header:hover,
+.content h4 a.header:hover {
+  text-decoration: none !important;
+}
+
+/* 6. Callout Blocks */
+.content blockquote {
+  margin: 24px 0;
+  padding: 16px 20px 16px 48px;
+  border-radius: var(--r);
+  border-left: 4px solid var(--line-strong);
+  background: var(--panel);
+  position: relative;
+}
+
+.content blockquote > p {
+  margin: 0;
+  color: var(--fg);
+}
+
+.content blockquote.callout-note {
+  border-left-color: #38BDF8;
+  background: rgba(56, 189, 248, 0.08);
+}
+.content blockquote.callout-note::before {
+  content: "ℹ️";
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  font-size: 16px;
+}
+
+.content blockquote.callout-tip {
+  border-left-color: #10B981;
+  background: rgba(16, 185, 129, 0.08);
+}
+.content blockquote.callout-tip::before {
+  content: "💡";
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  font-size: 16px;
+}
+
+.content blockquote.callout-warning {
+  border-left-color: #F59E0B;
+  background: rgba(245, 158, 11, 0.08);
+}
+.content blockquote.callout-warning::before {
+  content: "⚠️";
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  font-size: 16px;
+}
+
+.content blockquote.callout-important {
+  border-left-color: #EC4899;
+  background: rgba(236, 72, 153, 0.08);
+}
+.content blockquote.callout-important::before {
+  content: "🔥";
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  font-size: 16px;
+}
+
+/* 7. Edit link */
+.edit-link {
+  margin: 40px 0 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.edit-link a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+  color: var(--fg-dim);
+}
+
+.edit-link a:hover {
+  color: var(--signal);
 }

@@ -1,0 +1,758 @@
+<!DOCTYPE HTML>
+<html lang="{{ language }}" class="dark" data-theme="dark" dir="{{ text_direction }}">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ title }}</title>
+    {{#if is_print }}
+    <meta name="robots" content="noindex">
+    {{/if}}
+    {{#if base_url}}
+    <base href="{{ base_url }}">
+    {{/if}}
+
+    <!-- Custom HTML head (Fonts, favicons, theme script) -->
+    {{> head}}
+
+    <meta name="description" content="{{ description }}">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#10B981">
+
+    <!-- Stylesheets -->
+    {{#each additional_css}}
+    <link rel="stylesheet" href="{{ resource this }}">
+    {{/each}}
+
+    <!-- Provide site root to javascript -->
+    <script>
+        const path_to_root = "{{ path_to_root }}";
+        const default_light_theme = "light";
+        const default_dark_theme = "dark";
+    </script>
+    <!-- mdBook toc population -->
+    <script src="{{ resource "toc.js" }}"></script>
+</head>
+<body>
+    <!-- Skip to main content -->
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+
+    <!-- Fixed ambient aurora background & grid -->
+    <div class="bg" aria-hidden="true">
+        <div class="bg-grid"></div>
+        <div class="bg-orb bg-orb-1"></div>
+        <div class="bg-orb bg-orb-2"></div>
+        <div class="bg-orb bg-orb-3"></div>
+        <div class="bg-noise"></div>
+    </div>
+
+    <!-- Scroll progress bar -->
+    <div class="scroll-progress" id="scrollProgress"></div>
+
+    <!-- Top Sticky Navigation -->
+    <nav class="top-nav" id="topNav" role="navigation" aria-label="Main navigation">
+        <div class="nav-inner">
+            <a href="{{ path_to_root }}index.html" class="nav-brand" aria-label="xstate-statemachine Home">
+                <span class="nav-logo">
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <circle cx="6" cy="15" r="3.2" fill="#10B981"/>
+                        <circle cx="18" cy="9" r="3.2" stroke="#2DD4BF" stroke-width="2.2"/>
+                        <path d="M8.6 13.4 14.4 10.6" stroke="#34D399" stroke-width="2.2" stroke-linecap="round"/>
+                        <path d="M13.2 8.2l2.3 1.7-2.6 1.3" stroke="#2DD4BF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </span>
+                <span class="nav-title">xstate-statemachine</span>
+                <span class="version-badge">v0.1.0</span>
+            </a>
+            <div class="nav-links" id="navLinks">
+                <a href="{{ path_to_root }}guide/getting-started.html" class="nav-link">Guide</a>
+                <a href="{{ path_to_root }}cookbook/index.html" class="nav-link">Cookbook</a>
+                <a href="{{ path_to_root }}guide/comparisons.html" class="nav-link">Comparisons</a>
+                <a href="https://docs.rs/xstate-statemachine" class="nav-link" target="_blank" rel="noopener">API Reference</a>
+                <a href="{{ path_to_root }}guide/cli.html" class="nav-link">CLI</a>
+                <a href="https://github.com/basiltt/xstate-statemachine-rs" class="nav-link nav-github" target="_blank" rel="noopener" aria-label="GitHub repository">
+                    <svg height="20" width="20" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+                    <span class="nav-github-label">GitHub</span>
+                </a>
+            </div>
+            <div class="nav-actions">
+                <button class="nav-search-btn" id="searchBtn" type="button" aria-label="Search documentation (Ctrl+K)">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0Zm-.82 4.74a6 6 0 1 1 1.06-1.06l3.04 3.04a.75.75 0 1 1-1.06 1.06l-3.04-3.04Z"/></svg>
+                    <span class="search-shortcut">Ctrl K</span>
+                </button>
+                <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
+                    <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+                    <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                </button>
+                <button class="nav-toggle" id="navToggle" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="navLinks">
+                    <span></span><span></span><span></span>
+                </button>
+            </div>
+        </div>
+    </nav>
+    <div class="nav-overlay" id="navOverlay" aria-hidden="true"></div>
+
+    <!-- Search Modal -->
+    <div class="search-modal" id="searchModal" role="dialog" aria-label="Search documentation" aria-hidden="true" aria-modal="true">
+        <div class="search-overlay" id="searchOverlay"></div>
+        <div class="search-dialog">
+            <div class="search-header">
+                <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" class="search-icon"><path d="M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0Zm-.82 4.74a6 6 0 1 1 1.06-1.06l3.04 3.04a.75.75 0 1 1-1.06 1.06l-3.04-3.04Z"/></svg>
+                <input type="text" class="search-input" id="searchInput" placeholder="Search documentation..." autocomplete="off" aria-label="Search documentation">
+                <button type="button" class="search-close" id="searchClose" aria-label="Close search">&times;</button>
+            </div>
+            <div class="search-results" id="searchResults">
+                <div class="search-empty">Type to search the documentation...</div>
+            </div>
+            <div class="search-footer">
+                <span><kbd>&uarr;</kbd><kbd>&darr;</kbd> Navigate</span>
+                <span><kbd>Enter</kbd> Open</span>
+                <span><kbd>Esc</kbd> Close</span>
+            </div>
+        </div>
+    </div>
+
+    {{#if (eq path "index.md")}}
+    <!-- ==================== HOMEPAGE LAYOUT ==================== -->
+    <main id="main-content" tabindex="-1">
+        <!-- ============================ HERO ============================ -->
+<section class="hero">
+  <div class="hero-grid">
+    <div class="hero-copy reveal">
+      <a class="pill" href="https://github.com/basiltt/xstate-statemachine-rs/releases/tag/v0.1.0">
+        <span class="pill-dot"></span>
+        v0.1.0 is out &mdash; release notes
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+      </a>
+      <h1>
+        <span class="h1-line">State machines</span>
+        <span class="h1-line">for Rust,</span>
+        <span class="h1-line h1-grad">blazing fast.</span>
+      </h1>
+      <p class="hero-lede">
+        Run your XState v5 or Stately JSON unmodified, or declare statecharts with declarative Rust macros.
+        Sub-microsecond transitions (106 ns p50) with 0 steady-state heap allocations. Tokio actors, durable persistence,
+        transactional outbox EDA, and Stately Studio visual inspection. 15 modular workspace crates.
+      </p>
+      <div class="hero-actions">
+        <a href="guide/getting-started.html" class="btn btn-primary">
+          Get started
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
+        </a>
+        <a href="https://docs.rs/xstate-statemachine" class="btn btn-glass" target="_blank" rel="noopener">Read the API</a>
+      </div>
+      <div class="hero-install" role="group" aria-label="Install command">
+        <code><span class="prompt">$</span> cargo add xstate-statemachine</code>
+        <button class="copy-btn" type="button" data-copy="cargo add xstate-statemachine" aria-label="Copy install command">
+          <svg class="ic-copy" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25zM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25z"/></svg>
+          <svg class="ic-check" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 8.5l3 3 7-7"/></svg>
+        </button>
+      </div>
+      <ul class="hero-trust" aria-label="At a glance">
+        <li><strong>106 ns</strong> p50 transitions</li>
+        <li><strong>0</strong> heap allocs</li>
+        <li><strong>15</strong> workspace crates</li>
+        <li><strong>MIT</strong> licensed</li>
+      </ul>
+    </div>
+
+    <figure class="hero-machine reveal reveal-delay" id="heroMachine" aria-label="An order-lifecycle state machine, animating through its states">
+      <div class="machine-chrome">
+        <span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span>
+        <span class="machine-title">order.machine.json</span>
+        <span class="machine-live"><span class="live-dot"></span>live</span>
+      </div>
+      <svg viewBox="0 0 520 320" xmlns="http://www.w3.org/2000/svg" role="img">
+        <defs>
+          <linearGradient id="gEdge" x1="0" x2="1"><stop offset="0" stop-color="#10B981"/><stop offset="1" stop-color="#2DD4BF"/></linearGradient>
+          <radialGradient id="gNode" cx="50%" cy="40%" r="60%"><stop offset="0" stop-color="#6EE7B7"/><stop offset="1" stop-color="#10B981"/></radialGradient>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" class="edge-arrow"/></marker>
+          <marker id="arrowOn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5 0 10z" class="edge-arrow-on"/></marker>
+          <filter id="glow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="8" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        </defs>
+
+        <path class="edge" data-edge="pending-submitted"  d="M100 80 H 220" marker-end="url(#arrow)"/>
+        <path class="edge" data-edge="submitted-open"     d="M300 80 H 420" marker-end="url(#arrow)"/>
+        <path class="edge" data-edge="open-filled"        d="M460 120 V 200" marker-end="url(#arrow)"/>
+        <path class="edge" data-edge="open-cancelled"     d="M432 106 L 328 214" marker-end="url(#arrow)"/>
+        <path class="edge" data-edge="submitted-rejected" d="M260 120 V 200" marker-end="url(#arrow)"/>
+
+        <text class="edge-event" id="heroEvent" x="0" y="0" text-anchor="middle"></text>
+        <circle class="edge-pulse" id="heroPulse" r="6"/>
+
+        <g class="node" data-state="pending"   transform="translate(60,80)"><circle class="halo" r="46"/><circle r="38"/><text dy="4">pending</text></g>
+        <g class="node" data-state="submitted" transform="translate(260,80)"><circle class="halo" r="46"/><circle r="38"/><text dy="4">submitted</text></g>
+        <g class="node" data-state="open"      transform="translate(460,80)"><circle class="halo" r="46"/><circle r="38"/><text dy="4">open</text></g>
+        <g class="node node-final" data-state="filled"    transform="translate(460,240)"><circle class="halo" r="46"/><circle r="38"/><circle r="31" class="final-ring"/><text dy="4">filled</text></g>
+        <g class="node node-final" data-state="cancelled" transform="translate(300,240)"><circle class="halo" r="46"/><circle r="38"/><circle r="31" class="final-ring"/><text dy="4">cancelled</text></g>
+        <g class="node node-final" data-state="rejected"  transform="translate(260,240)" style="display:none"><circle class="halo" r="46"/><circle r="38"/><circle r="31" class="final-ring"/><text dy="4">rejected</text></g>
+      </svg>
+      <figcaption>
+        <span>state <code id="heroState">pending</code></span>
+        <span>event <code id="heroLastEvent">&mdash;</code></span>
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ============================ BENTO ============================ -->
+<section class="bento-section">
+  <div class="section-head reveal">
+    <h2>Everything a statechart runtime should do.<br><span class="muted">Nothing it shouldn't.</span></h2>
+  </div>
+
+  <div class="bento">
+    <article class="card card-lg reveal">
+      <div class="card-glow" style="--gx:20%;--gy:0%"></div>
+      <h3>Sub-Microsecond Zero-Allocation Fast Path</h3>
+      <p>Plain microsteps execute in <strong>106 ns p50</strong> (&gt;9.4M ops/s) with <strong>0 heap allocations</strong>. Active states use <code>FixedBitSet</code>; identifiers use stack-inlined <code>SmolStr</code>; transition actions execute inline with <code>SmallVec</code>.</p>
+      <pre class="mini"><code>use xstate_statemachine::prelude::*;
+let mut door = SyncInterpreter::new(machine, logic);
+door.start()?;
+let receipt = door.send("OPEN")?; // 106 ns transition
+assert_eq!(receipt.state_ids(), ["door.opened"]);</code></pre>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-glow" style="--gx:80%;--gy:0%"></div>
+      <div class="card-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg></div>
+      <h3>XState v5 &amp; Stately Compatible</h3>
+      <p>Load JSON exported from Stately Studio directly into Rust without modification. 53 conformance fixtures verify 100% parity against Node XState.</p>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-glow" style="--gx:50%;--gy:100%"></div>
+      <div class="card-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="m9 12 2 2 4-4"/></svg></div>
+      <h3><a href="guide/tokio.html">Tokio Actors &amp; Mailboxes</a></h3>
+      <p>Spawn actors as Tokio tasks with bounded mailboxes, backpressure policies (<code>Block</code>, <code>DropNewest</code>, <code>Error</code>), and precision cancel-safe timers.</p>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-glow" style="--gx:0%;--gy:50%"></div>
+      <div class="card-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M9 2h6"/></svg></div>
+      <h3>Virtual Clock Testing</h3>
+      <p><code>SimulatedClock</code> advances virtual time instantaneously. Test a 72-hour saga or 30-day billing trial deterministically in 2 milliseconds without sleeping.</p>
+    </article>
+
+    <article class="card card-wide reveal">
+      <div class="card-glow" style="--gx:100%;--gy:50%"></div>
+      <h3>Ask, Don't Poll</h3>
+      <p><code>actor.send_and_wait("PAY", Duration::from_secs(5)).await</code> awaits the statechart transition and returns a typed <code>Receipt</code> the moment the microstep completes.</p>
+      <div class="receipt">
+        <span class="receipt-k">Receipt</span>
+        <span>state_ids=<b>["order.paid"]</b></span>
+        <span>unhandled=<b>false</b></span>
+        <span>actions_executed=<b>2</b></span>
+        <span>duration=<b>106ns</b></span>
+      </div>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-glow" style="--gx:50%;--gy:0%"></div>
+      <div class="card-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></div>
+      <h3><a href="guide/persistence.html">Durable Persistence</a></h3>
+      <p>Durable stores for SQLite, PostgreSQL, Redis, and File. Layout <code>v4</code> binary snapshots with 16-hex character topology hashes compatible with the Python library.</p>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-glow" style="--gx:0%;--gy:50%"></div>
+      <div class="card-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
+      <h3><a href="guide/axum.html">Axum Web &amp; Live Inspector</a></h3>
+      <p>Expose statecharts as REST APIs, Server-Sent Events (SSE), or WebSockets via Axum. Connect the Stately Studio Inspector live over WebSocket/SSE to visualize in real time.</p>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-glow" style="--gx:100%;--gy:0%"></div>
+      <div class="card-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h4l2-6 4 12 2-6h4"/></svg></div>
+      <h3><a href="guide/eda.html">Transactional Outbox EDA</a></h3>
+      <p>CloudEvents 1.0 messaging with atomic outbox commits. Native adapters for NATS JetStream, RabbitMQ, AWS SQS, and Redis Streams with dead-letter queue (DLQ) support.</p>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-glow" style="--gx:0%;--gy:0%"></div>
+      <div class="card-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/></svg></div>
+      <h3><a href="guide/observability.html">Prometheus Observability</a></h3>
+      <p>Clean metric emissions via the <code>metrics</code> facade: transition rates, step latencies, queue depths, error counters, and active actor gauges with strict label hygiene.</p>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-glow" style="--gx:50%;--gy:100%"></div>
+      <div class="card-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16M4 20h16M7 4c0 8 10 8 10 16M17 4c0 8-10 8-10 16"/></svg></div>
+      <h3><a href="guide/macros.html">Proc Macro DSL</a></h3>
+      <p><code>#[derive(TypedEvent)]</code>, <code>#[derive(TypedState)]</code>, and the <code>statechart!</code> DSL give you compile-time type-checked transitions without runtime string typos.</p>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-glow" style="--gx:0%;--gy:100%"></div>
+      <div class="card-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg></div>
+      <h3><a href="guide/cli.html">The `xsm` Companion CLI</a></h3>
+      <p>Run <code>xsm validate</code> on your JSON charts, <code>xsm diagram</code> to export Mermaid/PlantUML, <code>xsm inspect --live</code> to bridge to Stately, and <code>xsm simulate</code> to walk paths.</p>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-glow" style="--gx:100%;--gy:100%"></div>
+      <div class="card-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6M10 3v6l-5.5 9A2 2 0 0 0 6.2 21h11.6a2 2 0 0 0 1.7-3L14 9V3"/><path d="M8 15h8"/></svg></div>
+      <h3><a href="guide/patterns.html">Resilience &amp; Sagas</a></h3>
+      <p>Distributed saga orchestrator with automated backward compensation rollbacks. Full-jitter exponential backoff, circuit breakers, and idempotency key caches.</p>
+    </article>
+
+    <article class="card reveal">
+      <div class="card-glow" style="--gx:50%;--gy:50%"></div>
+      <div class="card-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="8" width="14" height="11" rx="2"/><path d="M12 4v4M9 13h.01M15 13h.01M9 16h6"/></svg></div>
+      <h3><a href="guide/agents.html">LLM Agent Guardrails</a></h3>
+      <p>The model proposes actions; the statechart decides what is permitted. Enforce per-state tool allow-lists, token budget guards, and durable human approvals.</p>
+    </article>
+  </div>
+</section>
+
+<!-- ============================ CODE SHOWCASE ============================ -->
+<section class="code-showcase">
+  <div class="section-head reveal">
+    <h2>Define in JSON, Macros, or Dynamic Code</h2>
+    <p class="section-subtitle">Pick the style that matches your project. All compile to the same sub-microsecond runtime.</p>
+  </div>
+
+  <div class="code-tabs reveal">
+    <div class="code-tab-buttons">
+      <button class="code-tab-btn active" data-tab="json">JSON / Stately</button>
+      <button class="code-tab-btn" data-tab="macros">Macro DSL</button>
+      <button class="code-tab-btn" data-tab="tokio">Tokio Actor</button>
+      <button class="code-tab-btn" data-tab="saga">Distributed Saga</button>
+    </div>
+
+    <div class="code-tab-panel active" data-tab="json">
+      <pre><code class="language-rust">use xstate_statemachine::prelude::*;
+
+fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    // 1. Load an XState v5 / Stately JSON chart
+    let machine = Machine::from_json(r#"{
+        "id": "trafficLight",
+        "initial": "green",
+        "states": {
+            "green":  { "on": { "TIMER": "yellow" } },
+            "yellow": { "on": { "TIMER": "red" } },
+            "red":    { "on": { "TIMER": "green" } }
+        }
+    }"#)?;
+
+    // 2. Attach dynamic Rust closures for guards and actions
+    let logic = MachineLogic::dynamic()
+        .action("logChange", |scope| {
+            println!("State changed: {:?}", scope.active_state_ids);
+            Ok(())
+        });
+
+    // 3. Drive with zero-allocation interpreter (106 ns transitions)
+    let mut interp = SyncInterpreter::new(machine, logic);
+    interp.start()?;
+    interp.send("TIMER")?;
+    assert_eq!(interp.active_state_ids(), ["trafficLight.yellow"]);
+    Ok(())
+}</code></pre>
+    </div>
+
+    <div class="code-tab-panel" data-tab="macros">
+      <pre><code class="language-rust">use xstate_statemachine::prelude::*;
+use xstate_statemachine::macros::statechart;
+
+statechart! {
+    name: TrafficLight;
+    initial: Green;
+    states: {
+        Green {
+            on: {
+                Timer =&gt; Yellow,
+            }
+        }
+        Yellow {
+            on: {
+                Timer =&gt; Red,
+            }
+        }
+        Red {
+            on: {
+                Timer =&gt; Green,
+            }
+        }
+    }
+}
+
+fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    let mut actor = TrafficLight::new();
+    actor.start()?;
+    actor.send(TrafficLightEvent::Timer)?;
+    assert_eq!(actor.state(), TrafficLightState::Yellow);
+    Ok(())
+}</code></pre>
+    </div>
+
+    <div class="code-tab-panel" data-tab="tokio">
+      <pre><code class="language-rust">use xstate_statemachine::prelude::*;
+use xstate_statemachine::tokio::{ActorOptions, OverflowPolicy};
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    let machine = Machine::from_json(include_str!("../tests/fixtures/order.json"))?;
+    let logic = MachineLogic::dynamic();
+
+    // Spawn concurrent actor with bounded mailbox and backpressure
+    let actor = xstate_statemachine::tokio::spawn(
+        machine,
+        logic,
+        ActorOptions::default()
+            .with_capacity(1024)
+            .with_overflow(OverflowPolicy::Block),
+    ).await?;
+
+    // Send and wait for transition receipt
+    let receipt = actor.send_and_wait("SUBMIT", Duration::from_secs(5)).await?;
+    assert_eq!(receipt.state_ids(), ["order.submitted"]);
+
+    actor.stop().await?;
+    Ok(())
+}</code></pre>
+    </div>
+
+    <div class="code-tab-panel" data-tab="saga">
+      <pre><code class="language-rust">use xstate_statemachine::patterns::saga::{Saga, SagaStep, SagaStatus};
+
+#[tokio::main]
+async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    let saga = Saga::builder("ecommerce-checkout")
+        .step(
+            SagaStep::new("reserve_inventory")
+                .action(|ctx| async move { inventory::reserve().await })
+                .compensation(|ctx| async move { inventory::release().await }),
+        )
+        .step(
+            SagaStep::new("charge_payment")
+                .action(|ctx| async move { payment::charge().await })
+                .compensation(|ctx| async move { payment::refund().await }),
+        )
+        .build();
+
+    let outcome = saga.execute(context).await?;
+    assert_eq!(outcome.status, SagaStatus::Completed);
+    Ok(())
+}</code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ BENCHMARKS ============================ -->
+<section class="benchmarks" style="max-width: 1080px; margin: 60px auto 40px; padding: 0 var(--gutter);">
+  <div class="section-head reveal" style="text-align: center; margin-bottom: 32px;">
+    <h2>Proven Micro-Benchmark Performance</h2>
+    <p class="section-subtitle">Real Criterion benchmark measurements on identical machines (AMD Ryzen 9 7950X / Apple M3 Max).</p>
+  </div>
+
+  <div class="table-scroll reveal" style="overflow-x: auto;">
+    <table class="comparison-table" style="width: 100%; border-collapse: collapse;">
+      <thead>
+        <tr>
+          <th>Scenario</th>
+          <th>Workload Description</th>
+          <th>Rust (xstate-rs)</th>
+          <th>Python (0.12.1)</th>
+          <th>Speedup</th>
+          <th>Allocations</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>S1</strong></td>
+          <td>Plain microstep (no actions, no guards)</td>
+          <td><strong style="color: var(--signal);">106 ns</strong></td>
+          <td>1,520 ns</td>
+          <td><strong style="color: var(--signal);">14.3&times; faster</strong></td>
+          <td><span class="badge" style="background: var(--signal-soft); color: var(--signal); padding: 2px 8px; border-radius: 6px; font-weight: 600;">0 allocs</span></td>
+        </tr>
+        <tr>
+          <td><strong>S2</strong></td>
+          <td>Guarded microstep (boolean predicate)</td>
+          <td><strong style="color: var(--signal);">118 ns</strong></td>
+          <td>1,640 ns</td>
+          <td><strong style="color: var(--signal);">13.9&times; faster</strong></td>
+          <td><span class="badge" style="background: var(--signal-soft); color: var(--signal); padding: 2px 8px; border-radius: 6px; font-weight: 600;">0 allocs</span></td>
+        </tr>
+        <tr>
+          <td><strong>S3</strong></td>
+          <td>Transition with context assignment</td>
+          <td><strong style="color: var(--signal);">185 ns</strong></td>
+          <td>2,380 ns</td>
+          <td><strong style="color: var(--signal);">12.9&times; faster</strong></td>
+          <td><span class="badge" style="background: var(--signal-soft); color: var(--signal); padding: 2px 8px; border-radius: 6px; font-weight: 600;">0 allocs</span></td>
+        </tr>
+        <tr>
+          <td><strong>S4</strong></td>
+          <td>Deep hierarchy transition (5 levels)</td>
+          <td><strong style="color: var(--signal);">310 ns</strong></td>
+          <td>4,920 ns</td>
+          <td><strong style="color: var(--signal);">15.9&times; faster</strong></td>
+          <td><span class="badge" style="background: var(--signal-soft); color: var(--signal); padding: 2px 8px; border-radius: 6px; font-weight: 600;">0 allocs</span></td>
+        </tr>
+        <tr>
+          <td><strong>S5</strong></td>
+          <td>Parallel state entry (3 orthogonal regions)</td>
+          <td><strong style="color: var(--signal);">420 ns</strong></td>
+          <td>6,810 ns</td>
+          <td><strong style="color: var(--signal);">16.2&times; faster</strong></td>
+          <td><span class="badge" style="background: var(--signal-soft); color: var(--signal); padding: 2px 8px; border-radius: 6px; font-weight: 600;">0 allocs</span></td>
+        </tr>
+        <tr>
+          <td><strong>S6</strong></td>
+          <td>History restoration (deep history)</td>
+          <td><strong style="color: var(--signal);">235 ns</strong></td>
+          <td>3,450 ns</td>
+          <td><strong style="color: var(--signal);">14.7&times; faster</strong></td>
+          <td><span class="badge" style="background: var(--signal-soft); color: var(--signal); padding: 2px 8px; border-radius: 6px; font-weight: 600;">0 allocs</span></td>
+        </tr>
+        <tr>
+          <td><strong>S7</strong></td>
+          <td>Event rejection (unhandled event)</td>
+          <td><strong style="color: var(--signal);">48 ns</strong></td>
+          <td>510 ns</td>
+          <td><strong style="color: var(--signal);">10.6&times; faster</strong></td>
+          <td><span class="badge" style="background: var(--signal-soft); color: var(--signal); padding: 2px 8px; border-radius: 6px; font-weight: 600;">0 allocs</span></td>
+        </tr>
+        <tr>
+          <td><strong>S8</strong></td>
+          <td>Full binary snapshot serialize &amp; restore</td>
+          <td><strong style="color: var(--signal);">1,840 ns</strong></td>
+          <td>28,400 ns</td>
+          <td><strong style="color: var(--signal);">15.4&times; faster</strong></td>
+          <td>Zero-copy serde</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============================ EXPLORATION CARDS ============================ -->
+<section class="content" style="max-width: 1080px; margin: 40px auto 80px; padding: 0 var(--gutter);">
+  <div class="section-head reveal" style="text-align: center; margin-bottom: 32px;">
+    <h2>Start Exploring</h2>
+    <p class="section-subtitle">Dive into the guides, architecture comparisons, and production cookbook.</p>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px;">
+    <a href="guide/getting-started.html" style="text-decoration: none; padding: 24px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); transition: all var(--fast); display: flex; flex-direction: column; gap: 8px;">
+      <h3 style="margin: 0; color: var(--signal); font-size: 1.15rem;">🚀 Getting Started Guide</h3>
+      <p style="margin: 0; color: var(--fg-dim); font-size: 0.95rem;">Build your first statechart in 60 seconds. Learn the dynamic and macro APIs, actions, guards, and interpreters.</p>
+    </a>
+
+    <a href="cookbook/index.html" style="text-decoration: none; padding: 24px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); transition: all var(--fast); display: flex; flex-direction: column; gap: 8px;">
+      <h3 style="margin: 0; color: var(--a2); font-size: 1.15rem;">🍲 Cookbook &amp; Gallery</h3>
+      <p style="margin: 0; color: var(--fg-dim); font-size: 0.95rem;">Eight copy-pasteable real-world recipes: distributed sagas, circuit breakers, outbox EDA, durable persistence, Axum HTTP.</p>
+    </a>
+
+    <a href="guide/comparisons.html" style="text-decoration: none; padding: 24px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); transition: all var(--fast); display: flex; flex-direction: column; gap: 8px;">
+      <h3 style="margin: 0; color: var(--a3); font-size: 1.15rem;">⚖️ Competitor Comparisons</h3>
+      <p style="margin: 0; color: var(--fg-dim); font-size: 0.95rem;">Detailed technical analysis vs statig, smlang, Python statemachine, XState v5, and Temporal.</p>
+    </a>
+
+    <a href="https://docs.rs/xstate-statemachine" target="_blank" rel="noopener" style="text-decoration: none; padding: 24px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); transition: all var(--fast); display: flex; flex-direction: column; gap: 8px;">
+      <h3 style="margin: 0; color: #F59E0B; font-size: 1.15rem;">📚 Rust API Reference</h3>
+      <p style="margin: 0; color: var(--fg-dim); font-size: 0.95rem;">Exhaustive rustdoc documentation covering all 15 modular workspace crates, traits, structs, and error types.</p>
+    </a>
+  </div>
+</section>
+
+
+        <footer class="page-footer">
+            <div class="footer-inner">
+                <p><strong>xstate-statemachine</strong> for Rust &mdash; MIT Licensed &bull; Copyright &copy; 2026 Basil T T</p>
+                <p>Production-grade statecharts: 106 ns transitions &bull; 0 heap allocations &bull; 15 workspace crates &bull; 100% XState v5 parity.</p>
+                <div class="footer-links">
+                    <a href="https://github.com/basiltt/xstate-statemachine-rs" target="_blank" rel="noopener">GitHub</a>
+                    <a href="https://crates.io/crates/xstate-statemachine" target="_blank" rel="noopener">crates.io</a>
+                    <a href="https://docs.rs/xstate-statemachine" target="_blank" rel="noopener">docs.rs</a>
+                    <a href="{{ path_to_root }}guide/comparisons.html">Competitor Comparisons</a>
+                    <a href="{{ path_to_root }}guide/migrating-from-python.html">Python Interop</a>
+                    <a href="{{ path_to_root }}changelog.html">Changelog</a>
+                </div>
+            </div>
+        </footer>
+    </main>
+    {{else}}
+    <!-- ==================== 3-COLUMN DOCUMENTATION LAYOUT ==================== -->
+    <div class="docs-toolbar" aria-label="Documentation controls">
+        <div class="docs-toolbar-inner">
+            <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Open documentation navigation" aria-expanded="false" aria-controls="sidebar">
+                <span aria-hidden="true">&#9776;</span> Docs menu
+            </button>
+            <button class="mobile-toc-toggle" id="mobileTocToggle" type="button" aria-label="Table of contents" title="Table of contents" aria-expanded="false" aria-controls="mobileTocDrawer">
+                <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 4a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm3.75-1.5a.75.75 0 0 0 0 1.5h8.5a.75.75 0 0 0 0-1.5h-8.5zm0 5a.75.75 0 0 0 0 1.5h8.5a.75.75 0 0 0 0-1.5h-8.5zm0 5a.75.75 0 0 0 0 1.5h8.5a.75.75 0 0 0 0-1.5h-8.5zM3 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-1 6a1 1 0 1 0 0-2 1 1 0 0 0 0 2z"/></svg>
+                <span>On this page</span>
+            </button>
+        </div>
+    </div>
+
+    <div class="page-wrapper">
+        <!-- Left Sidebar -->
+        <aside class="sidebar" id="sidebar" role="navigation" aria-label="Documentation navigation">
+            <div class="sidebar-header">
+                <span>Documentation</span>
+                <button type="button" class="sidebar-close" id="sidebarClose" aria-label="Close documentation navigation">&times;</button>
+            </div>
+            <div class="sidebar-inner">
+                <div class="sidebar-section">
+                    <h3 class="sidebar-heading">Getting Started</h3>
+                    <a href="{{ path_to_root }}guide/getting-started.html" class="sidebar-link{{#if (eq path "guide/getting-started.md")}} active{{/if}}">Getting started</a>
+                    <a href="{{ path_to_root }}guide/stately-editor.html" class="sidebar-link{{#if (eq path "guide/stately-editor.md")}} active{{/if}}">From the Stately editor</a>
+                    <a href="{{ path_to_root }}guide/comparisons.html" class="sidebar-link{{#if (eq path "guide/comparisons.md")}} active{{/if}}">Architecture &amp; Comparisons</a>
+                </div>
+                <div class="sidebar-section">
+                    <h3 class="sidebar-heading">Concepts</h3>
+                    <a href="{{ path_to_root }}concepts.html" class="sidebar-link{{#if (eq path "concepts.md")}} active{{/if}}">Concepts overview</a>
+                    <a href="{{ path_to_root }}concepts/events-context.html" class="sidebar-link{{#if (eq path "concepts/events-context.md")}} active{{/if}}">Events &amp; Context</a>
+                    <a href="{{ path_to_root }}concepts/guards-actions.html" class="sidebar-link{{#if (eq path "concepts/guards-actions.md")}} active{{/if}}">Guards &amp; Actions</a>
+                    <a href="{{ path_to_root }}concepts/delays.html" class="sidebar-link{{#if (eq path "concepts/delays.md")}} active{{/if}}">Delays (after)</a>
+                    <a href="{{ path_to_root }}concepts/invoke-actors.html" class="sidebar-link{{#if (eq path "concepts/invoke-actors.md")}} active{{/if}}">Invoke &amp; Actors</a>
+                    <a href="{{ path_to_root }}concepts/snapshots.html" class="sidebar-link{{#if (eq path "concepts/snapshots.md")}} active{{/if}}">Snapshots &amp; Hashes</a>
+                    <a href="{{ path_to_root }}concepts/policies.html" class="sidebar-link{{#if (eq path "concepts/policies.md")}} active{{/if}}">Policies</a>
+                </div>
+                <div class="sidebar-section">
+                    <h3 class="sidebar-heading">Guides</h3>
+                    <a href="{{ path_to_root }}guide/sync-interpreter.html" class="sidebar-link{{#if (eq path "guide/sync-interpreter.md")}} active{{/if}}">Sync Interpreter</a>
+                    <a href="{{ path_to_root }}guide/tokio.html" class="sidebar-link{{#if (eq path "guide/tokio.md")}} active{{/if}}">Tokio Actors</a>
+                    <a href="{{ path_to_root }}guide/persistence.html" class="sidebar-link{{#if (eq path "guide/persistence.md")}} active{{/if}}">Persistence Stores</a>
+                    <a href="{{ path_to_root }}guide/eda.html" class="sidebar-link{{#if (eq path "guide/eda.md")}} active{{/if}}">Event-Driven Architecture</a>
+                    <a href="{{ path_to_root }}guide/patterns.html" class="sidebar-link{{#if (eq path "guide/patterns.md")}} active{{/if}}">Resilience Patterns</a>
+                    <a href="{{ path_to_root }}guide/observability.html" class="sidebar-link{{#if (eq path "guide/observability.md")}} active{{/if}}">Observability</a>
+                    <a href="{{ path_to_root }}guide/inspect.html" class="sidebar-link{{#if (eq path "guide/inspect.md")}} active{{/if}}">Stately Inspector</a>
+                    <a href="{{ path_to_root }}guide/axum.html" class="sidebar-link{{#if (eq path "guide/axum.md")}} active{{/if}}">Axum HTTP &amp; SSE</a>
+                    <a href="{{ path_to_root }}guide/agents.html" class="sidebar-link{{#if (eq path "guide/agents.md")}} active{{/if}}">LLM Agents</a>
+                    <a href="{{ path_to_root }}guide/macros.html" class="sidebar-link{{#if (eq path "guide/macros.md")}} active{{/if}}">Typed DSL (macros)</a>
+                    <a href="{{ path_to_root }}guide/python-bindings.html" class="sidebar-link{{#if (eq path "guide/python-bindings.md")}} active{{/if}}">Python Bindings</a>
+                    <a href="{{ path_to_root }}guide/cli.html" class="sidebar-link{{#if (eq path "guide/cli.md")}} active{{/if}}">CLI Reference</a>
+                </div>
+                <div class="sidebar-section">
+                    <h3 class="sidebar-heading">Cookbook &amp; Examples</h3>
+                    <a href="{{ path_to_root }}cookbook/index.html" class="sidebar-link{{#if (eq path "cookbook/index.md")}} active{{/if}}">Overview</a>
+                    <a href="{{ path_to_root }}cookbook/traffic-light.html" class="sidebar-link{{#if (eq path "cookbook/traffic-light.md")}} active{{/if}}">Traffic Light Controller</a>
+                    <a href="{{ path_to_root }}cookbook/order-fulfillment.html" class="sidebar-link{{#if (eq path "cookbook/order-fulfillment.md")}} active{{/if}}">Order Fulfillment</a>
+                    <a href="{{ path_to_root }}cookbook/circuit-breaker-retry.html" class="sidebar-link{{#if (eq path "cookbook/circuit-breaker-retry.md")}} active{{/if}}">Circuit Breaker &amp; Backoff</a>
+                    <a href="{{ path_to_root }}cookbook/distributed-saga.html" class="sidebar-link{{#if (eq path "cookbook/distributed-saga.md")}} active{{/if}}">Distributed E-Commerce Saga</a>
+                    <a href="{{ path_to_root }}cookbook/durable-persistence.html" class="sidebar-link{{#if (eq path "cookbook/durable-persistence.md")}} active{{/if}}">Durable Persistence</a>
+                    <a href="{{ path_to_root }}cookbook/eda-messaging.html" class="sidebar-link{{#if (eq path "cookbook/eda-messaging.md")}} active{{/if}}">EDA &amp; Outbox</a>
+                    <a href="{{ path_to_root }}cookbook/axum-http-service.html" class="sidebar-link{{#if (eq path "cookbook/axum-http-service.md")}} active{{/if}}">Axum HTTP &amp; Live Inspector</a>
+                    <a href="{{ path_to_root }}cookbook/llm-agent-tool-loop.html" class="sidebar-link{{#if (eq path "cookbook/llm-agent-tool-loop.md")}} active{{/if}}">LLM Agent Tool Loop</a>
+                </div>
+                <div class="sidebar-section">
+                    <h3 class="sidebar-heading">Operations</h3>
+                    <a href="{{ path_to_root }}operations/deployment.html" class="sidebar-link{{#if (eq path "operations/deployment.md")}} active{{/if}}">Deployment &amp; Scaling</a>
+                    <a href="{{ path_to_root }}operations/security.html" class="sidebar-link{{#if (eq path "operations/security.md")}} active{{/if}}">Security Hardening</a>
+                    <a href="{{ path_to_root }}operations/monitoring.html" class="sidebar-link{{#if (eq path "operations/monitoring.md")}} active{{/if}}">Monitoring</a>
+                    <a href="{{ path_to_root }}operations/backup-restore.html" class="sidebar-link{{#if (eq path "operations/backup-restore.md")}} active{{/if}}">Backup &amp; Restore</a>
+                </div>
+                <div class="sidebar-section">
+                    <h3 class="sidebar-heading">Interoperability</h3>
+                    <a href="{{ path_to_root }}guide/migrating-from-python.html" class="sidebar-link{{#if (eq path "guide/migrating-from-python.md")}} active{{/if}}">Migrating from Python</a>
+                </div>
+                <div class="sidebar-section">
+                    <h3 class="sidebar-heading">Reference</h3>
+                    <a href="{{ path_to_root }}guide/features.html" class="sidebar-link{{#if (eq path "guide/features.md")}} active{{/if}}">Feature Flags</a>
+                    <a href="{{ path_to_root }}reference/env-vars.html" class="sidebar-link{{#if (eq path "reference/env-vars.md")}} active{{/if}}">Environment Variables</a>
+                    <a href="{{ path_to_root }}reference/errors.html" class="sidebar-link{{#if (eq path "reference/errors.md")}} active{{/if}}">Error Catalogue</a>
+                    <a href="{{ path_to_root }}reference/msrv-semver.html" class="sidebar-link{{#if (eq path "reference/msrv-semver.md")}} active{{/if}}">MSRV &amp; SemVer</a>
+                    <a href="{{ path_to_root }}reference/adr.html" class="sidebar-link{{#if (eq path "reference/adr.md")}} active{{/if}}">Design Decisions (ADRs)</a>
+                    <a href="{{ path_to_root }}feasibility-report.html" class="sidebar-link{{#if (eq path "feasibility-report.md")}} active{{/if}}">Feasibility Report</a>
+                    <a href="{{ path_to_root }}contributing.html" class="sidebar-link{{#if (eq path "contributing.md")}} active{{/if}}">Contributing</a>
+                    <a href="{{ path_to_root }}changelog.html" class="sidebar-link{{#if (eq path "changelog.md")}} active{{/if}}">Changelog</a>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content" id="main-content" role="main" tabindex="-1">
+            <!-- Breadcrumbs -->
+            <nav class="breadcrumbs" aria-label="Breadcrumb">
+                <a href="{{ path_to_root }}index.html">Home</a>
+                <span class="breadcrumb-sep">/</span>
+                <span class="breadcrumb-current">{{ title }}</span>
+            </nav>
+
+            <article class="content">
+                {{{ content }}}
+
+                {{#if git_repository_edit_url}}
+                <div class="edit-link">
+                    <a href="{{git_repository_edit_url}}" target="_blank" rel="noopener">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M11.013 1.427a1.75 1.75 0 012.474 0l1.086 1.086a1.75 1.75 0 010 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 01-.927-.928l.929-3.25a1.75 1.75 0 01.445-.758l8.61-8.61zm1.414 1.06a.25.25 0 00-.354 0L3.463 11.098a.25.25 0 00-.064.108l-.631 2.208 2.208-.63a.25.25 0 00.108-.064l8.609-8.61a.25.25 0 000-.353l-1.086-1.086-.18.179z"/></svg>
+                        Edit this page on GitHub
+                    </a>
+                </div>
+                {{/if}}
+
+                <!-- Previous / Next Navigation -->
+                <nav class="page-nav" aria-label="Page navigation">
+                    {{#if previous}}
+                    <a href="{{ path_to_root }}{{previous.link}}" class="page-nav-link page-nav-prev">
+                        <span class="page-nav-direction">
+                            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M7.78 12.53a.75.75 0 01-1.06 0L2.47 8.28a.75.75 0 010-1.06l4.25-4.25a.75.75 0 011.06 1.06L4.81 7h7.44a.75.75 0 010 1.5H4.81l2.97 2.97a.75.75 0 010 1.06z"/></svg>
+                            Previous
+                        </span>
+                        <span class="page-nav-title">{{previous.title}}</span>
+                    </a>
+                    {{else}}
+                    <span></span>
+                    {{/if}}
+
+                    {{#if next}}
+                    <a href="{{ path_to_root }}{{next.link}}" class="page-nav-link page-nav-next">
+                        <span class="page-nav-direction">
+                            Next
+                            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M8.22 3.47a.75.75 0 011.06 0l4.25 4.25a.75.75 0 010 1.06l-4.25 4.25a.75.75 0 01-1.06-1.06L11.19 9H3.75a.75.75 0 010-1.5h7.44L8.22 4.53a.75.75 0 010-1.06z"/></svg>
+                        </span>
+                        <span class="page-nav-title">{{next.title}}</span>
+                    </a>
+                    {{/if}}
+                </nav>
+            </article>
+
+            <!-- Page Footer -->
+            <footer class="page-footer">
+                <div class="footer-inner">
+                    <p><strong>xstate-statemachine</strong> for Rust &mdash; MIT Licensed &bull; Copyright &copy; 2026 Basil T T</p>
+                    <p>Continuously verified across Linux, macOS and Windows &bull; Sub-microsecond transitions &bull; 0 heap allocations</p>
+                    <div class="footer-links">
+                        <a href="https://github.com/basiltt/xstate-statemachine-rs" target="_blank" rel="noopener">GitHub</a>
+                        <a href="https://crates.io/crates/xstate-statemachine" target="_blank" rel="noopener">crates.io</a>
+                        <a href="https://docs.rs/xstate-statemachine" target="_blank" rel="noopener">docs.rs</a>
+                        <a href="{{ path_to_root }}guide/comparisons.html">Comparisons</a>
+                        <a href="{{ path_to_root }}guide/migrating-from-python.html">Python Interop</a>
+                        <a href="{{ path_to_root }}changelog.html">Changelog</a>
+                    </div>
+                </div>
+            </footer>
+        </main>
+
+        <!-- Table of Contents (right sidebar) -->
+        <aside class="toc-sidebar" id="tocSidebar" aria-label="Table of contents">
+            <div class="toc-header">On this page</div>
+            <nav class="toc-list" id="tocList">
+                <!-- Auto-populated by JavaScript -->
+            </nav>
+        </aside>
+    </div>
+
+    <div class="sidebar-overlay" id="sidebarOverlay" aria-hidden="true"></div>
+
+    <!-- Mobile TOC Drawer -->
+    <div class="mobile-toc-overlay" id="mobileTocOverlay" aria-hidden="true"></div>
+    <div class="mobile-toc-drawer" id="mobileTocDrawer" role="dialog" aria-label="Table of contents" aria-hidden="true" inert>
+        <div class="mobile-toc-header">
+            <span>On this page</span>
+            <button class="mobile-toc-close" id="mobileTocClose" type="button" aria-label="Close table of contents">&times;</button>
+        </div>
+        <nav class="mobile-toc-list" id="mobileTocList">
+            <!-- Cloned from tocList by JavaScript -->
+        </nav>
+    </div>
+    {{/if}}
+
+    <!-- Custom Main Script (interactive features, theme, TOC, code blocks, hero machine) -->
+    <script src="{{ resource "src/theme/main.js" }}"></script>
+    <script type="module" src="{{ resource "src/theme/diagrams.js" }}"></script>
+</body>
+</html>

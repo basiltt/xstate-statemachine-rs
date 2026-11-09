@@ -1,0 +1,1437 @@
+// =============================================================================
+// XState-StateMachine Documentation — Interactive Features
+// Vanilla JS · IIFE · No globals · Graceful degradation
+// =============================================================================
+
+(function () {
+  'use strict';
+
+  // ---------------------------------------------------------------------------
+  // Utility helpers
+  // ---------------------------------------------------------------------------
+
+  /** Safely query a single element (returns null when missing). */
+  function qs(selector, root) {
+    return (root || document).querySelector(selector);
+  }
+
+  /** Safely query all elements (returns empty NodeList when missing). */
+  function qsa(selector, root) {
+    return (root || document).querySelectorAll(selector);
+  }
+
+  /** Throttle via requestAnimationFrame — returns a wrapped callback. */
+  function rafThrottle(fn) {
+    var scheduled = false;
+    return function () {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(function () {
+        fn();
+        scheduled = false;
+      });
+    };
+  }
+
+  /** Capitalize first letter of a string. */
+  function capitalize(str) {
+    return str.charAt(0).toUpperCase() + str.slice(1);
+  }
+
+  /** Pretty-print a URL slug: "my-page" -> "My Page" */
+  function slugToTitle(slug) {
+    return slug
+      .replace(/[-_]/g, ' ')
+      .replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+  }
+
+  /** Check if user prefers reduced motion. */
+  function prefersReducedMotion() {
+    return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  /** Scroll behavior respecting reduced motion preference. */
+  function getScrollBehavior() {
+    return prefersReducedMotion() ? 'auto' : 'smooth';
+  }
+
+  /** Keep anchor targets below both visible sticky navigation rows. */
+  function getHeaderOffset() {
+    var nav = qs('#topNav');
+    var toolbar = qs('.docs-toolbar');
+    return (nav ? nav.offsetHeight : 0) + (toolbar ? toolbar.offsetHeight : 0) + 20;
+  }
+
+  /** Safe localStorage wrapper (some browsers block it in private mode). */
+  var storage = {
+    get: function (key) {
+      try { return localStorage.getItem(key); } catch (_) { return null; }
+    },
+    set: function (key, val) {
+      try { localStorage.setItem(key, val); } catch (_) { /* noop */ }
+    },
+    remove: function (key) {
+      try { localStorage.removeItem(key); } catch (_) { /* noop */ }
+    }
+  };
+
+  // A single open panel owns the backdrop, scroll lock and keyboard focus.
+  // Breakpoints match the corresponding media queries in style.css.
+  var responsivePanels = [];
+
+  function closeResponsivePanels(except) {
+    responsivePanels.forEach(function (panel) {
+      if (panel !== except) panel.close(false);
+    });
+  }
+
+  function createResponsivePanel(options) {
+    var panel = options.panel;
+    var toggle = options.toggle;
+    if (!panel || !toggle) return null;
+
+    var media = window.matchMedia(options.media);
+    var originalRole = panel.getAttribute('role');
+    var isOpen = false;
+    var controller;
+
+    function syncState() {
+      var visible = isOpen || (!media.matches && options.desktopVisible !== false);
+      panel.classList.toggle('open', isOpen);
+      panel.toggleAttribute('inert', !visible);
+      if (visible && !media.matches) panel.removeAttribute('aria-hidden');
+      else panel.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      if (options.label) {
+        toggle.setAttribute('aria-label', (isOpen ? 'Close ' : 'Open ') + options.label);
+      }
+      if (options.modal && media.matches) {
+        panel.setAttribute('role', 'dialog');
+      } else if (originalRole) {
+        panel.setAttribute('role', originalRole);
+      } else {
+        panel.removeAttribute('role');
+      }
+      if (isOpen && options.modal) panel.setAttribute('aria-modal', 'true');
+      else panel.removeAttribute('aria-modal');
+      if (options.overlay) options.overlay.classList.toggle('active', isOpen);
+    }
+
+    function close(restoreFocus) {
+      if (!isOpen) return;
+      isOpen = false;
+      // Move focus before hiding its container from assistive technology.
+      if (restoreFocus !== false && media.matches && toggle.getClientRects().length) toggle.focus();
+      else if (panel.contains(document.activeElement)) document.activeElement.blur();
+      syncState();
+      document.body.classList.remove('drawer-open');
+    }
+
+    function open() {
+      if (!media.matches) return;
+      closeResponsivePanels(controller);
+      if (options.beforeOpen) options.beforeOpen();
+      isOpen = true;
+      syncState();
+      document.body.classList.add('drawer-open');
+      var first = options.closeButton || qs('a[href], button', panel);
+      // Opening visibility transitions may not be focusable in this task yet.
+      // Wait for their first visible frame, and cancel if closed or resized.
+      function focusPanel() {
+        if (!isOpen || !media.matches || !first) return;
+        if (getComputedStyle(panel).visibility === 'hidden' || !first.getClientRects().length) {
+          requestAnimationFrame(focusPanel);
+          return;
+        }
+        first.focus({ preventScroll: true });
+      }
+      requestAnimationFrame(focusPanel);
+    }
+
+    controller = { close: close, open: open };
+    responsivePanels.push(controller);
+    toggle.addEventListener('click', function () {
+      if (isOpen) close();
+      else open();
+    });
+    if (options.overlay) options.overlay.addEventListener('click', function () { close(); });
+    if (options.closeButton) options.closeButton.addEventListener('click', function () { close(); });
+    panel.addEventListener('click', function (event) {
+      if (event.target.closest('a[href]')) close(false);
+    });
+    document.addEventListener('keydown', function (event) {
+      if (!isOpen) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      } else if (event.key === 'Tab') {
+        var root = options.focusRoot || panel;
+        var focusable = Array.from(qsa('a[href], button, input, [tabindex="0"]', root))
+          .filter(function (element) { return !element.disabled && !element.closest('[inert]') && element.getClientRects().length; });
+        if (!focusable.length) return;
+        var first = focusable[0];
+        var last = focusable[focusable.length - 1];
+        if (event.shiftKey && (document.activeElement === first || !root.contains(document.activeElement))) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || !root.contains(document.activeElement))) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    });
+
+    function onBreakpointChange() {
+      close(false);
+      // A newly collapsed desktop navigation must not retain invisible focus.
+      if (media.matches && panel.contains(document.activeElement) && toggle.getClientRects().length) toggle.focus();
+      syncState();
+    }
+    if (media.addEventListener) media.addEventListener('change', onBreakpointChange);
+    else media.addListener(onBreakpointChange);
+    syncState();
+    return controller;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 1. Dark Mode Toggle
+  //    Uses the existing #themeToggle button from default.html
+  // ---------------------------------------------------------------------------
+
+  (function initDarkMode() {
+    var STORAGE_KEY = 'theme';
+    var html = document.documentElement;
+    var userChose = false; // Track if user manually toggled
+
+    /**
+     * Resolve the initial theme:
+     *   1. Stored preference
+     *   2. System preference
+     *   3. Default to "light"
+     */
+    function resolveTheme() {
+      var stored = storage.get(STORAGE_KEY);
+      if (stored === 'dark' || stored === 'light') {
+        userChose = true;
+        return stored;
+      }
+      // Dark by default.
+      return 'dark';
+    }
+
+    function applyTheme(theme, persist) {
+      html.setAttribute('data-theme', theme);
+      if (theme === 'dark') {
+        html.classList.add('dark');
+      } else {
+        html.classList.remove('dark');
+      }
+      if (persist) storage.set(STORAGE_KEY, theme);
+
+      // Update the existing toggle button's icon visibility via CSS classes
+      var toggleBtn = qs('#themeToggle');
+      if (toggleBtn) {
+        toggleBtn.setAttribute('aria-label', theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
+      }
+    }
+
+    // Apply immediately
+    applyTheme(resolveTheme());
+
+    // Wire up the existing #themeToggle button
+    var toggleBtn = qs('#themeToggle');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', function () {
+        userChose = true;
+        var current = html.getAttribute('data-theme') || 'light';
+        applyTheme(current === 'dark' ? 'light' : 'dark', true);
+      });
+    }
+
+  })();
+
+  // ---------------------------------------------------------------------------
+  // 2. Scrolled Nav Shadow
+  // ---------------------------------------------------------------------------
+
+  (function initNavShadow() {
+    var nav = document.getElementById('topNav');
+    if (!nav) return;
+
+    var onScroll = rafThrottle(function () {
+      nav.classList.toggle('scrolled', window.scrollY > 10);
+    });
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+  })();
+
+  // ---------------------------------------------------------------------------
+  // 3. Mobile Nav Toggle
+  // ---------------------------------------------------------------------------
+
+  (function initMobileNav() {
+    createResponsivePanel({
+      panel: qs('#navLinks'),
+      toggle: qs('#navToggle'),
+      overlay: qs('#navOverlay'),
+      focusRoot: qs('#topNav'),
+      label: 'navigation',
+      media: '(max-width: 1180px)'
+    });
+  })();
+
+  // ---------------------------------------------------------------------------
+  // 4. Code Tabs
+  // ---------------------------------------------------------------------------
+
+  (function initCodeTabs() {
+    document.addEventListener('click', function (e) {
+      var btn = e.target.closest('.code-tab-btn');
+      if (!btn) return;
+
+      var tabGroup = btn.closest('.code-tabs');
+      if (!tabGroup) return;
+
+      var tabName = btn.getAttribute('data-tab');
+
+      qsa('.code-tab-btn', tabGroup).forEach(function (b) {
+        b.classList.remove('active');
+        b.setAttribute('aria-selected', 'false');
+      });
+      qsa('.code-tab-panel', tabGroup).forEach(function (p) {
+        p.classList.remove('active');
+      });
+
+      btn.classList.add('active');
+      btn.setAttribute('aria-selected', 'true');
+      var panel = qs('.code-tab-panel[data-tab="' + tabName + '"]', tabGroup);
+      if (panel) panel.classList.add('active');
+    });
+  })();
+
+  // ---------------------------------------------------------------------------
+  // 5. Active Sidebar Link
+  // ---------------------------------------------------------------------------
+
+  (function initActiveSidebarLink() {
+    var currentPath = window.location.pathname;
+    var currentFile = currentPath.split('/').pop() || 'index.html';
+    qsa('.sidebar-link').forEach(function (link) {
+      var href = link.getAttribute('href');
+      if (!href) return;
+      var targetFile = href.split('/').pop().split('#')[0];
+      if (targetFile && currentFile === targetFile) {
+        link.classList.add('active');
+      }
+    });
+
+    // Clean breadcrumb title suffix
+    var bc = qs('.breadcrumb-current');
+    if (bc && bc.textContent.includes(' - xstate-statemachine')) {
+      bc.textContent = bc.textContent.replace(' - xstate-statemachine', '').trim();
+    }
+  })();
+
+  (function initReadingTime() {
+    var content = qs('.content');
+    if (!content) return;
+    var h1 = qs('h1', content);
+    if (!h1 || qs('.article-meta', content)) return;
+    var words = (content.innerText || content.textContent || '').trim().split(/\s+/).length;
+    var mins = Math.max(1, Math.round(words / 200));
+    var meta = document.createElement('div');
+    meta.className = 'article-meta';
+    meta.innerHTML = '<span class="reading-time"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 3.5a.5.5 0 0 0-1 0V8a.5.5 0 0 0 .252.434l3.5 2a.5.5 0 0 0 .496-.868L8 7.71V3.5z"/><path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm7-8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z"/></svg> ' + mins + ' min read</span>';
+    h1.after(meta);
+  })();
+
+  // ---------------------------------------------------------------------------
+  // 6. Sidebar Toggle for Mobile
+  // ---------------------------------------------------------------------------
+
+  (function initSidebarToggle() {
+    createResponsivePanel({
+      panel: qs('#sidebar'),
+      toggle: qs('#sidebarToggle'),
+      overlay: qs('#sidebarOverlay'),
+      closeButton: qs('#sidebarClose'),
+      label: 'documentation navigation',
+      modal: true,
+      media: '(max-width: 960px)'
+    });
+  })();
+
+  // ---------------------------------------------------------------------------
+  // 7. Smooth Anchor Scrolling
+  // ---------------------------------------------------------------------------
+
+  (function initSmoothScroll() {
+    document.addEventListener('click', function (e) {
+      var anchor = e.target.closest('a[href^="#"]');
+      if (!anchor) return;
+
+      var href = anchor.getAttribute('href');
+      if (!href || href === '#') return;
+
+      var target;
+      try { target = document.querySelector(href); } catch (_) { return; }
+      if (!target) return;
+
+      e.preventDefault();
+      if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ behavior: getScrollBehavior() });
+
+      // Update URL hash without jumping
+      if (history.pushState) {
+        history.pushState(null, '', href);
+      }
+    });
+  })();
+
+  // ---------------------------------------------------------------------------
+  // 7b. Auto-classify blockquote callouts
+  //     Adds CSS classes based on first bold word (Tip, Warning, Note)
+  // ---------------------------------------------------------------------------
+
+  (function initCallouts() {
+    qsa('.content blockquote').forEach(function (bq) {
+      var firstP = qs('p:first-child', bq);
+      if (!firstP) return;
+      var raw = (firstP.textContent || '').trim();
+      var lower = raw.toLowerCase();
+      if (lower.startsWith('[!tip]') || lower.startsWith('tip:')) {
+        bq.classList.add('callout-tip');
+        firstP.innerHTML = firstP.innerHTML.replace(/^\[!TIP\]\s*|^Tip:\s*/i, '<strong>Tip:</strong> ');
+      } else if (lower.startsWith('[!warning]') || lower.startsWith('warning:') || lower.startsWith('caution:')) {
+        bq.classList.add('callout-warning');
+        firstP.innerHTML = firstP.innerHTML.replace(/^\[!(?:WARNING|CAUTION)\]\s*|^(?:Warning|Caution):\s*/i, '<strong>Warning:</strong> ');
+      } else if (lower.startsWith('[!note]') || lower.startsWith('note:') || lower.startsWith('info:')) {
+        bq.classList.add('callout-note');
+        firstP.innerHTML = firstP.innerHTML.replace(/^\[!NOTE\]\s*|^(?:Note|Info):\s*/i, '<strong>Note:</strong> ');
+      } else if (lower.startsWith('[!important]') || lower.startsWith('important:')) {
+        bq.classList.add('callout-important');
+        firstP.innerHTML = firstP.innerHTML.replace(/^\[!IMPORTANT\]\s*|^Important:\s*/i, '<strong>Important:</strong> ');
+      } else {
+        var firstStrong = qs('strong', firstP);
+        if (firstStrong) {
+          var text = (firstStrong.textContent || '').toLowerCase().replace(':', '');
+          if (text === 'tip') bq.classList.add('callout-tip');
+          else if (text === 'warning' || text === 'caution') bq.classList.add('callout-warning');
+          else if (text === 'note' || text === 'info') bq.classList.add('callout-note');
+          else if (text === 'important') bq.classList.add('callout-important');
+        }
+      }
+    });
+  })();
+
+  // ---------------------------------------------------------------------------
+  // 8. Enhanced Copy Button for Code Blocks + Language Labels
+  // ---------------------------------------------------------------------------
+
+  (function initCodeBlocks() {
+    // Language display-name map
+    var LANG_NAMES = {
+      js: 'JavaScript', javascript: 'JavaScript',
+      ts: 'TypeScript', typescript: 'TypeScript',
+      py: 'Python', python: 'Python',
+      rb: 'Ruby', ruby: 'Ruby',
+      sh: 'Shell', bash: 'Bash', zsh: 'Zsh', shell: 'Shell',
+      html: 'HTML', css: 'CSS', scss: 'SCSS', sass: 'Sass',
+      json: 'JSON', yaml: 'YAML', yml: 'YAML',
+      xml: 'XML', sql: 'SQL', graphql: 'GraphQL',
+      java: 'Java', kotlin: 'Kotlin', swift: 'Swift',
+      go: 'Go', rust: 'Rust', c: 'C', cpp: 'C++',
+      cs: 'C#', csharp: 'C#', php: 'PHP',
+      dockerfile: 'Dockerfile', toml: 'TOML', ini: 'INI',
+      markdown: 'Markdown', md: 'Markdown', text: 'Text', txt: 'Text',
+      jsx: 'JSX', tsx: 'TSX', vue: 'Vue',
+      lua: 'Lua', r: 'R', perl: 'Perl', elixir: 'Elixir', erlang: 'Erlang',
+      haskell: 'Haskell', scala: 'Scala', clojure: 'Clojure', dart: 'Dart',
+      powershell: 'PowerShell', ps1: 'PowerShell'
+    };
+
+    // Target ALL pre>code blocks across the entire page:
+    //   - .content pre          (guide/doc pages)
+    //   - .code-tab-panel pre   (homepage code showcase tabs)
+    //   - .why-card pre         (homepage "Why" comparison blocks)
+    //   - any other pre>code    (catch-all for future sections)
+    qsa('pre').forEach(function (pre) {
+      // Only process <pre> blocks that contain a <code> element
+      var code = qs('code', pre);
+      if (!code) return;
+
+      // Guard against duplicate initialization
+      if (pre.querySelector('.code-copy-btn')) return;
+
+      // Wrap the <pre> in a non-scrolling frame and hang the controls off the
+      // frame. An absolutely-positioned child *inside* a scroll container
+      // extends its scrollable area, which painted a scrollbar on every block.
+      var frame = pre.parentElement;
+      if (!frame || !frame.classList.contains('code-frame')) {
+        frame = document.createElement('div');
+        frame.className = 'code-frame';
+        pre.parentNode.insertBefore(frame, pre);
+        frame.appendChild(pre);
+      }
+
+      // --- Language Label (only for .content pre, not homepage showcase) ---
+      var isContentPre = pre.closest('.content');
+      if (isContentPre) {
+        // Rouge puts language-python on an outer wrapper, not on <code>.
+        var langHost = code.closest('[class*="language-"]');
+        var langMatch = langHost && langHost.className.match(/\blanguage-([\w+-]+)/);
+        if (langMatch) {
+          var langKey = langMatch[1].toLowerCase();
+          var langName = LANG_NAMES[langKey] || capitalize(langKey);
+
+          var label = document.createElement('span');
+          label.className = 'code-label';
+          label.textContent = langName;
+          frame.appendChild(label);
+        }
+      }
+
+      // --- Copy Button ---
+      var btn = document.createElement('button');
+      btn.className = 'code-copy-btn';
+      btn.type = 'button';
+      btn.textContent = 'Copy';
+      btn.setAttribute('aria-label', 'Copy code to clipboard');
+      frame.appendChild(btn);
+
+      btn.addEventListener('click', function () {
+        var codeEl = qs('code', pre);
+        if (!codeEl) return;
+
+        var copy = navigator.clipboard && navigator.clipboard.writeText
+          ? navigator.clipboard.writeText(codeEl.textContent)
+          : Promise.reject(new Error('Clipboard unavailable'));
+        copy.then(function () {
+          btn.textContent = 'Copied!';
+          btn.classList.add('copied');
+          setTimeout(function () {
+            btn.textContent = 'Copy';
+            btn.classList.remove('copied');
+          }, 2000);
+        }).catch(function () {
+          // Fallback for older browsers / insecure contexts
+          var range = document.createRange();
+          range.selectNodeContents(codeEl);
+          var sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          try {
+            document.execCommand('copy');
+            btn.textContent = 'Copied!';
+            btn.classList.add('copied');
+            setTimeout(function () {
+              btn.textContent = 'Copy';
+              btn.classList.remove('copied');
+            }, 2000);
+          } catch (_) { /* silently fail */ }
+          sel.removeAllRanges();
+        });
+      });
+    });
+  })();
+
+  // ---------------------------------------------------------------------------
+  // 9. Heading Anchor Links
+  // ---------------------------------------------------------------------------
+
+  (function initHeadingAnchors() {
+    var content = qs('.content');
+    if (!content) return;
+
+    // Wrap tables in a scroll container. `display:block` on <table> gives
+    // horizontal scroll but breaks `width:100%` (rows shrink to content);
+    // a wrapper keeps the table a real table and still scrolls on phones.
+    qsa('table', content).forEach(function (table) {
+      if (table.parentElement.classList.contains('table-scroll')) return;
+      var wrap = document.createElement('div');
+      wrap.className = 'table-scroll';
+      table.parentNode.insertBefore(wrap, table);
+      wrap.appendChild(table);
+      var mark = function () {
+        wrap.classList.toggle('is-scrollable', wrap.scrollWidth > wrap.clientWidth + 1);
+        wrap.classList.toggle('at-end', wrap.scrollLeft + wrap.clientWidth >= wrap.scrollWidth - 1);
+      };
+      wrap.addEventListener('scroll', mark, { passive: true });
+      window.addEventListener('resize', mark);
+      mark();
+    });
+
+    // Generate IDs for headings that lack them
+    qsa('h2, h3, h4', content).forEach(function (heading) {
+      if (!heading.id) {
+        heading.id = heading.textContent
+          .toLowerCase()
+          .trim()
+          .replace(/[^a-z0-9\s-]/g, '')
+          .replace(/\s+/g, '-')
+          .replace(/-+/g, '-');
+      }
+
+      var link = document.createElement('a');
+      link.className = 'heading-anchor';
+      link.href = '#' + heading.id;
+      link.setAttribute('aria-label', 'Link to "' + heading.textContent.trim() + '"');
+      link.textContent = '#';
+
+      link.addEventListener('click', function (e) {
+        e.preventDefault();
+
+        // Compensate for sticky header offset
+        var headerHeight = getHeaderOffset();
+        var targetPos = heading.getBoundingClientRect().top + window.scrollY - headerHeight;
+        window.scrollTo({ top: targetPos, behavior: getScrollBehavior() });
+
+        // Copy link to clipboard (with user feedback)
+        var url = window.location.origin + window.location.pathname + '#' + heading.id;
+        navigator.clipboard.writeText(url).then(function () {
+          link.textContent = '✓';
+          setTimeout(function () { link.textContent = '#'; }, 1500);
+        }).catch(function () {
+          // Silently degrade
+        });
+
+        if (history.pushState) {
+          history.pushState(null, '', '#' + heading.id);
+        }
+      });
+
+      heading.appendChild(link);
+    });
+  })();
+
+  // ---------------------------------------------------------------------------
+  // Keep wide code and tables keyboard-scrollable without widening the page.
+  // ResizeObserver also catches tab switches and late-loading fonts.
+  // ---------------------------------------------------------------------------
+
+  (function initScrollRegions() {
+    var regions = Array.from(qsa('.code-frame > pre, .table-scroll, .comparison-table'));
+    function update(region) {
+      var scrollable = region.scrollWidth > region.clientWidth + 1;
+      region.classList.toggle('is-scrollable', scrollable);
+      if (scrollable) {
+        region.setAttribute('tabindex', '0');
+        region.setAttribute('role', 'region');
+        region.setAttribute('aria-label', region.tagName === 'PRE' ? 'Code example, scroll horizontally' : 'Table, scroll horizontally');
+      } else {
+        region.removeAttribute('tabindex');
+        region.removeAttribute('role');
+        region.removeAttribute('aria-label');
+      }
+    }
+    var refresh = rafThrottle(function () { regions.forEach(update); });
+    if (window.ResizeObserver) {
+      var observer = new ResizeObserver(function (entries) {
+        entries.forEach(function (entry) { update(entry.target); });
+      });
+      regions.forEach(function (region) { observer.observe(region); });
+    }
+    window.addEventListener('resize', refresh);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(refresh);
+    regions.forEach(update);
+  })();
+
+  // ---------------------------------------------------------------------------
+  // 10. Table of Contents Generator
+  //     Uses the existing #tocSidebar / #tocList from default.html
+  // ---------------------------------------------------------------------------
+
+  (function initTOC() {
+    var tocList = qs('#tocList');
+    if (!tocList) return;
+
+    var content = qs('.content');
+    if (!content) return;
+
+    var headings = qsa('h2[id], h3[id], h4[id]', content);
+    if (!headings.length) {
+      // Hide TOC sidebar if no headings found
+      var tocSidebar = qs('#tocSidebar');
+      if (tocSidebar) tocSidebar.style.display = 'none';
+      return;
+    }
+
+    // Build nested TOC structure
+    var frag = document.createDocumentFragment();
+    var currentH2Item = null;  // The current H2 <li>
+    var currentH2List = null;  // <ul> for h3s under current H2
+    var currentH3Item = null;  // The current H3 <li>
+    var currentH3List = null;  // <ul> for h4s under current H3
+
+    headings.forEach(function (heading) {
+      var li = document.createElement('li');
+      li.className = 'toc-item';
+
+      var a = document.createElement('a');
+      a.className = 'toc-link';
+      a.href = '#' + heading.id;
+      // Get only the direct text, excluding the anchor '#' we appended
+      var text = heading.textContent.replace(/#$/, '').trim();
+      a.textContent = text;
+      a.setAttribute('data-target', heading.id);
+      li.appendChild(a);
+
+      var tag = heading.tagName;
+
+      if (tag === 'H2') {
+        // Top-level item
+        currentH2Item = li;
+        currentH2List = document.createElement('ul');
+        currentH2List.className = 'toc-sublist';
+        li.appendChild(currentH2List);
+        currentH3Item = null;
+        currentH3List = null;
+        frag.appendChild(li);
+      } else if (tag === 'H3') {
+        currentH3Item = li;
+        currentH3List = document.createElement('ul');
+        currentH3List.className = 'toc-sublist';
+        li.appendChild(currentH3List);
+        if (currentH2List) {
+          currentH2List.appendChild(li);
+        } else {
+          frag.appendChild(li);
+        }
+      } else if (tag === 'H4') {
+        // Nest under current H3 if available, else H2, else top-level
+        if (currentH3List) {
+          currentH3List.appendChild(li);
+        } else if (currentH2List) {
+          currentH2List.appendChild(li);
+        } else {
+          frag.appendChild(li);
+        }
+      }
+    });
+
+    tocList.appendChild(frag);
+
+    // Highlight active section using Intersection Observer
+    var tocLinks = qsa('.toc-link', tocList);
+    var lastActiveId = null;
+
+    if ('IntersectionObserver' in window) {
+      var observer = new IntersectionObserver(function (entries) {
+        // Find the topmost intersecting entry
+        var topEntry = null;
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting) {
+            if (!topEntry || entry.boundingClientRect.top < topEntry.boundingClientRect.top) {
+              topEntry = entry;
+            }
+          }
+        });
+
+        if (topEntry) {
+          var id = topEntry.target.id;
+          if (id !== lastActiveId) {
+            lastActiveId = id;
+            tocLinks.forEach(function (l) { l.classList.remove('active'); });
+            var link = qs('.toc-link[data-target="' + id + '"]', tocList);
+            if (link) {
+              link.classList.add('active');
+              // Scroll only the TOC, never the document containing the article.
+              var sidebar = qs('#tocSidebar');
+              if (sidebar && sidebar.getClientRects().length) {
+                var panelBounds = sidebar.getBoundingClientRect();
+                var linkBounds = link.getBoundingClientRect();
+                if (linkBounds.top < panelBounds.top + 12) {
+                  sidebar.scrollTop -= panelBounds.top + 12 - linkBounds.top;
+                } else if (linkBounds.bottom > panelBounds.bottom - 12) {
+                  sidebar.scrollTop += linkBounds.bottom - panelBounds.bottom + 12;
+                }
+              }
+            }
+          }
+        }
+      }, {
+        rootMargin: '-' + getHeaderOffset() + 'px 0px -60% 0px',
+        threshold: 0
+      });
+
+      headings.forEach(function (heading) {
+        observer.observe(heading);
+      });
+    }
+  })();
+
+  // ---------------------------------------------------------------------------
+  // 11. Search Modal (Ctrl+K / Cmd+K)
+  //     Uses the existing #searchModal from default.html
+  // ---------------------------------------------------------------------------
+
+  (function initSearch() {
+    var searchModal = qs('#searchModal');
+    var searchOverlay = qs('#searchOverlay');
+    var searchInput = qs('#searchInput');
+    var searchResults = qs('#searchResults');
+    var searchBtn = qs('#searchBtn');
+    var searchClose = qs('#searchClose');
+
+    if (!searchModal || !searchInput || !searchResults) return;
+
+    var searchIndex = null;
+    var searchReady = false;
+    var activeIndex = -1; // For keyboard navigation of results
+
+    // Determine base URL for fetch (handles subpath deployments)
+    var baseUrl = '';
+    var baseTag = qs('base');
+    if (baseTag) {
+      baseUrl = baseTag.getAttribute('href') || '';
+    } else {
+      // Try to infer from canonical or known path patterns
+      var path = window.location.pathname;
+      var guideIdx = path.indexOf('/guide/');
+      var apiIdx = path.indexOf('/api/');
+      if (guideIdx > 0) {
+        baseUrl = path.substring(0, guideIdx);
+      } else if (apiIdx > 0) {
+        baseUrl = path.substring(0, apiIdx);
+      }
+    }
+
+    // Load search index
+    var script = document.currentScript;
+    var searchUrl = (script && script.getAttribute('data-search-index')) || (baseUrl || '') + '/assets/js/search-index.json';
+    fetch(searchUrl)
+      .then(function (res) {
+        if (!res.ok) throw new Error('Not found');
+        return res.json();
+      })
+      .then(function (data) {
+        searchIndex = data;
+        searchReady = true;
+      })
+      .catch(function () {
+        searchIndex = null;
+        searchReady = false;
+      });
+
+    // Set aria-modal on the existing modal
+    searchModal.setAttribute('aria-modal', 'true');
+
+    function openSearch() {
+      if (document.body.classList.contains('diagram-open')) return;
+      closeResponsivePanels();
+      searchModal.classList.add('active');
+      searchModal.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('search-open');
+      searchInput.value = '';
+      searchResults.innerHTML = '<div class="search-empty">Type to search the documentation...</div>';
+      activeIndex = -1;
+      searchInput.focus();
+    }
+
+    function closeSearch() {
+      // Return focus before making the search dialog inaccessible.
+      if (searchBtn) searchBtn.focus();
+      searchModal.classList.remove('active');
+      searchModal.setAttribute('aria-hidden', 'true');
+      document.body.classList.remove('search-open');
+    }
+
+    function performSearch(query) {
+      searchResults.innerHTML = '';
+      activeIndex = -1;
+
+      if (!searchReady || !searchIndex) {
+        var msg = document.createElement('div');
+        msg.className = 'search-empty';
+        msg.textContent = 'Search index is loading. Please try again in a moment.';
+        searchResults.appendChild(msg);
+        return;
+      }
+
+      var q = query.toLowerCase().trim();
+      if (!q) {
+        searchResults.innerHTML = '<div class="search-empty">Type to search the documentation...</div>';
+        return;
+      }
+
+      // Score and filter results for relevance ranking
+      var scored = [];
+      searchIndex.forEach(function (item) {
+        var title = (item.title || '').toLowerCase();
+        var desc = (item.description || '').toLowerCase();
+        var section = (item.section || '').toLowerCase();
+        var score = 0;
+
+        // Exact title match gets highest priority
+        if (title === q) score += 100;
+        else if (title.indexOf(q) === 0) score += 60;
+        else if (title.indexOf(q) !== -1) score += 40;
+
+        // Description match
+        if (desc.indexOf(q) !== -1) score += 20;
+
+        // Section match
+        if (section.indexOf(q) !== -1) score += 10;
+
+        // Word boundary bonus
+        var words = q.split(/\s+/);
+        words.forEach(function (word) {
+          if (word && title.indexOf(word) !== -1) score += 5;
+          if (word && desc.indexOf(word) !== -1) score += 2;
+        });
+
+        if (score > 0) {
+          scored.push({ item: item, score: score });
+        }
+      });
+
+      // Sort by score descending
+      scored.sort(function (a, b) { return b.score - a.score; });
+
+      if (!scored.length) {
+        var empty = document.createElement('div');
+        empty.className = 'search-empty';
+        empty.textContent = 'No results found for "' + query + '"';
+        searchResults.appendChild(empty);
+        return;
+      }
+
+      // Highlight helper — wraps matching substrings with <mark>
+      function highlightText(text, query) {
+        if (!text || !query) return text;
+        var lowerText = text.toLowerCase();
+        var idx = lowerText.indexOf(query.toLowerCase());
+        if (idx === -1) return text;
+        return text.substring(0, idx) +
+          '<mark class="search-highlight">' +
+          text.substring(idx, idx + query.length) +
+          '</mark>' +
+          text.substring(idx + query.length);
+      }
+
+      scored.slice(0, 15).forEach(function (entry, i) {
+        var item = entry.item;
+        var a = document.createElement('a');
+        a.className = 'search-result-item';
+        a.href = (baseUrl || '') + item.url;
+        a.setAttribute('data-index', i);
+
+        var titleEl = document.createElement('span');
+        titleEl.className = 'search-result-title';
+        titleEl.innerHTML = highlightText(item.title || 'Untitled', q);
+
+        var descEl = document.createElement('span');
+        descEl.className = 'search-result-desc';
+        descEl.innerHTML = highlightText(item.description || '', q);
+
+        var sectionEl = document.createElement('span');
+        sectionEl.className = 'search-result-section';
+        sectionEl.textContent = item.section || '';
+
+        a.appendChild(titleEl);
+        a.appendChild(descEl);
+        a.appendChild(sectionEl);
+        searchResults.appendChild(a);
+
+        a.addEventListener('click', function () {
+          closeSearch();
+        });
+      });
+    }
+
+    // Keyboard navigation within results
+    function updateActiveResult(newIndex) {
+      var items = qsa('.search-result-item', searchResults);
+      if (!items.length) return;
+
+      if (newIndex < 0) newIndex = items.length - 1;
+      if (newIndex >= items.length) newIndex = 0;
+
+      items.forEach(function (item) { item.classList.remove('active'); });
+      items[newIndex].classList.add('active');
+      items[newIndex].scrollIntoView({ block: 'nearest', behavior: 'auto' });
+      activeIndex = newIndex;
+    }
+
+    // Events
+    searchInput.addEventListener('input', function () {
+      performSearch(this.value);
+    });
+
+    searchInput.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        updateActiveResult(activeIndex + 1);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        updateActiveResult(activeIndex - 1);
+      } else if (e.key === 'Enter') {
+        var items = qsa('.search-result-item', searchResults);
+        if (activeIndex >= 0 && activeIndex < items.length) {
+          e.preventDefault();
+          items[activeIndex].click();
+        }
+      }
+    });
+
+    if (searchOverlay) {
+      searchOverlay.addEventListener('click', closeSearch);
+    }
+    if (searchClose) searchClose.addEventListener('click', closeSearch);
+
+    if (searchBtn) {
+      searchBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        openSearch();
+      });
+    }
+
+    // Focus trap within search modal
+    searchModal.addEventListener('keydown', function (e) {
+      if (e.key === 'Tab') {
+        // Keep focus within modal
+        var focusable = searchModal.querySelectorAll('input, button, a[href]');
+        if (!focusable.length) return;
+
+        var first = focusable[0];
+        var last = focusable[focusable.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    });
+
+    // Global keyboard shortcut: Ctrl+K / Cmd+K
+    document.addEventListener('keydown', function (e) {
+      if (document.body.classList.contains('diagram-open')) return;
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        if (searchModal.classList.contains('active')) {
+          closeSearch();
+        } else {
+          openSearch();
+        }
+      }
+
+      if (e.key === 'Escape' && searchModal.classList.contains('active')) {
+        closeSearch();
+      }
+    });
+
+    // Expose openSearch for the "/" shortcut
+    window.__docSearchOpen = openSearch;
+    window.__docSearchIsOpen = function () {
+      return searchModal.classList.contains('active');
+    };
+  })();
+
+  // ---------------------------------------------------------------------------
+  // 12. Scroll Progress Bar
+  //     Uses the existing #scrollProgress from default.html
+  // ---------------------------------------------------------------------------
+
+  (function initScrollProgress() {
+    var bar = qs('#scrollProgress');
+    if (!bar) return;
+
+    bar.setAttribute('role', 'progressbar');
+    bar.setAttribute('aria-label', 'Page scroll progress');
+
+    var update = rafThrottle(function () {
+      var scrollTop = window.scrollY || document.documentElement.scrollTop;
+      var docHeight = document.documentElement.scrollHeight - document.documentElement.clientHeight;
+      var progress = docHeight > 0 ? Math.min(Math.max((scrollTop / docHeight) * 100, 0), 100) : 0;
+      bar.style.width = progress + '%';
+      bar.setAttribute('aria-valuenow', Math.round(progress));
+    });
+
+    window.addEventListener('scroll', update, { passive: true });
+    update(); // initial
+  })();
+
+  // ---------------------------------------------------------------------------
+  // 13. Back to Top Button
+  // ---------------------------------------------------------------------------
+
+  (function initBackToTop() {
+    var btn = document.createElement('button');
+    btn.className = 'back-to-top';
+    btn.type = 'button';
+    btn.setAttribute('aria-label', 'Back to top');
+    btn.innerHTML =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"' +
+      ' stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<polyline points="18 15 12 9 6 15"/></svg>';
+
+    document.body.appendChild(btn);
+
+    // Documentation controls occupy one reserved row on smaller screens.
+    // Desktop and landing-page placement remains unchanged.
+    var toolbar = qs('.docs-toolbar-inner');
+    if (toolbar) {
+      var media = window.matchMedia('(max-width: 1180px)');
+      var placeButton = function () {
+        (media.matches ? toolbar : document.body).appendChild(btn);
+      };
+      if (media.addEventListener) media.addEventListener('change', placeButton);
+      else media.addListener(placeButton);
+      placeButton();
+    }
+
+    var toggle = rafThrottle(function () {
+      var visible = window.scrollY > 400;
+      btn.classList.toggle('visible', visible);
+      btn.setAttribute('tabindex', visible ? '0' : '-1');
+    });
+
+    window.addEventListener('scroll', toggle, { passive: true });
+    toggle();
+
+    btn.addEventListener('click', function () {
+      window.scrollTo({ top: 0, behavior: getScrollBehavior() });
+    });
+  })();
+
+  // ---------------------------------------------------------------------------
+  // 14. Keyboard Navigation & Shortcuts Help
+  // ---------------------------------------------------------------------------
+
+  (function initKeyboardNav() {
+    // Build the help modal
+    var helpOverlay = document.createElement('div');
+    helpOverlay.className = 'shortcuts-overlay';
+
+    var helpModal = document.createElement('div');
+    helpModal.className = 'shortcuts-modal';
+    helpModal.setAttribute('role', 'dialog');
+    helpModal.setAttribute('aria-modal', 'true');
+    helpModal.setAttribute('aria-label', 'Keyboard shortcuts');
+
+    helpModal.innerHTML =
+      '<div class="shortcuts-header">' +
+        '<h3>Keyboard Shortcuts</h3>' +
+        '<button class="shortcuts-close" type="button" aria-label="Close">&times;</button>' +
+      '</div>' +
+      '<div class="shortcuts-body">' +
+        '<dl class="shortcuts-list">' +
+          '<div class="shortcut-row"><dt><kbd>Ctrl</kbd>+<kbd>K</kbd> / <kbd>\u2318</kbd>+<kbd>K</kbd></dt><dd>Open search</dd></div>' +
+          '<div class="shortcut-row"><dt><kbd>/</kbd></dt><dd>Focus search</dd></div>' +
+          '<div class="shortcut-row"><dt><kbd>Esc</kbd></dt><dd>Close dialogs</dd></div>' +
+          '<div class="shortcut-row"><dt><kbd>?</kbd></dt><dd>Show this help</dd></div>' +
+        '</dl>' +
+      '</div>';
+
+    document.body.appendChild(helpOverlay);
+    document.body.appendChild(helpModal);
+
+    var triggerElement = null; // Track what opened the modal for focus return
+
+    function openHelp() {
+      if (document.body.classList.contains('diagram-open')) return;
+      triggerElement = document.activeElement;
+      helpOverlay.classList.add('active');
+      helpModal.classList.add('active');
+      // Focus the close button
+      var closeBtn = qs('.shortcuts-close', helpModal);
+      if (closeBtn) closeBtn.focus();
+    }
+
+    function closeHelp() {
+      helpOverlay.classList.remove('active');
+      helpModal.classList.remove('active');
+      // Return focus to trigger
+      if (triggerElement && triggerElement.focus) {
+        triggerElement.focus();
+      }
+    }
+
+    helpOverlay.addEventListener('click', closeHelp);
+
+    var closeBtn = qs('.shortcuts-close', helpModal);
+    if (closeBtn) {
+      closeBtn.addEventListener('click', closeHelp);
+    }
+
+    // Focus trap within help modal
+    helpModal.addEventListener('keydown', function (e) {
+      if (e.key === 'Tab') {
+        var focusable = helpModal.querySelectorAll('button, a[href]');
+        if (!focusable.length) return;
+
+        var first = focusable[0];
+        var last = focusable[focusable.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    });
+
+    document.addEventListener('keydown', function (e) {
+      // Ignore when typing in input/textarea/contenteditable
+      var tag = (e.target.tagName || '').toLowerCase();
+      var isEditable = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable;
+
+      if (e.key === 'Escape') {
+        if (helpModal.classList.contains('active')) {
+          closeHelp();
+          return;
+        }
+      }
+
+      if (isEditable) return;
+
+      // "?" — show keyboard shortcuts
+      if (e.key === '?') {
+        e.preventDefault();
+        if (helpModal.classList.contains('active')) {
+          closeHelp();
+        } else {
+          openHelp();
+        }
+        return;
+      }
+
+      // "/" — focus search
+      if (e.key === '/') {
+        if (window.__docSearchIsOpen && window.__docSearchIsOpen()) return;
+        e.preventDefault();
+        if (window.__docSearchOpen) window.__docSearchOpen();
+      }
+    });
+  })();
+
+  // ---------------------------------------------------------------------------
+  // 15. Mobile TOC Drawer
+  //     Clones desktop TOC links into a slide-out drawer for mobile/tablet
+  // ---------------------------------------------------------------------------
+
+  (function initMobileToc() {
+    var toggleBtn = qs('#mobileTocToggle');
+    var overlay = qs('#mobileTocOverlay');
+    var drawer = qs('#mobileTocDrawer');
+    var closeBtn = qs('#mobileTocClose');
+    var mobileList = qs('#mobileTocList');
+    var desktopList = qs('#tocList');
+
+    if (!toggleBtn || !drawer || !mobileList || !desktopList) return;
+
+    function syncTocContent() {
+      mobileList.innerHTML = desktopList.innerHTML;
+    }
+
+    createResponsivePanel({
+      panel: drawer,
+      toggle: toggleBtn,
+      overlay: overlay,
+      closeButton: closeBtn,
+      label: 'table of contents',
+      modal: true,
+      desktopVisible: false,
+      beforeOpen: syncTocContent,
+      media: '(max-width: 1180px)'
+    });
+  })();
+
+  // -----------------------------------------------------------------------
+  // 14. Hero: the live statechart
+  // -----------------------------------------------------------------------
+  // The one animated element on the site. It is a REAL machine -- an order
+  // lifecycle -- driven by a tiny interpreter in JS so the diagram is never
+  // out of step with a state it claims to be in. Each tick: pick a weighted
+  // random event valid in the current state, light the edge, ride the event
+  // name along it, then light the target. Final states rest a moment, then
+  // the machine restarts. Reduced-motion users get the initial state, still.
+  (function heroMachine() {
+    var root = qs('#heroMachine');
+    if (!root) return;
+
+    var MACHINE = {
+      initial: 'pending',
+      states: {
+        pending:   { on: { SUBMIT: 'submitted' } },
+        submitted: { on: { ACK: 'open', REJECT: 'rejected' } },
+        open:      { on: { FILL: 'filled', CANCEL: 'cancelled' } },
+        filled:    { final: true },
+        cancelled: { final: true },
+        rejected:  { final: true }
+      }
+    };
+    // Weighted so the happy path is the common one; still shows the others.
+    var WEIGHTS = { SUBMIT: 1, ACK: 0.8, REJECT: 0.2, FILL: 0.7, CANCEL: 0.3 };
+
+    var nodes = {};
+    qsa('.node', root).forEach(function (g) { nodes[g.getAttribute('data-state')] = g; });
+    var edges = {};
+    qsa('.edge', root).forEach(function (e) { edges[e.getAttribute('data-edge')] = e; });
+    var eventLabel = qs('#heroEvent', root);
+    var pulse = qs('#heroPulse', root);
+    var stateOut = qs('#heroState');
+    var lastEventOut = qs('#heroLastEvent');
+
+    var current = MACHINE.initial;
+
+    function setActive(state) {
+      Object.keys(nodes).forEach(function (s) {
+        nodes[s].classList.toggle('active', s === state);
+      });
+      if (nodes[state] && nodes[state].style.display === 'none') {
+        nodes[state].style.display = '';
+      }
+      if (stateOut) stateOut.textContent = state;
+    }
+
+    function pickEvent(state) {
+      var on = MACHINE.states[state].on || {};
+      var names = Object.keys(on);
+      var total = names.reduce(function (a, n) { return a + (WEIGHTS[n] || 1); }, 0);
+      var r = Math.random() * total;
+      for (var i = 0; i < names.length; i++) {
+        r -= WEIGHTS[names[i]] || 1;
+        if (r <= 0) return names[i];
+      }
+      return names[names.length - 1];
+    }
+
+    function midpoint(path) {
+      var len = path.getTotalLength();
+      var p = path.getPointAtLength(len / 2);
+      return { x: p.x, y: p.y - 10 };
+    }
+
+    function ridePulse(path, ms) {
+      var len = path.getTotalLength(), t0 = null;
+      pulse.classList.add('show');
+      function step(ts) {
+        if (t0 === null) t0 = ts;
+        var k = Math.min(1, (ts - t0) / ms);
+        var p = path.getPointAtLength(len * k);
+        pulse.setAttribute('cx', p.x); pulse.setAttribute('cy', p.y);
+        if (k < 1) requestAnimationFrame(step); else pulse.classList.remove('show');
+      }
+      requestAnimationFrame(step);
+    }
+
+    function fire(evt) {
+      var target = MACHINE.states[current].on[evt];
+      var edge = edges[current + '-' + target];
+      if (edge) {
+        edge.classList.add('firing');
+        var m = midpoint(edge);
+        eventLabel.setAttribute('x', m.x);
+        eventLabel.setAttribute('y', m.y);
+        eventLabel.textContent = evt;
+        eventLabel.classList.add('show');
+        if (pulse && !prefersReducedMotion()) ridePulse(edge, 600);
+      }
+      if (lastEventOut) lastEventOut.textContent = evt;
+      setTimeout(function () {
+        if (edge) edge.classList.remove('firing');
+        eventLabel.classList.remove('show');
+        nodes[current].classList.add('visited');
+        current = target;
+        setActive(current);
+      }, 700);
+    }
+
+    function reset() {
+      Object.keys(nodes).forEach(function (s) { nodes[s].classList.remove('visited'); });
+      if (nodes.rejected) nodes.rejected.style.display = 'none';
+      current = MACHINE.initial;
+      setActive(current);
+      if (lastEventOut) lastEventOut.textContent = '—';
+    }
+
+    function tick() {
+      if (document.hidden) { setTimeout(tick, 1500); return; }
+      var def = MACHINE.states[current];
+      if (def.final) {
+        setTimeout(function () { reset(); setTimeout(tick, 900); }, 2200);
+        return;
+      }
+      fire(pickEvent(current));
+      setTimeout(tick, 1900);
+    }
+
+    // Rejected is hidden by default (it would crowd the layout); reveal it
+    // only when the machine actually goes there, in the cancelled slot.
+    if (nodes.rejected && nodes.cancelled) {
+      nodes.rejected.setAttribute('transform', nodes.cancelled.getAttribute('transform'));
+    }
+    var origSetActive = setActive;
+    setActive = function (state) {
+      if (nodes.cancelled && nodes.rejected) {
+        nodes.cancelled.style.display = state === 'rejected' ? 'none' : '';
+        nodes.rejected.style.display = state === 'rejected' ? '' : 'none';
+      }
+      origSetActive(state);
+    };
+
+    reset();
+    if (!prefersReducedMotion()) setTimeout(tick, 1200);
+  })();
+
+  // -----------------------------------------------------------------------
+  // 15. Hero: install-command copy button
+  // -----------------------------------------------------------------------
+  (function installCopy() {
+    qsa('[data-copy]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var text = btn.getAttribute('data-copy');
+        if (!navigator.clipboard) return;
+        navigator.clipboard.writeText(text).then(function () {
+          btn.classList.add('copied');
+          setTimeout(function () { btn.classList.remove('copied'); }, 1400);
+        });
+      });
+    });
+  })();
+
+  // -----------------------------------------------------------------------
+  // 16. Scroll reveal (.reveal -> .in as it enters the viewport)
+  // -----------------------------------------------------------------------
+  (function scrollReveal() {
+    var els = qsa('.reveal');
+    if (!els.length) return;
+    if (prefersReducedMotion() || !('IntersectionObserver' in window)) {
+      els.forEach(function (el) { el.classList.add('in'); });
+      return;
+    }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+      });
+    }, { rootMargin: '0px 0px -10% 0px', threshold: 0.08 });
+    els.forEach(function (el) { io.observe(el); });
+  })();
+
+  // -----------------------------------------------------------------------
+  // 17. Cursor-tracked glow on bento cards
+  // -----------------------------------------------------------------------
+  (function cardGlow() {
+    if (prefersReducedMotion()) return;
+    qsa('.card').forEach(function (card) {
+      var glow = qs('.card-glow', card);
+      if (!glow) return;
+      card.addEventListener('pointermove', function (e) {
+        var r = card.getBoundingClientRect();
+        glow.style.setProperty('--mx', ((e.clientX - r.left) / r.width * 100) + '%');
+        glow.style.setProperty('--my', ((e.clientY - r.top) / r.height * 100) + '%');
+      });
+      card.addEventListener('pointerleave', function () {
+        glow.style.removeProperty('--mx'); glow.style.removeProperty('--my');
+      });
+    });
+  })();
+
+})();

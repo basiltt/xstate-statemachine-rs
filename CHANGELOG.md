@@ -22,6 +22,11 @@ raised only in a minor release.
   Stately Studio inspection, and LLM agent tool-calling loops with budget guardrails and human approval.
 - Top-level `README.md` redesigned with hero SVG visuals, mobile responsive presentation, complete competitor
   matrix, verified nanosecond benchmarks (S1–S8), and visual Stately statechart diagrams.
+- Redesigned GitHub Pages documentation site with premium dark OLED (`#05050A`) Stately design system:
+  - Sticky glass top navigation with logo, version badge, navigation links, `Ctrl+K` search modal, and dark/light theme toggle.
+  - High-impact landing page with ambient glowing aurora gradients, release pill, live animated SVG state machine frame (`order.machine.json`), 12-card bento grid, 4-way code showcase tabs, and Criterion benchmark table.
+  - 3-column documentation layout with grouped category navigation, compile-time glowing active pill indicators (`●`), dynamic reading time badges, styled code blocks with language pills and copy buttons, callout blocks, and client-side Mermaid statechart rendering.
+  - Dynamic "On this page" TOC right sidebar auto-populated from section headings with scroll spy.
 - Configured `.cargo/audit.toml` to align cargo-audit advisory ignores with `deny.toml`.
 - Updated `LICENSE` copyright notice to 2026.
 
