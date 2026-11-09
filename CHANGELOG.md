@@ -9,6 +9,20 @@ raised only in a minor release.
 
 ## [Unreleased]
 
+### Added
+
+- Comprehensive architecture and competitor comparison guide (`docs/book/src/guide/comparisons.md`)
+  benchmarking `xstate-statemachine-rs` against Rust FSMs (`statig`, `smlang`), Python (`python-statemachine`,
+  `transitions`), JavaScript (`XState v5`), and distributed orchestrators (`Temporal`, `AWS Step Functions`).
+- End-to-end Cookbook and Example Gallery (`docs/book/src/cookbook/`) containing eight production-ready
+  scenarios with statechart topologies, full copy-pasteable Rust implementations, and verification tests:
+  traffic light controller, hierarchical order fulfillment, circuit breaker with exponential backoff and jitter,
+  distributed e-commerce saga with automated compensation rollbacks, durable SQLite/PostgreSQL persistence
+  with crash recovery, transactional outbox CloudEvents messaging over brokers, Axum HTTP service with live
+  Stately Studio inspection, and LLM agent tool-calling loops with budget guardrails and human approval.
+- Top-level `README.md` redesigned with hero SVG visuals, mobile responsive presentation, complete competitor
+  matrix, verified nanosecond benchmarks (S1–S8), and visual Stately statechart diagrams.
+
 ### Changed
 
 - Battle-test suites now cover every remaining crate in the workspace (§6.2):

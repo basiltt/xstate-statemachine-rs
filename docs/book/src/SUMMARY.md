@@ -6,6 +6,7 @@
 
 - [Getting started](guide/getting-started.md)
 - [From the Stately editor](guide/stately-editor.md)
+- [Architecture & Competitor Comparisons](guide/comparisons.md)
 
 # Concepts
 
@@ -31,6 +32,18 @@
 - [Typed DSL (macros)](guide/macros.md)
 - [Python bindings](guide/python-bindings.md)
 - [CLI reference](guide/cli.md)
+
+# Cookbook & Examples
+
+- [Overview](cookbook/index.md)
+- [Traffic Light Controller](cookbook/traffic-light.md)
+- [Hierarchical Order Fulfillment](cookbook/order-fulfillment.md)
+- [Circuit Breaker & Backoff](cookbook/circuit-breaker-retry.md)
+- [Distributed E-Commerce Saga](cookbook/distributed-saga.md)
+- [Durable Persistence & Deadlines](cookbook/durable-persistence.md)
+- [Event-Driven Architecture & Outbox](cookbook/eda-messaging.md)
+- [Axum HTTP & Live Inspector](cookbook/axum-http-service.md)
+- [LLM Agent Tool Loop](cookbook/llm-agent-tool-loop.md)
 
 # Operations
 

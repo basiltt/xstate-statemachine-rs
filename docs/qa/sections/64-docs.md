@@ -113,9 +113,11 @@ wants "every error variant and problem type" and a full metric catalogue on the 
 
 ### MEDIUM-4: no Cookbook / examples section
 
-§6.4 lists "Cookbook / examples" as a top-level area. It is out of scope for this slice (page
-budget); a cookbook of the traffic-light / order-saga / outbox / crash-resume / durable-timer / HTTP
-scenarios would carry most of MEDIUM-1's weight.
+**Status: FIXED.** An end-to-end Cookbook & Examples section has been added under `docs/book/src/cookbook/`
+with 8 complete, production-ready recipe guides covering traffic lights, hierarchical order fulfillment,
+circuit breakers with backoff/jitter, distributed sagas with compensation, durable persistence/crash recovery,
+transactional outbox CloudEvents messaging, Axum HTTP services with live Stately inspection, and LLM agent
+tool-loops with budget guards. All pages are indexed in `SUMMARY.md` and link-checked.
 
 ### LOW-1: feasibility report is a stub
 

@@ -17,6 +17,8 @@ observability, the Stately Inspector protocol, HTTP integration, LLM-agent chart
 ## Find your way
 
 - [Getting started](guide/getting-started.md) — install, run a chart, the Stately editor export.
+- [Competitor comparisons](guide/comparisons.md) — honest, source-noted comparison vs Rust FSMs, Python, XState, and Temporal.
+- [Cookbook & Examples](cookbook/index.md) — real-world recipe patterns: traffic light, e-commerce saga, durable persistence, Axum web, LLM agents.
 - [Concepts](concepts.md) — the semantics the engine implements, in short pages.
 - [Guides](guide/tokio.md) — one per feature: persistence, EDA, patterns, inspector, axum, agents,
   macros, Python bindings, CLI.
