@@ -25,6 +25,7 @@ impl Lcg {
         self.0
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn byte(&mut self) -> u8 {
         (self.next() >> 32) as u8
     }
@@ -47,14 +48,13 @@ fn exchange(addr: std::net::SocketAddr, bytes: &[u8]) -> Vec<u8> {
     let mut chunk = [0_u8; 1024];
     loop {
         match stream.read(&mut chunk) {
-            Ok(0) => break,
+            Ok(0) | Err(_) => break,
             Ok(n) => {
                 out.extend_from_slice(&chunk[..n]);
                 if out.len() > 64 * 1024 {
                     break;
                 }
             }
-            Err(_) => break,
         }
     }
     out

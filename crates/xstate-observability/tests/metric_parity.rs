@@ -79,7 +79,9 @@ const CHART: &str = r#"{"id":"door","initial":"closed","states":{
     "closed":{"on":{"OPEN":"open"}},
     "open":{"on":{"CLOSE":"closed"}}}}"#;
 
-fn samples(snapshotter: &Snapshotter) -> Vec<(String, Vec<(String, String)>, DebugValue)> {
+type MetricSample = (String, Vec<(String, String)>, DebugValue);
+
+fn samples(snapshotter: &Snapshotter) -> Vec<MetricSample> {
     snapshotter
         .snapshot()
         .into_vec()

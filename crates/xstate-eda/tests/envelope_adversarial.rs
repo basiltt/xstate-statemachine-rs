@@ -13,6 +13,7 @@ fn base() -> Value {
     json!({"specversion": "1.0", "id": "0190a0b4-1c2d-7e3f-8a4b-5c6d7e8f9a0b", "type": "t", "source": "s"})
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn parse(raw: Value) -> Result<Envelope, EnvelopeError> {
     Envelope::from_dict(&raw)
 }

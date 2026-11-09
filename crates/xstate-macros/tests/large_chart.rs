@@ -1,6 +1,9 @@
 //! Large charts: a wide chart (many siblings) and a deep chart (many nesting levels) must
 //! expand without hitting the macro or compiler recursion limits.
 
+#![allow(clippy::too_many_lines, clippy::large_stack_arrays)]
+
+use std::fmt::Write as _;
 use xstate_core::{MachineLogic, SyncInterpreter};
 use xstate_macros::statechart;
 
@@ -235,7 +238,7 @@ fn a_deep_chart_of_60_levels_expands_and_runs() {
     .unwrap();
     let mut cur = String::from("deep.l0");
     for i in 1..60 {
-        cur.push_str(&format!(".l{i}"));
+        let _ = write!(cur, ".l{i}");
     }
     assert!(machine.state_by_id(&cur).is_some(), "missing {cur}");
     let mut interp = SyncInterpreter::new(machine, MachineLogic::dynamic());

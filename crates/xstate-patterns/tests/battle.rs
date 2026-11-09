@@ -191,14 +191,14 @@ fn breaker_open_rejects_a_hundred_threads_without_running_the_target() {
         }
     });
     assert_eq!(calls.load(Ordering::SeqCst), 0, "the target must never run while open");
-    assert_eq!(rejected.load(Ordering::SeqCst), THREADS as usize);
+    assert_eq!(rejected.load(Ordering::SeqCst), THREADS);
 }
 
 #[test]
 fn breaker_half_open_admits_exactly_probe_count_under_a_hundred_threads() {
     const THREADS: usize = 100;
     const PROBES: usize = 3;
-    let (b, clock) = breaker(1, PROBES as u32);
+    let (b, clock) = breaker(1, u32::try_from(PROBES).unwrap());
     open_it(&b, 1);
     clock.increment(1_000.0);
     assert_eq!(b.state(), CircuitState::HalfOpen);
@@ -400,11 +400,11 @@ fn two_machines_ping_ponging_trip_the_loop_guard() {
     let store: Arc<dyn StateStore> = Arc::new(MemoryStore::new());
     let broker = Arc::new(SyncFakeBrokerAdapter::new());
     let handler = PublishingHandler { store, broker: Arc::clone(&broker) };
-    let routes = std::collections::HashMap::from([
+    let routing_table = std::collections::HashMap::from([
         ("chat.ping".to_owned(), xstate_patterns::Route::as_event(alpha(), "PING")),
         ("ping.pong".to_owned(), xstate_patterns::Route::as_event(beta(), "PONG")),
     ]);
-    let router = xstate_patterns::ChoreographyRouter::new(routes, handler);
+    let router = xstate_patterns::ChoreographyRouter::new(routing_table, handler);
 
     // One seed envelope starts an infinite alpha -> beta -> alpha conversation.
     broker

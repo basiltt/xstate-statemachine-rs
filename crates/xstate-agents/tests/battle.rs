@@ -163,8 +163,8 @@ fn deeply_nested_and_schema_violating_tool_arguments_are_denied_not_panicked() {
     );
     assert_eq!(res.error["kind"], "tool_denied");
     let msg = res.error["message"].as_str().unwrap_or_default();
-    assert!(msg.contains("query") && msg.contains("x"), "field names were not reported: {msg}");
-    assert!(!msg.contains("7") || msg.contains("valid integer"), "values may leak: {msg}");
+    assert!(msg.contains("query") && msg.contains('x'), "field names were not reported: {msg}");
+    assert!(!msg.contains('7') || msg.contains("valid integer"), "values may leak: {msg}");
 
     // Deeply nested value against a self-referential schema -> "nested too deeply".
     let nest = ToolSpec::new("nest", |_| Ok(Value::Null))
