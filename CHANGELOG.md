@@ -22,6 +22,7 @@ raised only in a minor release.
   Stately Studio inspection, and LLM agent tool-calling loops with budget guardrails and human approval.
 - Top-level `README.md` redesigned with hero SVG visuals, mobile responsive presentation, complete competitor
   matrix, verified nanosecond benchmarks (S1–S8), and visual Stately statechart diagrams.
+- Configured `.cargo/audit.toml` to align cargo-audit advisory ignores with `deny.toml`.
 - Updated `LICENSE` copyright notice to 2026.
 
 ### Changed

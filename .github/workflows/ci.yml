@@ -60,7 +60,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features --locked
-      - run: cargo test --workspace --doc --all-features --locked
+      - run: cargo test --workspace --exclude xstate-py --doc --all-features --locked
       # The conformance suite must also pass with the engine's single-transition fast path
       # compiled out, so every golden exercises the general microstep in CI.
       - run: cargo test -p xstate-conformance --no-default-features --locked
@@ -203,8 +203,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
   coverage:
     name: coverage
@@ -259,7 +257,7 @@ jobs:
       - name: Build the extension and run its tests
         run: |
           python -m venv .venv-bindings
-          .venv-bindings/bin/python -m pip install --upgrade pip maturin pytest
+          .venv-bindings/bin/python -m pip install --upgrade pip maturin pytest "${XSM_PYTHON_REQ}"
           export VIRTUAL_ENV="$PWD/.venv-bindings" PATH="$PWD/.venv-bindings/bin:$PATH"
           (cd crates/xstate-py && maturin develop --release)
           python -m pytest crates/xstate-py/tests

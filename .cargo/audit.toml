@@ -1,0 +1,12 @@
+# Cargo audit configuration
+# Matches exemptions in deny.toml for dependencies with no upstream fix reachable under MSRV 1.88.
+
+[advisories]
+ignore = [
+    # pin-utils unmaintained (via aws-sdk-sqs -> aws-smithy-http)
+    "RUSTSEC-2026-0441",
+    # rustls-pemfile unmaintained (via lapin 3 -> amq-protocol-tcp)
+    "RUSTSEC-2025-0134",
+    # CVE-2026-119375 via rusqlite 0.33 -> libsqlite3-sys 0.31 (fix requires Rust 1.89)
+    "RUSTSEC-2026-0459",
+]
