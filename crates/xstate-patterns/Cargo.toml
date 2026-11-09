@@ -23,6 +23,8 @@ rand = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+xstate-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util"] }
 
 [lints]
 workspace = true
