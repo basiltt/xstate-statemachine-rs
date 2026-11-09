@@ -269,9 +269,17 @@ impl<H: EnvelopeHandler> InboundDispatcher<H> {
             ErrorEntry::new("dispatcher", reason, ty, message),
             machine,
         );
-        self.dead_letters
-            .put(record)
-            .map_err(|e| Flow::Requeue(format!("dead-lettering failed: {e}")))?;
+        let put_res = catch_unwind(AssertUnwindSafe(|| self.dead_letters.put(record)));
+        match put_res {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(Flow::Requeue(format!("dead-lettering failed: {e}"))),
+            Err(p) => {
+                return Err(Flow::Requeue(format!(
+                    "dead-letter sink panicked: {}",
+                    panic_message(p.as_ref())
+                )));
+            }
+        }
         self.forget(env);
         Ok(Outcome::DeadLettered(reason))
     }
