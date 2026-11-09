@@ -8,6 +8,7 @@ yanked = "deny"
 ignore = [
     { id = "RUSTSEC-2026-0441", reason = "informational: `pin-utils` is unmaintained. Reached only through aws-sdk-sqs / aws-config -> aws-smithy-http (feature `sqs` of xstate-eda); there is no vulnerability and no release of the AWS SDK without it yet. Revisit when aws-smithy-http drops pin-utils." },
     { id = "RUSTSEC-2025-0134", reason = "informational: `rustls-pemfile` is unmaintained. Reached only through lapin 3 -> amq-protocol-tcp -> tcp-stream (feature `rabbitmq` of xstate-eda); there is no vulnerability, and the fix is lapin 4, whose API is not source compatible with the RabbitMQ adapter. Revisit when the adapter moves to lapin 4." },
+    { id = "RUSTSEC-2026-0459", reason = "CVE-2026-119375 via rusqlite 0.33 -> libsqlite3-sys 0.31. Fix requires rusqlite 0.41 which requires Rust 1.89, breaking workspace MSRV 1.88. Attack vector requires opening a hostile attacker-supplied crafted pair of db and -wal files." },
 ]
 
 [licenses]
@@ -21,7 +22,6 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
-    "MPL-2.0",
     "CC0-1.0",
     # `webpki-roots` (Mozilla's CA bundle, pulled in by sqlx and async-nats): the data licence.
     "CDLA-Permissive-2.0",

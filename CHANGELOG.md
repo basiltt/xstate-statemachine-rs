@@ -11,6 +11,17 @@ raised only in a minor release.
 
 ### Changed
 
+- Battle-test suites now cover every remaining crate in the workspace (§6.2):
+  - `xstate-eda`: CloudEvents 1.0 attribute validation and depth/size bounds, dispatcher failure
+    modes, transactional outbox leases under concurrent relays, and 4 live broker adapters
+    (Redis Streams, NATS JetStream, RabbitMQ, AWS SQS on ElasticMQ) with bidirectional Python
+    interop (230 tests pass).
+  - `xstate-patterns` and `xstate-agents`: retry jitter distributions over 10,000 samples, 100-thread
+    circuit breaker contention, 20-step sagas with tokio step timeouts, prompt injection immunity,
+    secrets masking in context and trace, and tool output truncation (153 tests pass).
+  - `xstate-macros`, `xstate-inspect`, and `xstate-observability`: 27 UI compile-fail diagnostic
+    tests, clippy pedantic clean macro output, deep/wide charts, deterministic SSE fuzzing, 128-connection
+    cap enforcement, and Prometheus 0.12.1 metric/label parity (131 tests pass).
 - Performance baselines were re-measured on the same quiet machine with the Python 0.12.1
   oracle: Python S1–S7 are 18.69 / 11.42 / 36.06 / 47.66 / 115 / 45.2 / 190 µs per operation and
   the Rust p50 is 106 / 161 / 215 / 283 / 4.11 µs / 300 ns / 3.39 µs. S1, S3, S4 and S6 are past
@@ -83,6 +94,14 @@ raised only in a minor release.
 
 ### Fixed
 
+- `xstate-eda`: a panicking `DeadLetterSink::put` inside `InboundDispatcher::handle` is now
+  caught and mapped to `Flow::Requeue` infrastructure failure rather than escaping the dispatcher
+  and crashing the caller task.
+- `xstate-persistence`: PostgreSQL test schema creation in `battle_postgres` uses an atomic
+  counter to prevent schema name collision across concurrent test threads.
+- Repository hygiene: updated `async-executor` from yanked `v1.14.0` to `v1.14.1`, ignored
+  `libsqlite3-sys` advisory `RUSTSEC-2026-0459` in `deny.toml` (requires Rust 1.89 via rusqlite
+  0.41, exceeding MSRV 1.88; local crafted database attack vector), and dropped unused `MPL-2.0` allowance.
 - `xstate-tokio`: a panic in an action, guard, timer effect or service no longer kills the
   actor task silently. The panic is contained: the actor enters `Status::Error` with the panic
   message and tears its children/services down, and a panicking async service reaches the parent
