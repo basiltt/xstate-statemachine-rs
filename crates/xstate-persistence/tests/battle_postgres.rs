@@ -1,6 +1,6 @@
 #![cfg(feature = "postgres")]
 // The skip note is printed on purpose, mirroring `postgres.rs`.
-#![allow(clippy::print_stderr, clippy::unwrap_used, clippy::expect_used)]
+#![allow(missing_docs, clippy::print_stderr, clippy::unwrap_used, clippy::expect_used)]
 //! Adversarial PostgreSQL additions for the §6.2 matrix. `postgres.rs` covers the store, locks,
 //! inbox and log; this file adds the planted-invalid-key `list_keys` limit edge (a regression the
 //! SQLite store shares) and a ~50-writer concurrency check.
@@ -58,6 +58,8 @@ struct Ns {
     raw: Raw,
 }
 
+static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl Ns {
     fn new() -> Option<Self> {
         let url = postgres_url();
@@ -69,7 +71,8 @@ impl Ns {
             return None;
         };
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-        let schema = format!("xsmbattle_{}_{nanos}", std::process::id());
+        let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let schema = format!("xsmbattle_{}_{}_{count}", std::process::id(), nanos);
         raw.exec(&format!("CREATE SCHEMA {schema}"));
         Some(Self { url, schema, raw })
     }
