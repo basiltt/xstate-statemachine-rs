@@ -1,0 +1,5 @@
+error: `initial` must name a child of `door` (closed, opened)
+ --> tests/ui/initial_not_child.rs:6:18
+  |
+6 |         initial: shut,
+  |                  ^^^^

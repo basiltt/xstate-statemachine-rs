@@ -1,0 +1,5 @@
+error: event type must not be empty
+ --> tests/ui/empty_event_rename.rs:5:22
+  |
+5 |     #[event(rename = "")]
+  |                      ^^

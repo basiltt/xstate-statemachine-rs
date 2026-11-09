@@ -1,0 +1,5 @@
+error: `context` is only valid at the chart root
+ --> tests/ui/root_key_in_state.rs:8:22
+  |
+8 |             closed { context: { "n": 0 } }
+  |                      ^^^^^^^

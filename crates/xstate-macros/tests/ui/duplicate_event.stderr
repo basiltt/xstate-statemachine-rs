@@ -1,0 +1,5 @@
+error: duplicate event `OPEN`
+ --> tests/ui/duplicate_event.rs:8:43
+  |
+8 |             closed { on { OPEN => opened, OPEN => opened } }
+  |                                           ^^^^

@@ -1,0 +1,5 @@
+error: unknown target `.a2`: `m.a.a1` has no descendant `a2`
+  --> tests/ui/strict_targets.rs:10:43
+   |
+10 |                 states: { a1 { on { GO => .a2 } }, a2 {} }
+   |                                           ^^^

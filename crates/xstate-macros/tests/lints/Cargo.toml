@@ -1,0 +1,12 @@
+# Compiled by `tests/lints.rs` (not a workspace member): the generated code must be warning-free
+# under `#![deny(warnings)]` and `clippy::pedantic` in a user crate.
+[package]
+name = "lints"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+xstate-statemachine = { path = "../../../xstate-statemachine", features = ["macros"] }
+
+[workspace]

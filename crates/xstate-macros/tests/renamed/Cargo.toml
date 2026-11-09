@@ -1,0 +1,12 @@
+# Compiled by `tests/renamed.rs` (not a workspace member): the generated code must resolve the
+# `xstate-statemachine` facade even when the dependency is renamed in Cargo.toml.
+[package]
+name = "renamed"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+myfacade = { package = "xstate-statemachine", path = "../../../xstate-statemachine", features = ["macros"] }
+
+[workspace]

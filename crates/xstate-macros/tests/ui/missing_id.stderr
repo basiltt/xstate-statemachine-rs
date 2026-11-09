@@ -1,0 +1,11 @@
+error: statechart! needs a machine `id: "..."`
+ --> tests/ui/missing_id.rs:4:13
+  |
+4 |       let _ = statechart! {
+  |  _____________^
+5 | |         initial: closed,
+6 | |         states: { closed { on { OPEN => opened } }, opened {} }
+7 | |     };
+  | |_____^
+  |
+  = note: this error originates in the macro `statechart` (in Nightly builds, run with -Z macro-backtrace for more info)

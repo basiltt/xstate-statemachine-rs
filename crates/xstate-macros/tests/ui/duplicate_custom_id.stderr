@@ -1,0 +1,5 @@
+error: duplicate state id `shared`
+ --> tests/ui/duplicate_custom_id.rs:9:26
+  |
+9 |             opened { id: "shared", on { CLOSE => closed } }
+  |                          ^^^^^^^^

@@ -1,0 +1,5 @@
+error: expected a JSON parameter value; drop the `()` for no parameters
+ --> tests/ui/empty_params.rs:8:56
+  |
+8 |             closed { on { OPEN => opened [actions: [log()]] } }
+  |                                                        ^^

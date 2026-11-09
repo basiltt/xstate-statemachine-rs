@@ -1,0 +1,5 @@
+error: unknown invoke key `bogus`; expected one of: src, id, input, systemId, onDone, onError
+ --> tests/ui/unknown_invoke_key.rs:8:43
+  |
+8 |             closed { invoke { src: fetch, bogus: 1 } }
+  |                                           ^^^^^

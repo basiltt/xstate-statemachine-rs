@@ -1,0 +1,5 @@
+error: state id `door.closed` is named by more than one variant
+ --> tests/ui/typed_state_duplicate_id.rs:9:5
+  |
+9 |     Shut,
+  |     ^^^^

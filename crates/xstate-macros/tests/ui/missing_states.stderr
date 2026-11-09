@@ -1,0 +1,5 @@
+error: statechart! needs a `states: { ... }` block
+ --> tests/ui/missing_states.rs:5:13
+  |
+5 |         id: "door",
+  |             ^^^^^^

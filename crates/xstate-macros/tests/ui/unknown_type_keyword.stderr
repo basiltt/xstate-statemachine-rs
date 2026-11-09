@@ -1,0 +1,5 @@
+error: expected `atomic`, `compound`, `final`, `parallel` or `history(shallow | deep)`
+ --> tests/ui/unknown_type_keyword.rs:8:28
+  |
+8 |             closed { type: bogus }
+  |                            ^^^^^

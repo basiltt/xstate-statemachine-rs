@@ -1,0 +1,5 @@
+error: `#door` targets the machine root, which is never legal
+ --> tests/ui/target_machine_root.rs:8:35
+  |
+8 |             closed { on { OPEN => #door } }
+  |                                   ^^^^^

@@ -1,0 +1,5 @@
+error: target path must not be empty
+ --> tests/ui/empty_target.rs:8:35
+  |
+8 |             closed { on { OPEN => "#" } }
+  |                                   ^^^

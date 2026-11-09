@@ -1,0 +1,5 @@
+error: TypedEvent cannot be derived for generic enums
+ --> tests/ui/generic_enum.rs:4:11
+  |
+4 | enum Event<T> {
+  |           ^^^

@@ -1,0 +1,5 @@
+error: duplicate delay `1000`
+ --> tests/ui/duplicate_delay.rs:8:46
+  |
+8 |             closed { after { 1000 => opened, 1000 => opened } }
+  |                                              ^^^^

@@ -1,0 +1,5 @@
+error: TypedState variants must be unit variants naming a state
+ --> tests/ui/typed_state_fields.rs:6:9
+  |
+6 |     Open(u8),
+  |         ^^^^
