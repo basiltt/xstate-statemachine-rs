@@ -46,7 +46,7 @@ if ($DryRun) {
 
 function Test-CratePublished($crate, $ver) {
     try {
-        $resp = Invoke-WebRequest -Uri "https://crates.io/api/v1/crates/$crate/$ver" -Headers @{ "User-Agent" = "xstate-statemachine-release" } -Method Head -TimeoutSec 10 -ErrorAction SilentlyContinue
+        $resp = Invoke-WebRequest -Uri "https://crates.io/api/v1/crates/$crate/$ver" -Headers @{ "User-Agent" = "xstate-statemachine-release" } -Method Head -TimeoutSec 10 -UseBasicParsing -ErrorAction SilentlyContinue
         return ($resp.StatusCode -eq 200)
     } catch {
         return $false
