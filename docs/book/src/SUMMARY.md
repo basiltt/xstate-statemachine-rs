@@ -22,6 +22,7 @@
 
 - [Sync interpreter](guide/sync-interpreter.md)
 - [Tokio actors](guide/tokio.md)
+- [Plugins & Observability](guide/plugins.md)
 - [Persistence](guide/persistence.md)
 - [Event-driven architecture](guide/eda.md)
 - [Resilience patterns](guide/patterns.md)
@@ -32,6 +33,22 @@
 - [Typed DSL (macros)](guide/macros.md)
 - [Python bindings](guide/python-bindings.md)
 - [CLI reference](guide/cli.md)
+
+# Ecosystem Integrations
+
+- [Overview & Pick Your Path](integrations/index.md)
+- [Axum Web Integration](integrations/axum.md)
+- [Actix-web Integration](integrations/actix.md)
+- [Tower Middleware & Services](integrations/tower.md)
+- [SQLx Persistence (Postgres & SQLite)](integrations/sqlx.md)
+- [SeaORM Async ORM](integrations/sea-orm.md)
+- [Diesel Compile-Time ORM](integrations/diesel.md)
+- [Redis & Redis Streams](integrations/redis.md)
+- [Tracing & OpenTelemetry](integrations/tracing.md)
+- [Prometheus & Metrics](integrations/prometheus.md)
+- [Schema Validation (Validator & Garde)](integrations/validation.md)
+- [Testing & Proptest Harness](integrations/testing.md)
+- [Background Workers & Task Queues](integrations/workers.md)
 
 # Cookbook & Examples
 
@@ -44,6 +61,10 @@
 - [Event-Driven Architecture & Outbox](cookbook/eda-messaging.md)
 - [Axum HTTP & Live Inspector](cookbook/axum-http-service.md)
 - [LLM Agent Tool Loop](cookbook/llm-agent-tool-loop.md)
+- [WebSocket Reconnection & Heartbeat](cookbook/websocket-reconnect.md)
+- [Stripe Webhook Payment Gateway](cookbook/stripe-webhooks.md)
+- [Form Wizard & Multi-Step Onboarding](cookbook/form-wizard.md)
+- [Feature Flag Progressive Rollout](cookbook/feature-flag-rollout.md)
 
 # Operations
 

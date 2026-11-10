@@ -12,6 +12,12 @@ use crate::error::Error;
 use crate::event::Event;
 use crate::machine::Machine;
 
+/// The Observer pattern interface for statechart lifecycle plugins.
+///
+/// In `xstate-statemachine`, plugins implement [`Observer`] to intercept and monitor
+/// execution without modifying transition behavior or performing heap allocations.
+pub type Plugin<C> = dyn Observer<C>;
+
 /// Lifecycle hooks. Every method has a no-op default.
 #[allow(unused_variables)]
 pub trait Observer<C: Context>: Send + Sync {
@@ -49,6 +55,9 @@ impl<C: Context> fmt::Debug for dyn Observer<C> {
 /// Python `LoggingInspector`. Context and payloads are not logged.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TracingObserver;
+
+/// Alias for [`TracingObserver`].
+pub use TracingObserver as TracingPlugin;
 
 impl<C: Context> Observer<C> for TracingObserver {
     fn on_start(&self, machine: &Machine, state: &ActiveState<C>, _report: &StepReport) {

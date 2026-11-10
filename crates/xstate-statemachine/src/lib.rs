@@ -173,29 +173,56 @@ pub use xstate_agents as agents;
 #[cfg(feature = "testing")]
 pub use xstate_testing as testing;
 
+/// Plugins and observer lifecycle extensions.
+pub mod plugins {
+    pub use xstate_core::{Observer, Plugin, TracingObserver, TracingPlugin};
+
+    #[cfg(feature = "inspect")]
+    pub use xstate_inspect::InspectorObserver as InspectorPlugin;
+
+    #[cfg(feature = "observability")]
+    pub use xstate_observability::MetricsObserver as MetricsPlugin;
+
+    #[cfg(feature = "persistence")]
+    pub use xstate_persistence::TransitionLogObserver as AuditLogPlugin;
+
+    #[cfg(feature = "agents")]
+    pub use xstate_agents::BudgetPlugin;
+}
+
 /// The everyday items. `use xstate_statemachine::prelude::*;` is enough for most programs.
 ///
-/// Always available: `Machine`, `MachineLogic`, `SyncInterpreter`, `Event`, `Snapshot` and the
-/// `TypedEvent` / `TypedState` traits. Features add `Interpreter` and `spawn` (`tokio`),
-/// `persisted` and `StateStore` (`persistence`), `InspectorObserver` (`inspect`),
-/// `MetricsObserver` (`observability`) and the `TypedEvent` / `TypedState` derives and the
-/// `statechart!` macro (`macros`).
+/// Always available: `Machine`, `MachineLogic`, `SyncInterpreter`, `Event`, `Snapshot`, `Observer`,
+/// `Plugin`, `TracingPlugin` and the `TypedEvent` / `TypedState` traits. Features add `Interpreter`
+/// and `spawn` (`tokio`), `persisted` and `StateStore` (`persistence`), `InspectorObserver` /
+/// `InspectorPlugin` (`inspect`), `MetricsObserver` / `MetricsPlugin` (`observability`) and the
+/// `TypedEvent` / `TypedState` derives and the `statechart!` macro (`macros`).
 pub mod prelude {
     pub use xstate_core::{
-        Event, Machine, MachineLogic, Snapshot, SyncInterpreter, TypedEvent, TypedState,
+        Event, Machine, MachineLogic, Observer, Plugin, Snapshot, SyncInterpreter, TracingObserver,
+        TracingPlugin, TypedEvent, TypedState,
     };
 
     #[cfg(feature = "tokio")]
     pub use xstate_tokio::{Interpreter, spawn};
 
     #[cfg(feature = "persistence")]
-    pub use xstate_persistence::{StateStore, persisted};
+    pub use xstate_persistence::TransitionLogObserver as AuditLogPlugin;
+    #[cfg(feature = "persistence")]
+    pub use xstate_persistence::{AuditKeys, StateStore, TransitionLogObserver, persisted, redact};
 
     #[cfg(feature = "inspect")]
     pub use xstate_inspect::InspectorObserver;
+    #[cfg(feature = "inspect")]
+    pub use xstate_inspect::InspectorObserver as InspectorPlugin;
 
     #[cfg(feature = "observability")]
     pub use xstate_observability::MetricsObserver;
+    #[cfg(feature = "observability")]
+    pub use xstate_observability::MetricsObserver as MetricsPlugin;
+
+    #[cfg(feature = "agents")]
+    pub use xstate_agents::BudgetPlugin;
 
     // The derives live in the macro namespace, the traits above in the type namespace, so the
     // same names serve both (the way `serde::Serialize` does).

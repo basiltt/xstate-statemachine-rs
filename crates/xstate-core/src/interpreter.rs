@@ -203,6 +203,11 @@ impl<C: Context> SyncInterpreter<C> {
         self
     }
 
+    /// Attach a plugin (convenience alias for [`Self::observe`]).
+    pub fn plugin(&mut self, plugin: Arc<dyn Observer<C>>) -> &mut Self {
+        self.observe(plugin)
+    }
+
     /// Events parked by `onUnhandled: "defer"`, oldest first.
     pub fn deferred_events(&self) -> impl Iterator<Item = &Event> + '_ {
         self.deferred.iter()

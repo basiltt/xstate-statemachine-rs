@@ -57,7 +57,7 @@ pub use ids::{StateId, TransitionId};
 pub use interpreter::{MAX_DEFERRED, Receipt, RestartTimers, RestoreOptions, SyncInterpreter};
 pub use logic::{ActionScope, AsyncServiceFn, MachineLogic, ServiceFuture, ServiceImpl};
 pub use machine::Machine;
-pub use observer::{Observer, TracingObserver};
+pub use observer::{Observer, Plugin, TracingObserver, TracingPlugin};
 pub use snapshot::Snapshot;
 pub use typed::{TypedEvent, TypedState};
 

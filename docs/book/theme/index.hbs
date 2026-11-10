@@ -64,6 +64,8 @@
             </a>
             <div class="nav-links" id="navLinks">
                 <a href="{{ path_to_root }}guide/getting-started.html" class="nav-link">Guide</a>
+                <a href="{{ path_to_root }}guide/plugins.html" class="nav-link">Plugins</a>
+                <a href="{{ path_to_root }}integrations/index.html" class="nav-link">Integrations</a>
                 <a href="{{ path_to_root }}cookbook/index.html" class="nav-link">Cookbook</a>
                 <a href="{{ path_to_root }}guide/comparisons.html" class="nav-link">Comparisons</a>
                 <a href="https://docs.rs/xstate-statemachine" class="nav-link" target="_blank" rel="noopener">API Reference</a>
@@ -615,6 +617,7 @@ async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
                     <h3 class="sidebar-heading">Guides</h3>
                     <a href="{{ path_to_root }}guide/sync-interpreter.html" class="sidebar-link{{#if (eq path "guide/sync-interpreter.md")}} active{{/if}}">Sync Interpreter</a>
                     <a href="{{ path_to_root }}guide/tokio.html" class="sidebar-link{{#if (eq path "guide/tokio.md")}} active{{/if}}">Tokio Actors</a>
+                    <a href="{{ path_to_root }}guide/plugins.html" class="sidebar-link{{#if (eq path "guide/plugins.md")}} active{{/if}}">Plugins &amp; Observability</a>
                     <a href="{{ path_to_root }}guide/persistence.html" class="sidebar-link{{#if (eq path "guide/persistence.md")}} active{{/if}}">Persistence Stores</a>
                     <a href="{{ path_to_root }}guide/eda.html" class="sidebar-link{{#if (eq path "guide/eda.md")}} active{{/if}}">Event-Driven Architecture</a>
                     <a href="{{ path_to_root }}guide/patterns.html" class="sidebar-link{{#if (eq path "guide/patterns.md")}} active{{/if}}">Resilience Patterns</a>
@@ -627,6 +630,22 @@ async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
                     <a href="{{ path_to_root }}guide/cli.html" class="sidebar-link{{#if (eq path "guide/cli.md")}} active{{/if}}">CLI Reference</a>
                 </div>
                 <div class="sidebar-section">
+                    <h3 class="sidebar-heading">Ecosystem Integrations</h3>
+                    <a href="{{ path_to_root }}integrations/index.html" class="sidebar-link{{#if (eq path "integrations/index.md")}} active{{/if}}">Pick Your Path</a>
+                    <a href="{{ path_to_root }}integrations/axum.html" class="sidebar-link{{#if (eq path "integrations/axum.md")}} active{{/if}}">Axum Web</a>
+                    <a href="{{ path_to_root }}integrations/actix.html" class="sidebar-link{{#if (eq path "integrations/actix.md")}} active{{/if}}">Actix-web</a>
+                    <a href="{{ path_to_root }}integrations/tower.html" class="sidebar-link{{#if (eq path "integrations/tower.md")}} active{{/if}}">Tower Middleware</a>
+                    <a href="{{ path_to_root }}integrations/sqlx.html" class="sidebar-link{{#if (eq path "integrations/sqlx.md")}} active{{/if}}">SQLx (PG &amp; SQLite)</a>
+                    <a href="{{ path_to_root }}integrations/sea-orm.html" class="sidebar-link{{#if (eq path "integrations/sea-orm.md")}} active{{/if}}">SeaORM Async ORM</a>
+                    <a href="{{ path_to_root }}integrations/diesel.html" class="sidebar-link{{#if (eq path "integrations/diesel.md")}} active{{/if}}">Diesel Compile-Time ORM</a>
+                    <a href="{{ path_to_root }}integrations/redis.html" class="sidebar-link{{#if (eq path "integrations/redis.md")}} active{{/if}}">Redis &amp; Streams</a>
+                    <a href="{{ path_to_root }}integrations/tracing.html" class="sidebar-link{{#if (eq path "integrations/tracing.md")}} active{{/if}}">Tracing &amp; Diagnostics</a>
+                    <a href="{{ path_to_root }}integrations/prometheus.html" class="sidebar-link{{#if (eq path "integrations/prometheus.md")}} active{{/if}}">Prometheus &amp; Metrics</a>
+                    <a href="{{ path_to_root }}integrations/validation.html" class="sidebar-link{{#if (eq path "integrations/validation.md")}} active{{/if}}">Validator &amp; Garde</a>
+                    <a href="{{ path_to_root }}integrations/testing.html" class="sidebar-link{{#if (eq path "integrations/testing.md")}} active{{/if}}">Testing &amp; Proptest</a>
+                    <a href="{{ path_to_root }}integrations/workers.html" class="sidebar-link{{#if (eq path "integrations/workers.md")}} active{{/if}}">Tokio Workers &amp; Queues</a>
+                </div>
+                <div class="sidebar-section">
                     <h3 class="sidebar-heading">Cookbook &amp; Examples</h3>
                     <a href="{{ path_to_root }}cookbook/index.html" class="sidebar-link{{#if (eq path "cookbook/index.md")}} active{{/if}}">Overview</a>
                     <a href="{{ path_to_root }}cookbook/traffic-light.html" class="sidebar-link{{#if (eq path "cookbook/traffic-light.md")}} active{{/if}}">Traffic Light Controller</a>
@@ -637,6 +656,10 @@ async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
                     <a href="{{ path_to_root }}cookbook/eda-messaging.html" class="sidebar-link{{#if (eq path "cookbook/eda-messaging.md")}} active{{/if}}">EDA &amp; Outbox</a>
                     <a href="{{ path_to_root }}cookbook/axum-http-service.html" class="sidebar-link{{#if (eq path "cookbook/axum-http-service.md")}} active{{/if}}">Axum HTTP &amp; Live Inspector</a>
                     <a href="{{ path_to_root }}cookbook/llm-agent-tool-loop.html" class="sidebar-link{{#if (eq path "cookbook/llm-agent-tool-loop.md")}} active{{/if}}">LLM Agent Tool Loop</a>
+                    <a href="{{ path_to_root }}cookbook/websocket-reconnect.html" class="sidebar-link{{#if (eq path "cookbook/websocket-reconnect.md")}} active{{/if}}">WebSocket Reconnection</a>
+                    <a href="{{ path_to_root }}cookbook/stripe-webhooks.html" class="sidebar-link{{#if (eq path "cookbook/stripe-webhooks.md")}} active{{/if}}">Stripe Webhook Gateway</a>
+                    <a href="{{ path_to_root }}cookbook/form-wizard.html" class="sidebar-link{{#if (eq path "cookbook/form-wizard.md")}} active{{/if}}">Form Wizard &amp; Onboarding</a>
+                    <a href="{{ path_to_root }}cookbook/feature-flag-rollout.html" class="sidebar-link{{#if (eq path "cookbook/feature-flag-rollout.md")}} active{{/if}}">Feature Flag Rollout</a>
                 </div>
                 <div class="sidebar-section">
                     <h3 class="sidebar-heading">Operations</h3>

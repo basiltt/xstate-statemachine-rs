@@ -14,11 +14,19 @@ const TOGGLE: &str = r#"{
 fn prelude_runs_the_engine_without_any_feature() {
     let machine = Machine::from_json(TOGGLE).unwrap();
     let mut interp = SyncInterpreter::new(machine, MachineLogic::dynamic());
+    interp.plugin(std::sync::Arc::new(TracingPlugin));
     interp.start().unwrap();
     interp.send(Event::new("TOGGLE")).unwrap();
     assert_eq!(interp.state_ids(), ["toggle.active"]);
     let snapshot: Snapshot = interp.snapshot().unwrap();
     assert_eq!(snapshot.state_ids, ["toggle.active"]);
+}
+
+#[test]
+fn plugins_module_exposes_observer_and_tracing() {
+    use xstate_statemachine::plugins::{Plugin, TracingPlugin};
+    let tracing = TracingPlugin;
+    let _plugin: std::sync::Arc<Plugin<serde_json::Value>> = std::sync::Arc::new(tracing);
 }
 
 #[test]

@@ -287,6 +287,41 @@ xstate-statemachine = { version = "0.1", features = ["full"] }
 
 ---
 
+## 🔌 Plugins & Ecosystem Integrations
+
+`xstate-statemachine` provides a zero-allocation, infallible **Plugin (Observer) architecture** alongside turnkey integrations for the highest-download crates in the Rust ecosystem:
+
+```mermaid
+flowchart LR
+    M[xstate-statemachine Engine] --> P[Built-in Plugins]
+    M --> W[Web & Services]
+    M --> D[Databases & ORMs]
+    M --> B[Brokers & Queues]
+
+    P --> Tr["TracingPlugin (structured logs)"]
+    P --> Me["MetricsPlugin (Prometheus)"]
+    P --> In["InspectorPlugin (Stately SSE)"]
+    P --> Au["AuditLogPlugin (tamper-proof)"]
+
+    W --> Ax["Axum (xstate-axum)"]
+    W --> Ac["Actix-web (actor bridge)"]
+    W --> Tw["Tower (Service & Layer)"]
+
+    D --> Sq["SQLx (PostgreSQL / SQLite)"]
+    D --> Se["SeaORM (ActiveModel)"]
+    D --> Di["Diesel (compile-time ORM)"]
+    D --> Rd["Redis (Redlock & Streams)"]
+
+    B --> Na["NATS & RabbitMQ"]
+    B --> Sq2["AWS SQS"]
+    B --> Ap["Tokio Workers"]
+```
+
+* **[Plugins & Observability Guide](https://basiltt.github.io/xstate-statemachine-rs/guide/plugins.html):** Zero-allocation lifecycle hooks (`on_start`, `on_event`, `on_event_dropped`, `on_error`, `on_stop`), credential redaction, and custom plugin authoring.
+* **[Ecosystem Integrations Matrix](https://basiltt.github.io/xstate-statemachine-rs/integrations/index.html):** Complete runnable guides and patterns for **Axum**, **Actix-web**, **Tower**, **SQLx**, **SeaORM**, **Diesel**, **Redis**, **NATS**, **RabbitMQ**, **AWS SQS**, **Tracing**, **Validator**, and **Tokio Workers**.
+
+---
+
 ## 🤖 For LLM agents
 
 Statecharts solve the biggest problem in LLM agents: **non-deterministic runaway execution**.

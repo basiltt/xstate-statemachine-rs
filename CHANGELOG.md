@@ -11,6 +11,34 @@ raised only in a minor release.
 
 ### Added
 
+- First-class Plugin / Observer architecture (`xstate-core` and `xstate-statemachine`):
+  - Added `Plugin<C>` trait alias for `Observer<C>` and `interp.plugin(Arc::new(...))` on `SyncInterpreter`.
+  - Added `xstate_statemachine::plugins` module exposing `Observer`, `Plugin`, `TracingPlugin`, `MetricsPlugin`, `InspectorPlugin`, `AuditLogPlugin`, and `BudgetPlugin`.
+  - Exported `TracingPlugin`, `MetricsPlugin`, `InspectorPlugin`, and `AuditLogPlugin` in `xstate_statemachine::prelude`.
+- Dedicated Plugins & Observability Guide (`docs/book/src/guide/plugins.md`):
+  - In-depth Observer pattern design, complete hook reference table (`on_start`, `on_event`, `on_event_dropped`, `on_error`, `on_stop`).
+  - Step-by-step custom plugin authoring guide (audit trail, latency monitors, dead-letter capture).
+  - Production error containment, non-reentrancy rules, and thread-safety invariants.
+- Ecosystem Integrations Documentation Suite (`docs/book/src/integrations/`):
+  - Overview & "Pick Your Path" decision matrix connecting Web × Store × Broker × Worker choices.
+  - Dedicated production guides for high-download Rust crates:
+    - **Axum Web**: REST, SSE, WebSockets, RFC 9457 Problem Details, Stately Inspector (`integrations/axum.md`).
+    - **Actix-web**: `web::Data` actor management, statechart HTTP handlers, SSE streams (`integrations/actix.md`).
+    - **Tower Middleware**: `tower::Service` & `tower::Layer` for state-guarded endpoints and circuit breakers (`integrations/tower.md`).
+    - **SQLx Persistence**: PostgreSQL advisory locks, SQLite WAL, idempotency inboxes (`integrations/sqlx.md`).
+    - **SeaORM Async ORM**: ActiveModel lifecycle hooks, state column casting, snapshot JSON persistence (`integrations/sea-orm.md`).
+    - **Diesel Compile-Time ORM**: Custom `ToSql`/`FromSql` statechart types, durable outbox tables (`integrations/diesel.md`).
+    - **Redis & Redis Streams**: Snapshots, Redlock distributed locking, stream pub/sub (`integrations/redis.md`).
+    - **Tracing & OpenTelemetry**: Structured spans, parent-child context propagation, sensitive credential redaction (`integrations/tracing.md`).
+    - **Prometheus & Metrics**: `metrics` facade counters, histograms, transition throughput (`integrations/prometheus.md`).
+    - **Schema Validation**: Context and event validation using `validator` and `garde` (`integrations/validation.md`).
+    - **Testing & Proptest Harness**: Simulated clocks, path walkers, mock logic, property-based invariants (`integrations/testing.md`).
+    - **Background Workers & Queues**: Driving statecharts with Tokio worker loops and `DueTimerScanner` (`integrations/workers.md`).
+- Four additional production recipes in the Cookbook (`docs/book/src/cookbook/`):
+  - WebSocket Reconnection & Heartbeat (`cookbook/websocket-reconnect.md`).
+  - Stripe Webhook Payment Gateway with signature validation and idempotency (`cookbook/stripe-webhooks.md`).
+  - Form Wizard & Multi-Step Onboarding with back/next navigation and step validation (`cookbook/form-wizard.md`).
+  - Feature Flag Progressive Rollout with canary ramping and instant automated rollback (`cookbook/feature-flag-rollout.md`).
 - Comprehensive architecture and competitor comparison guide (`docs/book/src/guide/comparisons.md`)
   benchmarking `xstate-statemachine-rs` against Rust FSMs (`statig`, `smlang`), Python (`python-statemachine`,
   `transitions`), JavaScript (`XState v5`), and distributed orchestrators (`Temporal`, `AWS Step Functions`).

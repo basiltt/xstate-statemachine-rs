@@ -35,3 +35,15 @@ Every recipe includes:
 
 8. **[LLM Agent Tool Loop with Guardrail Budgets](llm-agent-tool-loop.md)**  
    *AI Agents & Safety.* Constrained autonomous agent loop with strict per-state tool allow-lists, token budget guards, and human-in-the-loop approvals.
+
+9. **[WebSocket Reconnection & Heartbeat](websocket-reconnect.md)**  
+   *Network Resilience.* Client connection manager with exponential backoff, decorrelated jitter, and ping/pong health monitoring.
+
+10. **[Stripe Webhook Payment Gateway](stripe-webhooks.md)**  
+    *E-Commerce & Payments.* Idempotent Stripe webhook receiver with signature validation, invoice payment handling, and duplicate deduplication.
+
+11. **[Form Wizard & Multi-Step Onboarding](form-wizard.md)**  
+    *UI & User Flows.* Multi-step signup form with back/next navigation, step invariant validation, and context persistence.
+
+12. **[Feature Flag Progressive Rollout](feature-flag-rollout.md)**  
+    *DevOps & Release Engineering.* Canary release progression with automated health monitoring and instant automated traffic rollback.

@@ -40,8 +40,8 @@ pub use locking::{
 #[cfg(feature = "sqlite")]
 pub use log::SqliteLog;
 pub use log::{
-    Disposition, JsonLinesLog, MemoryLog, Origin, TransitionLogObserver, TransitionLogStore,
-    TransitionRecord,
+    AuditKeys, Disposition, JsonLinesLog, MemoryLog, Origin, TransitionLogObserver,
+    TransitionLogStore, TransitionRecord, redact,
 };
 pub use memory_store::MemoryStore;
 pub use migration::{MigrationError, SnapshotMigrator};
