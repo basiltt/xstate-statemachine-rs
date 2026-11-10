@@ -24,6 +24,10 @@ if (-not $DryRun -and -not $tokenToUse) {
     exit 1
 }
 
+if ($tokenToUse) {
+    $env:CARGO_REGISTRY_TOKEN = $tokenToUse
+}
+
 Set-Location $RootDir
 
 $versionMatch = Select-String -Path (Join-Path $RootDir "Cargo.toml") -Pattern 'version\s*=\s*"([^"]+)"'
@@ -35,7 +39,6 @@ if ($DryRun) {
     foreach ($c in $crates) {
         $publishArgs += @("-p", $c)
     }
-    if ($tokenToUse) { $publishArgs += @("--token", $tokenToUse) }
     if ($AllowDirty) { $publishArgs += "--allow-dirty" }
     & cargo @publishArgs
     exit 0
@@ -60,7 +63,6 @@ foreach ($crate in $crates) {
 
     Write-Host "`n==> Publishing $crate $version..." -ForegroundColor Cyan
     $publishArgs = @("publish", "--locked", "-p", $crate)
-    if ($tokenToUse) { $publishArgs += @("--token", $tokenToUse) }
     if ($AllowDirty) { $publishArgs += "--allow-dirty" }
     
     & cargo @publishArgs
