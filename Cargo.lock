@@ -4741,7 +4741,7 @@ checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
 
 [[package]]
 name = "xstate-agents"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4753,7 +4753,7 @@ dependencies = [
 
 [[package]]
 name = "xstate-axum"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "futures-util",
@@ -4775,7 +4775,7 @@ dependencies = [
 
 [[package]]
 name = "xstate-conformance"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4785,7 +4785,7 @@ dependencies = [
 
 [[package]]
 name = "xstate-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "foldhash 0.1.5",
@@ -4803,7 +4803,7 @@ dependencies = [
 
 [[package]]
 name = "xstate-eda"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-nats",
  "aws-config",
@@ -4826,7 +4826,7 @@ dependencies = [
 
 [[package]]
 name = "xstate-inspect"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rand 0.9.5",
  "serde",
@@ -4839,7 +4839,7 @@ dependencies = [
 
 [[package]]
 name = "xstate-macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -4853,7 +4853,7 @@ dependencies = [
 
 [[package]]
 name = "xstate-observability"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "metrics",
  "metrics-util",
@@ -4864,7 +4864,7 @@ dependencies = [
 
 [[package]]
 name = "xstate-patterns"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rand 0.9.5",
  "serde",
@@ -4882,7 +4882,7 @@ dependencies = [
 
 [[package]]
 name = "xstate-persistence"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fd-lock",
  "hex",
@@ -4903,7 +4903,7 @@ dependencies = [
 
 [[package]]
 name = "xstate-py"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pyo3",
  "serde_json",
@@ -4914,7 +4914,7 @@ dependencies = [
 
 [[package]]
 name = "xstate-statemachine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4934,7 +4934,7 @@ dependencies = [
 
 [[package]]
 name = "xstate-statemachine-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -4952,7 +4952,7 @@ dependencies = [
 
 [[package]]
 name = "xstate-testing"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4961,7 +4961,7 @@ dependencies = [
 
 [[package]]
 name = "xstate-tokio"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "futures-util",
  "serde_json",

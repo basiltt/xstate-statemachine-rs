@@ -107,7 +107,7 @@ pub(super) fn assemble(
         has_parallel,
         references_logic,
         leaf_mask,
-        plans: std::sync::OnceLock::new(),
+        plans: None,
         initial_entry: std::sync::OnceLock::new(),
         declared_events: std::sync::OnceLock::new(),
         event_index,

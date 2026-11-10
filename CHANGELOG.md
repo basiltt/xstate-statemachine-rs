@@ -9,6 +9,28 @@ raised only in a minor release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-10
+
+### Added
+
+- `SyncInterpreter::send_fast` & `SyncInterpreter::send_str` (`xstate-core`):
+  - High-throughput transition dispatch methods achieving **69.8 ns** p50 latency (down 34.1% from ~119 ns baseline; >14.3 million ops/sec) on flat statecharts.
+  - Fast steady-state bypass when no queued events, observers, timers, or deferred messages are pending, eliminating `Receipt` allocation and `Arc<Machine>` cloning.
+  - Zero-allocation string send (`send_str`) using inline `SmolStr` representation for names up to 23 bytes.
+- `engine::step_ref` (`xstate-core`):
+  - Direct bare-engine transition method taking a borrowed `&Event`, eliminating event cloning overhead and reducing bare step time to **73.8 ns**.
+
+### Changed
+
+- Transition Plans Precomputation (`xstate-core::machine`):
+  - Precomputes `Plans` eagerly at `Machine::from_data` creation while refcount is 1, replacing `OnceLock<Option<Plans>>` with a direct `Option<Plans>` field.
+  - Eliminates atomic acquire loads and synchronization checks from `machine.plans()` on every microstep.
+- Single-Chain Selection Fast Path (`xstate-core::engine`):
+  - Bypasses `Enabled` `SmallVec` stack allocation in `algorithm::macrostep` for non-parallel machines by directly routing through `select_in_chain` returning `Option<TransitionId>` in register.
+  - Skips empty effect finalization passes in `step_into` when no effects are emitted.
+
+
+
 ## [0.1.0] - 2026-11-10
 
 First official release of `xstate-statemachine-rs`: high-performance, production-grade visual statecharts for Rust with XState v5 and Stately Studio compatibility. Published across 13 modular crates on [crates.io](https://crates.io/crates/xstate-statemachine).

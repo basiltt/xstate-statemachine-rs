@@ -412,7 +412,9 @@ pub(crate) fn start_into<C: Context>(
         *slot = None;
         return Err(err);
     }
-    finalize_effects(effects, first);
+    if effects.len() > first {
+        finalize_effects(effects, first);
+    }
     Ok(report)
 }
 
@@ -432,6 +434,24 @@ pub fn step<C: Context>(
     effects: &mut Vec<Effect>,
 ) -> Result<StepReport> {
     step_with(machine, logic, state, &event, effects, false)
+}
+
+/// Advance `state` by one event borrowed by reference, returning the step report.
+///
+/// Effects are appended to `effects`. A machine that is not [`Status::Running`] ignores the
+/// event and reports it as unhandled.
+///
+/// # Errors
+/// Propagates logic errors according to the machine's error policies.
+#[inline]
+pub fn step_ref<C: Context>(
+    machine: &Machine,
+    logic: &MachineLogic<C>,
+    state: &mut ActiveState<C>,
+    event: &Event,
+    effects: &mut Vec<Effect>,
+) -> Result<StepReport> {
+    step_with(machine, logic, state, event, effects, false)
 }
 
 /// [`step`] for a borrowed event; `pure` plans user actions instead of running them.
@@ -490,7 +510,9 @@ pub(crate) fn step_into<C: Context>(
             return Err(err);
         }
     }
-    finalize_effects(effects, first);
+    if effects.len() > first {
+        finalize_effects(effects, first);
+    }
     Ok(())
 }
 

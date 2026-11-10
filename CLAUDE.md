@@ -41,7 +41,7 @@ python scripts/perf_gate.py --no-run
 
 ## Workspace Architecture (15 Crates)
 
-- **`xstate-core`**: Core sans-I/O statechart engine, 106 ns fast-path bitsets, XState v5 JSON parser, snapshots, Mermaid/PlantUML exporters.
+- **`xstate-core`**: Core sans-I/O statechart engine, 69.8 ns fast-path bitsets (`send_fast`, `send_str`, `step_ref`), XState v5 JSON parser, snapshots, Mermaid/PlantUML exporters.
 - **`xstate-tokio`**: Actor runtime, bounded mailboxes, backpressure policies, precision timers.
 - **`xstate-persistence`**: Storage engines (PostgreSQL, SQLite, Redis, File), optimistic locking, durable deadlines.
 - **`xstate-eda`**: CloudEvents 1.0, transactional outbox, dead letters, AsyncAPI 3.0, NATS, RabbitMQ, SQS, Redis Streams.

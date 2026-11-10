@@ -29,7 +29,7 @@ pub(super) fn select_transitions<C: Context>(
 /// [`select_transitions`] for a machine without parallel states: the configuration is one
 /// chain from the root to a single leaf -- its last member in document order -- and the
 /// descent of `transitionNode` amounts to asking the leaf, then each ancestor in turn.
-fn select_in_chain<C: Context>(
+pub(super) fn select_in_chain<C: Context>(
     cx: &mut Ctx<'_, C>,
     event: &Event,
     key: Option<u32>,

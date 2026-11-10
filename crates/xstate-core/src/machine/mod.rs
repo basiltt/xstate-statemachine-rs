@@ -56,8 +56,8 @@ pub(crate) struct MachineData {
     pub(crate) references_logic: bool,
     /// The atomic and final states, as a mask over the configuration.
     pub(crate) leaf_mask: crate::engine::bits::StateBits,
-    /// Precomputed transition domains and entry sets, built on first use.
-    pub(crate) plans: std::sync::OnceLock<Option<crate::engine::sets::Plans>>,
+    /// Precomputed transition domains and entry sets, built eagerly at machine creation.
+    pub(crate) plans: Option<crate::engine::sets::Plans>,
     /// The states `start` enters, in document order, built on first use: nothing is recorded
     /// in history before the machine starts, so the initial entry set is fixed.
     pub(crate) initial_entry: std::sync::OnceLock<SmallVec<[StateId; 8]>>,
@@ -260,6 +260,17 @@ pub struct AfterDef {
 }
 
 impl Machine {
+    /// Finish a machine from assembled [`MachineData`], computing transition plans eagerly
+    /// while the data's reference count is 1.
+    pub(crate) fn from_data(data: MachineData) -> Self {
+        let mut m = Self { inner: Arc::new(data) };
+        let plans = crate::engine::sets::Plans::compute(&m);
+        if let Some(inner) = Arc::get_mut(&mut m.inner) {
+            inner.plans = plans;
+        }
+        m
+    }
+
     /// Parse and compile an XState JSON document.
     ///
     /// # Errors
@@ -272,7 +283,7 @@ impl Machine {
             Self::compile_parsed(&value, &ParseOptions::default(), None)?
         };
         data.source = source::Source::Json(text.into());
-        Ok(Self { inner: Arc::new(data) })
+        Ok(Self::from_data(data))
     }
 
     /// Parse and compile an XState JSON value.
@@ -308,7 +319,7 @@ impl Machine {
             None => Self::compile_parsed(value, options, user_actions)?,
         };
         data.source = source::Source::from_value(value);
-        Ok(Self { inner: Arc::new(data) })
+        Ok(Self::from_data(data))
     }
 
     /// The parser path: `value` to [`MachineConfig`] to the compiled arena.
@@ -326,7 +337,7 @@ impl Machine {
     /// # Errors
     /// Unresolved targets, root targets, duplicate ids and other structural rules.
     pub fn from_config(config: MachineConfig) -> Result<Self> {
-        Ok(Self { inner: Arc::new(compile::compile(config, None)?) })
+        Ok(Self::from_data(compile::compile(config, None)?))
     }
 
     /// Parse and compile for a known logic registry: an action the logic implements is the
@@ -521,7 +532,7 @@ impl Machine {
     /// Precomputed transition plans (`None` for machines with history states).
     #[inline]
     pub(crate) fn plans(&self) -> Option<&crate::engine::sets::Plans> {
-        self.inner.plans.get_or_init(|| crate::engine::sets::Plans::compute(self)).as_ref()
+        self.inner.plans.as_ref()
     }
 
     /// The initial configuration `start` enters, in document order.

@@ -16,7 +16,7 @@
 [![Documentation Bible](https://img.shields.io/badge/docs-bible%20website-0ea5e9?style=flat-square&logo=gitbook&logoColor=white)](https://basiltt.github.io/xstate-statemachine-rs/)
 [![CI Status](https://img.shields.io/github/actions/workflow/status/basiltt/xstate-statemachine-rs/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/basiltt/xstate-statemachine-rs/actions/workflows/ci.yml)
 [![Safety: Forbid Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg?style=flat-square&logo=shield)](Cargo.toml)
-[![Performance: 106 ns](https://img.shields.io/badge/transition-106%20ns%20%7C%200%20allocs-brightgreen?style=flat-square&logo=speedtest&logoColor=white)](#-hard-performance-benchmarks)
+[![Performance: 69.8 ns](https://img.shields.io/badge/transition-69.8%20ns%20%7C%200%20allocs-brightgreen?style=flat-square&logo=speedtest&logoColor=white)](#-hard-performance-benchmarks)
 [![XState v5 Parity](https://img.shields.io/badge/XState%20v5-100%25%20conformance-blueviolet?style=flat-square&logo=javascript&logoColor=white)](https://stately.ai/docs/xstate)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
@@ -24,7 +24,7 @@
 cargo add xstate-statemachine
 ```
 
-**106 ns transitions · 0 steady-state heap allocations · 100% XState v5 spec parity · 15 modular workspace crates**
+**69.8 ns transitions · 0 steady-state heap allocations · 100% XState v5 spec parity · 15 modular workspace crates**
 
 [60-Second Quickstart](#-60-second-quickstart) · [The Pain of Naive Enums](#-the-problem-the-rust-enum-trap) · [Visual Stately Workflow](#-visual-statecharts-with-stately-studio) · [Production Plugins](#-production-resilience-plugins) · [Competitor Matrix](#-how-it-compares) · [Performance](#-hard-performance-benchmarks) · [Ecosystem](#-ecosystem-integrations) · [Full Documentation Book ↗](https://basiltt.github.io/xstate-statemachine-rs/)
 
@@ -61,7 +61,7 @@ fn main() -> Result<(), xstate_statemachine::core::Error> {
         }
     };
 
-    // 2. Drive with the zero-allocation synchronous interpreter (106 ns/step)
+    // 2. Drive with the zero-allocation synchronous interpreter (69.8 ns send_fast)
     let mut light = SyncInterpreter::new(machine, MachineLogic::dynamic());
     light.start()?;
 
@@ -202,7 +202,7 @@ struct OrderState {
 * **Compound (Hierarchical) States:** Cancel nested background tasks with a single top-level transition.
 * **Parallel (Orthogonal) Regions:** Run independent sub-workflows (e.g., streaming telemetry + processing payments) simultaneously.
 * **First-Class Timers (`after`):** Timers are automatically scheduled and cancelled when exiting states.
-* **Zero-Allocation Execution:** 106 ns transitions with pre-allocated bitsets.
+* **Zero-Allocation Execution:** 69.8 ns transitions with pre-allocated bitsets and eager plan execution.
 
 ---
 
@@ -239,7 +239,7 @@ flowchart TD
     RL --> WD[WatchdogPlugin\nPer-State SLA Timer]
     WD --> DP[DrainPlugin\nGraceful Shutdown Barrier]
     DP --> CR[DiagnosticPlugin\nCircular Ring Buffer Flight Recorder]
-    CR --> SM[xstate-core Transition Engine\n106 ns p50]
+    CR --> SM[xstate-core Transition Engine\n69.8 ns p50]
 ```
 
 ### 1. 🔒 Webhook & Payment Deduplication (`IdempotencyPlugin`)
@@ -344,7 +344,7 @@ for entry in audit_trail {
 | Capability / Architecture | `xstate-statemachine-rs` | `statig` | `smlang` | `sfsm` | Hand-Rolled `enum + match` |
 |:---|:---:|:---:|:---:|:---:|:---:|
 | **Architecture Model** | **W3C SCXML / XState v5** | Hierarchical FSM macro | DSL-generated match | Minimal Embedded FSM | Ad-hoc pattern matching |
-| **Microstep Latency (p50)** | **106 ns** | ~60–120 ns | ~50–100 ns | ~30–80 ns | ~10–50 ns |
+| **Microstep Latency (p50)** | **69.8 ns** (`send_fast`) / 73.8 ns (bare) | ~60–120 ns | ~50–100 ns | ~30–80 ns | ~10–50 ns |
 | **Steady-State Allocations** | **0 heap allocs** | 0 heap allocs | 0 heap allocs | 0 heap allocs | 0 heap allocs |
 | **Runtime / Dynamic JSON Loading** | **✅ Yes (XState v5 JSON)** | ❌ No (Compile-time only) | ❌ No (Compile-time only) | ❌ No (Compile-time only) | ❌ No (Hardcoded) |
 | **Visual Stately Studio Two-Way Sync** | **✅ Yes (Full spec parity)** | ❌ No | ❌ No | ❌ No | ❌ No |
@@ -373,7 +373,7 @@ Measured across identical machine topologies, guards, contexts, and actions on a
 
 | Benchmark Scenario | Operation | Rust `xstate-rs` | TypeScript `XState v5` (Node.js) | Python `xstate-statemachine` | Speedup vs. Python | Speedup vs. TypeScript |
 |---|---|:---:|:---:|:---:|:---:|:---:|
-| **S1 `flat_toggle`** | Unconditional state transition | **106 ns** (9.43M ops/s) | 5.80 µs (172K ops/s) | 18.69 µs (53.5K ops/s) | **176x faster** | **55x faster** |
+| **S1 `flat_toggle`** | Unconditional state transition | **69.8 ns** (>14.3M ops/s) | 5.80 µs (172K ops/s) | 18.69 µs (53.5K ops/s) | **267x faster** | **83x faster** |
 | **S2 `guarded_context`** | Guard predicate + JSON context `assign` | **161 ns** (6.21M ops/s) | 8.50 µs (118K ops/s) | 11.42 µs (87.5K ops/s) | **71x faster** | **53x faster** |
 | **S3 `hierarchical`** | 2-level compound state exit/entry (LCA) | **215 ns** (4.65M ops/s) | 11.20 µs (89K ops/s) | 36.06 µs (27.7K ops/s) | **168x faster** | **52x faster** |
 | **S4 `parallel`** | Dual simultaneous orthogonal regions | **283 ns** (3.53M ops/s) | 14.50 µs (69K ops/s) | 47.66 µs (21.0K ops/s) | **168x faster** | **51x faster** |
@@ -389,7 +389,7 @@ All benchmarks measured with Criterion on standard hardware (Intel Core i7-11850
 
 | Benchmark Scenario | What It Measures | Rust `xstate-rs` (p50) | Throughput | Zero-Alloc Guarantee |
 |---|---|---|---|:---:|
-| **S1 `flat_toggle`** | Unconditional state transition | **106 ns** | **9,430,000 ops/s** | ✅ 0 Heap Allocs |
+| **S1 `flat_toggle`** | Unconditional state transition | **69.8 ns** (`send_fast`) / 73.8 ns (`step_ref`) | **>14,300,000 ops/s** | ✅ 0 Heap Allocs |
 | **S2 `guarded_context`** | Guard predicate + JSON `assign` | **161 ns** | **6,210,000 ops/s** | SmallVec fast path |
 | **S3 `hierarchical`** | Cross-boundary compound state exit/entry | **215 ns** | **4,650,000 ops/s** | ✅ 0 Heap Allocs |
 | **S4 `parallel`** | Dual simultaneous orthogonal regions | **283 ns** | **3,530,000 ops/s** | ✅ 0 Heap Allocs |

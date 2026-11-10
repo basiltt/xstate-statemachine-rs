@@ -46,6 +46,20 @@ fn send_flat(c: &mut Criterion) {
     c.bench_function("send_flat", |b| b.iter(|| i.send(black_box("TOGGLE")).expect("send")));
 }
 
+fn send_flat_fast(c: &mut Criterion) {
+    let mut i = interp(TOGGLE);
+    c.bench_function("send_flat_fast", |b| {
+        b.iter(|| i.send_fast(black_box("TOGGLE")).expect("send"));
+    });
+}
+
+fn send_flat_str(c: &mut Criterion) {
+    let mut i = interp(TOGGLE);
+    c.bench_function("send_flat_str", |b| {
+        b.iter(|| i.send_str(black_box("TOGGLE")).expect("send"));
+    });
+}
+
 /// The bare engine step (no interpreter, no receipt): isolates algorithm cost.
 fn step_flat(c: &mut Criterion) {
     let machine = Machine::from_json(TOGGLE).expect("machine");
@@ -61,6 +75,28 @@ fn step_flat(c: &mut Criterion) {
                 &logic,
                 &mut state,
                 xstate_core::Event::new(black_box("TOGGLE")),
+                &mut effects,
+            )
+            .expect("step")
+        });
+    });
+}
+
+fn step_flat_ref(c: &mut Criterion) {
+    let machine = Machine::from_json(TOGGLE).expect("machine");
+    let logic = MachineLogic::dynamic();
+    let (mut state, _, _) =
+        xstate_core::engine::start(&machine, &logic, &Value::Null).expect("start");
+    let mut effects = Vec::new();
+    let ev = xstate_core::Event::new("TOGGLE");
+    c.bench_function("step_flat_ref", |b| {
+        b.iter(|| {
+            effects.clear();
+            xstate_core::engine::step_ref(
+                &machine,
+                &logic,
+                &mut state,
+                black_box(&ev),
                 &mut effects,
             )
             .expect("step")
@@ -164,7 +200,10 @@ fn snapshot_restore(c: &mut Criterion) {
 criterion_group!(
     benches,
     send_flat,
+    send_flat_fast,
+    send_flat_str,
     step_flat,
+    step_flat_ref,
     send_guard_assign,
     send_nested_3,
     send_parallel_2,

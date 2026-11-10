@@ -9,7 +9,7 @@ Operational brief and rulebook for AI coding agents (Claude, Codex, Antigravity,
 `xstate-statemachine-rs` is a high-performance, production-grade statechart library for Rust, fully compatible with the **[XState v5](https://stately.ai/docs/xstate)** specification and the **[Stately Studio](https://stately.ai/editor)** visual editor.
 
 ### Key Tenets
-1. **Extreme Performance:** Sub-microsecond transitions (**106 ns p50** on plain microsteps; >9.4M ops/s) with **0 heap allocations** on the fast path.
+1. **Extreme Performance:** Sub-microsecond transitions (**69.8 ns p50** on `send_fast` fast path; >14.3M ops/s; **73.8 ns** bare engine step) with **0 heap allocations** on the fast path.
 2. **Byte-Level Interoperability:** 100% binary snapshot format compatibility (Layout `v4`) and identical structure hashes (`SHA256(topology)[:16]`) with the Python library [`xstate-statemachine`](https://github.com/basiltt/xstate-statemachine) 0.12.1. Shared SQLite, PostgreSQL, and Redis stores.
 3. **Turnkey Production Toolset:** 15 modular workspace crates providing actor-model concurrency on Tokio, durable persistence, transactional outbox messaging (NATS, RabbitMQ, SQS, Redis Streams), resilience patterns (sagas, circuit breakers), Axum web integration, Stately visual inspection, Prometheus metrics, and LLM agent guards.
 4. **Absolute Safety:** `#![forbid(unsafe_code)]` enforced across all production crates. Complete panic containment in async dispatch and actors.
@@ -112,6 +112,8 @@ When implementing code or modifying crates, preserve these core invariants:
    - Structure hash is 16 lowercase hex characters (`SHA256(canonical_topology)[:16]`).
    - Keys in JSON snapshots must preserve exact order (`preserve_order` feature in `serde_json`).
 6. **Python Repository Isolation:** The cousin repository at `../PythonProjects/xstate-statemachine` is strictly **READ-ONLY**. Never write to, modify, or delete files in the Python repo.
+7. **Eager Plans Precomputation & Direct Selection:** Transition plans (`Plans`) are computed eagerly during machine assembly (`Machine::from_data`) so `machine.plans()` is a plain pointer dereference without `OnceLock` synchronization. Non-parallel statecharts bypass `Enabled` SmallVec collection via direct `select_in_chain`.
+8. **Steady-State Fast Path (`send_fast`, `send_str`, `step_ref`):** When no internal queue, timers, observers, or deferred events are pending, the interpreter invokes the step engine without `Receipt` allocation or `Arc<Machine>` cloning.
 
 ---
 

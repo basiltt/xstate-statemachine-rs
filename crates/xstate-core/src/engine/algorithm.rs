@@ -5,7 +5,7 @@
 use serde_json::Value;
 
 use super::actions::run_actions;
-use super::select::{select_eventless_transitions, select_transitions};
+use super::select::{select_eventless_transitions, select_in_chain, select_transitions};
 use super::sets::{Enabled, StateSet, compute_entry_set, compute_exit_set, remove_conflicting};
 use super::{Ctx, Effect, Status};
 use crate::context::Context;
@@ -43,6 +43,40 @@ fn exit_all_when_done<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Result<
 }
 
 pub(super) fn macrostep<C: Context>(cx: &mut Ctx<'_, C>, event: &Event) -> Result<()> {
+    // Non-parallel fast path: 95%+ of statecharts have no parallel regions. The active
+    // configuration is a single leaf chain. We can directly call `select_in_chain` to
+    // return `Option<TransitionId>` in register without allocating or collecting into an
+    // `Enabled` SmallVec. Plain transitions jump straight to `plain_microstep`.
+    if !cx.machine.has_parallel() {
+        let key = cx.machine.event_key(&event.ty);
+        let selected = select_in_chain(cx, event, key)?;
+        if let Some(tid) = selected {
+            if fast_path_enabled() && cx.machine.plans().is_some_and(|plans| plans.is_plain(tid)) {
+                plain_microstep(cx, tid, event)?;
+            } else {
+                microstep(cx, &[tid], event, false)?;
+            }
+        } else {
+            cx.report.unhandled = true;
+            if event.origin == EventOrigin::ErrorActor {
+                // An unhandled service failure fails the machine (XState v5 macrostep).
+                let message = match event.payload.get("error") {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(other) => other.to_string(),
+                    None => "service failed".to_owned(),
+                };
+                cx.state.status = Status::Error;
+                cx.state.error = Some(message);
+                cx.state.internal_queue.clear();
+                return Ok(());
+            }
+        }
+        if !cx.machine.has_always() && cx.state.internal_queue.is_empty() {
+            // Nothing eventless to select and nothing raised: `settle` would stop at once.
+            return Ok(());
+        }
+        return settle(cx, event);
+    }
     let enabled = select_transitions(cx, event)?;
     if enabled.is_empty() {
         cx.report.unhandled = true;

@@ -5,7 +5,6 @@
 //! path returns (the same machine, or the same error).
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use serde_json::{Value, json};
 
@@ -189,7 +188,7 @@ fn fingerprint(m: &Machine) -> String {
 fn parsed(value: &Value) -> crate::Result<Machine> {
     let mut data = Machine::compile_parsed(value, &ParseOptions::default(), None)?;
     data.source = source::Source::from_value(value);
-    Ok(Machine { inner: Arc::new(data) })
+    Ok(Machine::from_data(data))
 }
 
 /// Compare both paths on `value`; returns whether the direct path took it.
@@ -203,7 +202,7 @@ fn check(name: &str, value: &Value) -> bool {
     }
     let Some(mut data) = direct::compile(value) else { return false };
     data.source = source::Source::from_value(value);
-    let direct = Machine { inner: Arc::new(data) };
+    let direct = Machine::from_data(data);
     let slow = slow.unwrap_or_else(|e| panic!("{name}: direct path accepted, parser refused: {e}"));
     assert_eq!(fingerprint(&slow), fingerprint(&direct), "{name}: {value}");
     assert!(direct.warnings().is_empty(), "{name}");
