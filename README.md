@@ -7,9 +7,9 @@
 </picture>
 </a>
 
-# xstate-statemachine
+# xstate-statemachine-rs
 
-**State machines & visual statecharts for Rust — fast, zero-allocation, unbreakable.**
+**Visual statecharts & actor concurrency for Rust — fast, zero-allocation, unbreakable.**
 
 [![crates.io](https://img.shields.io/crates/v/xstate-statemachine.svg?style=flat-square&logo=rust&logoColor=white&color=DEA584)](https://crates.io/crates/xstate-statemachine)
 [![docs.rs](https://img.shields.io/docsrs/xstate-statemachine?style=flat-square&logo=docs.rs&logoColor=white&label=docs.rs)](https://docs.rs/xstate-statemachine)

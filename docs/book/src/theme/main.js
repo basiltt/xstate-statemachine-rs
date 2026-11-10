@@ -327,8 +327,8 @@
 
     // Clean breadcrumb title suffix
     var bc = qs('.breadcrumb-current');
-    if (bc && bc.textContent.includes(' - xstate-statemachine')) {
-      bc.textContent = bc.textContent.replace(' - xstate-statemachine', '').trim();
+    if (bc && (bc.textContent.includes(' - xstate-statemachine-rs') || bc.textContent.includes(' - xstate-statemachine'))) {
+      bc.textContent = bc.textContent.replace(/ - xstate-statemachine(-rs)?/g, '').trim();
     }
   })();
 

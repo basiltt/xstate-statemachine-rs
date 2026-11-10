@@ -2,7 +2,7 @@
 authors = ["Basil T T"]
 language = "en"
 src = "src"
-title = "xstate-statemachine"
+title = "xstate-statemachine-rs"
 description = "High-performance, visual statecharts for Rust. 106 ns transitions, 0 heap allocations, 100% XState v5 compatible with Tokio actors, durable persistence, and EDA."
 
 [output.html]
