@@ -14,3 +14,11 @@ Thumbs.db
 /scratch/
 /docs/book/book/
 /docs/qa/work/
+
+# Secrets, credentials and tokens
+.env
+.env.*
+*.token
+*token*.txt
+.cargo/credentials*
+.cargo/config.toml
