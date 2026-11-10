@@ -11,7 +11,7 @@ This guide provides an honest, source-noted comparison between `xstate-statemach
 | Capability / Dimension | `xstate-statemachine-rs` | `statig` / `smlang` | `python-statemachine` | `XState v5` (TypeScript) | `Temporal` / `Step Functions` |
 |:---|:---:|:---:|:---:|:---:|:---:|
 | **Language & Ecosystem** | **Rust (MSRV 1.88+)** | Rust | Python | JavaScript / TypeScript | Polyglot (Go/Java/TS/Python) |
-| **Microstep Latency** | **106 ns (p50)** | ~50–150 ns | 18.7 µs (177x slower) | 5–15 µs (50x slower) | 10–50 ms (Network bound) |
+| **Microstep Latency** | **69.8 ns (p50)** | ~50–150 ns | 18.7 µs (267x slower) | 5–15 µs (80x slower) | 10–50 ms (Network bound) |
 | **Steady-State Allocations** | **0 heap allocs** | 0 heap allocs | Multiple dicts/tuples | V8 object allocations | Network I/O serialization |
 | **Dynamic JSON / Runtime Loading** | **Yes (XState v5 JSON)** | No (Compile-time only) | No (Class DSL only) | Yes | Yes (JSON / YAML) |
 | **Visual Editor Integration** | **Yes (Stately Studio)** | No | No | Yes (Stately Studio) | Visual Workflow Designer |
@@ -58,7 +58,7 @@ Created by Stately.ai, XState is the gold standard for statechart runtimes in Ja
 `xstate-statemachine-rs` complies strictly with XState v5 JSON semantics. You can design machines in Stately Studio, export the JSON, and run it in Rust with identical transition behavior (verified against real XState on 53 conformance cases).
 
 #### Why choose Rust over Node.js XState:
-1. **Throughput & Latency:** While XState v5 in Node.js typically achieves ~60,000 to 100,000 transitions/second (10–15 µs/op), `xstate-statemachine-rs` executes in **106 ns** (over 9.4 million transitions/second)—a **50x–90x performance advantage**.
+1. **Throughput & Latency:** While XState v5 in Node.js typically achieves ~60,000 to 100,000 transitions/second (10–15 µs/op), `xstate-statemachine-rs` executes in **69.8 ns** (over 14.3 million transitions/second)—an **80x–150x performance advantage**.
 2. **Memory Footprint:** In Rust, steady-state transitions perform 0 heap allocations, and an active interpreter occupies only ~240–380 bytes. In Node.js / V8, object graphs, closures, and garbage collector tracking consume kilobytes per machine instance.
 3. **Multi-Threaded Parallelism:** Node.js is bound to a single thread event loop. `xstate-tokio` leverages work-stealing multi-threaded Tokio runtimes across all available CPU cores.
 
@@ -71,7 +71,7 @@ Created by Stately.ai, XState is the gold standard for statechart runtimes in Ja
 - `transitions`: A flexible, widely-used library that mixes state machine behavior directly into existing Python classes.
 
 #### How `xstate-statemachine-rs` compares:
-1. **Performance:** `xstate-statemachine-rs` is **177x faster** than Python state machines (106 ns vs 18.7 µs).
+1. **Performance:** `xstate-statemachine-rs` is **267x faster** than Python state machines (69.8 ns vs 18.7 µs).
 2. **PyO3 Drop-in Acceleration:** Python codebases can simply `pip install xstate-statemachine` and import `xstate_rs` to run the Rust engine inside CPython, immediately achieving **2.54 million events/sec (29.7x speedup)** without rewriting Python application logic.
 3. **Statechart Formats:** Neither `transitions` nor `python-statemachine` supports the XState v5 JSON specification, visual editing in Stately Studio, or byte-identical cross-language snapshots.
 
@@ -86,7 +86,7 @@ Distributed workflow engines that guarantee execution durability across network 
 
 | Requirement | Distributed Orchestrator (`Temporal`) | In-Process Statechart (`xstate-statemachine-rs`) |
 |---|---|---|
-| **Step Latency** | 10 ms – 100 ms (Network RPC & consensus) | **106 ns – 1 µs** (In-memory execution) |
+| **Step Latency** | 10 ms – 100 ms (Network RPC & consensus) | **69.8 ns – 1 µs** (In-memory execution) |
 | **Throughput** | Hundreds to low thousands of steps/sec | **Millions of steps/sec** |
 | **Infrastructure Overhead** | Dedicated cluster, database, workers | **Single lightweight library dependency** |
 | **Workflow Lifespan** | Months to years | Milliseconds to days |

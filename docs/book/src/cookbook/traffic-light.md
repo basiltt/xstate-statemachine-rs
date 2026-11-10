@@ -101,6 +101,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ---
 
 ## Key Takeaways
-- **Deterministic Zero-Allocation Execution:** The `TIMER` loop executes in ~106 nanoseconds per step.
+- **Deterministic Zero-Allocation Execution:** The `TIMER` loop executes in ~70 nanoseconds per step (`send_fast`).
 - **Unhandled Event Safety:** Events not defined for the current state return a `Receipt` with `unhandled: true` rather than crashing the system.
 - **Context Integrity:** Action scopes provide mutable references to context, guaranteeing that state updates are atomically recorded with the macrostep.

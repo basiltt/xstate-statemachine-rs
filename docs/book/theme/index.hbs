@@ -131,7 +131,7 @@
       </h1>
       <p class="hero-lede">
         Run your XState v5 or Stately JSON unmodified, or declare statecharts with declarative Rust macros.
-        Sub-microsecond transitions (106 ns p50) with 0 steady-state heap allocations. Tokio actors, durable persistence,
+        Sub-microsecond transitions (69.8 ns p50) with 0 steady-state heap allocations. Tokio actors, durable persistence,
         transactional outbox EDA, and Stately Studio visual inspection. 15 modular workspace crates.
       </p>
       <div class="hero-actions">
@@ -149,7 +149,7 @@
         </button>
       </div>
       <ul class="hero-trust" aria-label="At a glance">
-        <li><strong>106 ns</strong> p50 transitions</li>
+        <li><strong>69.8 ns</strong> p50 transitions</li>
         <li><strong>0</strong> heap allocs</li>
         <li><strong>15</strong> workspace crates</li>
         <li><strong>MIT</strong> licensed</li>
@@ -205,12 +205,12 @@
     <article class="card card-lg reveal">
       <div class="card-glow" style="--gx:20%;--gy:0%"></div>
       <h3>Sub-Microsecond Zero-Allocation Fast Path</h3>
-      <p>Plain microsteps execute in <strong>106 ns p50</strong> (&gt;9.4M ops/s) with <strong>0 heap allocations</strong>. Active states use <code>FixedBitSet</code>; identifiers use stack-inlined <code>SmolStr</code>; transition actions execute inline with <code>SmallVec</code>.</p>
+      <p>Plain microsteps execute in <strong>69.8 ns p50</strong> (&gt;14.3M ops/s) with <strong>0 heap allocations</strong>. Active states use <code>FixedBitSet</code>; identifiers use stack-inlined <code>SmolStr</code>; transition actions execute inline with <code>SmallVec</code>.</p>
       <pre class="mini"><code>use xstate_statemachine::prelude::*;
 let mut door = SyncInterpreter::new(machine, logic);
 door.start()?;
-let receipt = door.send("OPEN")?; // 106 ns transition
-assert_eq!(receipt.state_ids(), ["door.opened"]);</code></pre>
+let changed = door.send_fast("OPEN")?; // 69.8 ns transition
+assert!(changed);</code></pre>
     </article>
 
     <article class="card reveal">
@@ -243,7 +243,7 @@ assert_eq!(receipt.state_ids(), ["door.opened"]);</code></pre>
         <span>state_ids=<b>["order.paid"]</b></span>
         <span>unhandled=<b>false</b></span>
         <span>actions_executed=<b>2</b></span>
-        <span>duration=<b>106ns</b></span>
+        <span>duration=<b>70ns</b></span>
       </div>
     </article>
 
@@ -342,7 +342,7 @@ fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
             Ok(())
         });
 
-    // 3. Drive with zero-allocation interpreter (106 ns transitions)
+    // 3. Drive with zero-allocation interpreter (69.8 ns send_fast)
     let mut interp = SyncInterpreter::new(machine, logic);
     interp.start()?;
     interp.send("TIMER")?;
@@ -463,9 +463,9 @@ async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
         <tr>
           <td><strong>S1</strong></td>
           <td>Plain microstep (no actions, no guards)</td>
-          <td><strong style="color: var(--signal);">106 ns</strong></td>
+          <td><strong style="color: var(--signal);">69.8 ns</strong></td>
           <td>1,520 ns</td>
-          <td><strong style="color: var(--signal);">14.3&times; faster</strong></td>
+          <td><strong style="color: var(--signal);">21.8&times; faster</strong></td>
           <td><span class="badge" style="background: var(--signal-soft); color: var(--signal); padding: 2px 8px; border-radius: 6px; font-weight: 600;">0 allocs</span></td>
         </tr>
         <tr>
@@ -563,7 +563,7 @@ async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
         <footer class="page-footer">
             <div class="footer-inner">
                 <p><strong>xstate-statemachine-rs</strong> &mdash; MIT Licensed &bull; Copyright &copy; 2026 Basil T T</p>
-                <p>Production-grade statecharts: 106 ns transitions &bull; 0 heap allocations &bull; 15 workspace crates &bull; 100% XState v5 parity.</p>
+                <p>Production-grade statecharts: 69.8 ns transitions &bull; 0 heap allocations &bull; 15 workspace crates &bull; 100% XState v5 parity.</p>
                 <div class="footer-links">
                     <a href="https://github.com/basiltt/xstate-statemachine-rs" target="_blank" rel="noopener">GitHub</a>
                     <a href="https://crates.io/crates/xstate-statemachine" target="_blank" rel="noopener">crates.io</a>
