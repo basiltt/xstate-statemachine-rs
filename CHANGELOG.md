@@ -11,6 +11,10 @@ raised only in a minor release.
 
 ### Added
 
+- Dual CLI Binaries (`xsm` and `xsm-rs`) & PATH Precedence Guidance (`crates/xsm`, `xstate-statemachine-cli`):
+  - Added dedicated `xsm-rs` binary alias alongside `xsm`, eliminating binary collision and shadowing in polyglot projects where the Python `xstate-statemachine` CLI is also present.
+  - Exported core CLI entrypoint `run() -> ExitCode` in library interface (`src/lib.rs`) with dedicated entry targets `src/bin/xsm.rs` and `src/bin/xsm_rs.rs`.
+  - Comprehensive documentation covering shell `$PATH` precedence rules, virtual environment shadowing behavior, and zero-ambiguity execution patterns.
 - Production Resilience & Concurrency Plugins Suite (`xstate-patterns::plugins` and `xstate_statemachine::plugins`):
   - **`IdempotencyPlugin`**: Thread-safe in-memory LRU and store-backed idempotency cache; eliminates webhook replay races (e.g. Stripe/GitHub) and concurrent duplicate charges with RAII `IdempotencyGuard` and cached receipt returns.
   - **`DrainPlugin`**: Coordinates graceful shutdown across Tokio microservices; tracks in-flight statechart operations with `DrainPermit`, provides `wait_drained` quiescence barrier, and cleanly isolates actor teardown from database pool drops.

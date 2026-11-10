@@ -11,9 +11,17 @@ repository.workspace = true
 keywords.workspace = true
 categories = ["command-line-utilities"]
 
+[lib]
+name = "xstate_statemachine_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "xsm"
-path = "src/main.rs"
+path = "src/bin/xsm.rs"
+
+[[bin]]
+name = "xsm-rs"
+path = "src/bin/xsm_rs.rs"
 
 [dependencies]
 xstate-core = { workspace = true }

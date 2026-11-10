@@ -449,7 +449,7 @@ xstate-statemachine = { version = "0.1", features = ["tokio", "persistence-sqlit
 | [`xstate-macros`](crates/xstate-macros) | Procedural macros | `statechart!` DSL, `#[derive(TypedEvent)]`, `#[derive(TypedState)]` |
 | [`xstate-testing`](crates/xstate-testing) | Testing harness & simulation | Path walking, virtual simulated clock, trace recording, coverage assertion |
 | [`xstate-py`](crates/xstate-py) | PyO3 Python bindings | Drop-in acceleration module `xstate_rs` for Python codebases |
-| [`xsm`](crates/xsm) | Command-line companion tool | `xsm validate`, `xsm inspect --live`, `xsm diagram`, `xsm docs`, `xsm simulate` |
+| [`xsm`](crates/xsm) | Command-line companion tool (`xsm` & `xsm-rs`) | `xsm validate`, `xsm-rs inspect --live`, `xsm diagram`, `xsm docs`, `xsm simulate` |
 
 ---
 

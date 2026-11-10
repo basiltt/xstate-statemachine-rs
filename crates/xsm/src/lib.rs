@@ -13,9 +13,9 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::print_stdout, clippy::print_stderr)] // a CLI prints to stdout/stderr by design
 
-mod commands;
-mod output;
-mod ui;
+pub(crate) mod commands;
+pub(crate) mod output;
+pub(crate) mod ui;
 
 use std::process::ExitCode;
 
@@ -38,25 +38,25 @@ use ui::Ui;
     disable_version_flag = true,
     arg_required_else_help = true
 )]
-struct Cli {
+pub(crate) struct Cli {
     /// Plain text: no colour, no box-drawing glyphs.
     #[arg(long, global = true)]
-    plain: bool,
+    pub plain: bool,
     /// Keep the layout but emit no colour (also honours `NO_COLOR` and `XSM_NO_COLOR`).
     #[arg(long, global = true)]
-    no_color: bool,
+    pub no_color: bool,
     /// Print diagnostics on stderr while a command runs.
     #[arg(long, global = true)]
-    verbose: bool,
+    pub verbose: bool,
     /// Print version information and exit.
     #[arg(short = 'v', long = "version", action = ArgAction::Version)]
-    version: Option<bool>,
+    pub version: Option<bool>,
     #[command(subcommand)]
-    command: Command,
+    pub command: Command,
 }
 
 #[derive(Debug, Subcommand)]
-enum Command {
+pub(crate) enum Command {
     /// Build each file with the real engine and report every finding.
     #[command(visible_alias = "val")]
     Validate(ValidateArgs),
@@ -81,7 +81,7 @@ enum Command {
     Info(InfoArgs),
 }
 
-fn dispatch(ui: Ui, command: &Command) -> Result<u8> {
+pub(crate) fn dispatch(ui: Ui, command: &Command) -> Result<u8> {
     match command {
         Command::Validate(args) => commands::validate::run(ui, args),
         Command::Inspect(args) => commands::inspect::run(ui, args),
@@ -95,7 +95,8 @@ fn dispatch(ui: Ui, command: &Command) -> Result<u8> {
     }
 }
 
-fn main() -> ExitCode {
+/// Runs the CLI application and returns an exit code.
+pub fn run() -> ExitCode {
     let cli = Cli::parse();
     let ui = Ui::detect(cli.plain, cli.no_color, cli.verbose);
     match dispatch(ui, &cli.command) {
