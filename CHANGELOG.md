@@ -9,6 +9,10 @@ raised only in a minor release.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-10
+
+First official release of `xstate-statemachine-rs`: high-performance, production-grade visual statecharts for Rust with XState v5 and Stately Studio compatibility. Published across 13 modular crates on [crates.io](https://crates.io/crates/xstate-statemachine).
+
 ### Added
 
 - Dual CLI Binaries (`xsm` and `xsm-rs`) & PATH Precedence Guidance (`crates/xsm`, `xstate-statemachine-cli`):
@@ -469,12 +473,9 @@ raised only in a minor release.
   (`049_done_state_propagation`: the compound parent, then every completed parallel ancestor; a
   `"*"` handler sees the ones nobody handles).
 
-## [0.1.0] - 2026-11-02
+#### Core Engine & Multi-Crate Architecture (Phases 0–7)
 
-First release: a Rust port of the Python library
-[`xstate-statemachine`](https://github.com/basiltt/xstate-statemachine) 0.12.0 with an XState v5
-compatible engine, Python-compatible snapshots and store layouts, and the feature set described
-below. Developed in phases 0 to 7; the headings follow them.
+A complete Rust implementation with an XState v5 compatible engine, Python 0.12.1 byte-compatible snapshots and store layouts, and zero-allocation microstep transitions.
 
 ### Added
 
