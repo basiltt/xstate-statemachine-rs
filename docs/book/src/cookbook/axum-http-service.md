@@ -8,9 +8,9 @@ Expose statechart actors over HTTP using `xstate-axum` with REST event endpoints
 
 ```mermaid
 graph LR
-    Client[Web / Mobile Client] -->|POST /api/machines/{id}/events| Axum[Axum HTTP Router]
-    Client -->|GET /api/machines/{id}/stream (SSE)| Axum
-    Stately[Stately Studio Inspector] -->|WebSocket /live| Axum
+    Client[Web / Mobile Client] -->|"POST /api/machines/{id}/events"| Axum[Axum HTTP Router]
+    Client -->|"GET /api/machines/{id}/stream (SSE)"| Axum
+    Stately[Stately Studio Inspector] -->|"WebSocket /live"| Axum
     Axum --> TokioActor[xstate-tokio Actor Mailbox]
 ```
 

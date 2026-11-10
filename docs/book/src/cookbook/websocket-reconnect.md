@@ -7,7 +7,7 @@ A resilient WebSocket connection manager statechart with exponential backoff, ji
 ## 🎯 Statechart Topology
 
 ```mermaid
-statechart
+stateDiagram-v2
     [*] --> Disconnected
     Disconnected --> Connecting: CONNECT
     Connecting --> Connected: OPEN

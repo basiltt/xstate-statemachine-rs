@@ -7,7 +7,7 @@ Canary release statechart: ramp up percentage traffic safely with health checks 
 ## 🎯 Statechart Topology
 
 ```mermaid
-statechart
+stateDiagram-v2
     [*] --> Off
     Off --> InternalOnly: ENABLE_INTERNAL
     InternalOnly --> Canary10: RAMP_10

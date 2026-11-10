@@ -7,7 +7,7 @@ Idempotent Stripe webhook handling using `xstate-statemachine` and `xstate-persi
 ## 🎯 Statechart Topology
 
 ```mermaid
-statechart
+stateDiagram-v2
     [*] --> Pending
     Pending --> Validating: STRIPE_EVENT_RECEIVED
     Validating --> Paid: payment_intent.succeeded

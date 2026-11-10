@@ -14,27 +14,27 @@ Find the optimal combination for your architecture:
 flowchart TD
     W{Web Framework?}
     W -->|Axum| AX["Axum (xstate-axum)<br/>REST · SSE · WebSockets"]
-    W -->|Actix-web| AC["Actix-web<br/>web::Data · Actor Bridge"]
+    W -->|"Actix-web"| AC["Actix-web<br/>web::Data · Actor Bridge"]
     W -->|Tower| TW["Tower Service & Layer<br/>State Guard · Rate Limiter"]
-    W -->|None / CLI / Embedded| DB
+    W -->|"None / CLI / Embedded"| DB
 
     AX --> DB{Persistence?}
     AC --> DB
     TW --> DB
 
-    DB -->|SQLx (Async SQL)| SQLX["PostgreSQL · SQLite<br/>(xstate-persistence)"]
-    DB -->|SeaORM (Async ORM)| SEA["SeaORM ActiveModel<br/>Entity State Transitions"]
-    DB -->|Diesel (Sync ORM)| DIE["Diesel Compile-Time ORM<br/>ToSql / FromSql Mappings"]
+    DB -->|"SQLx (Async SQL)"| SQLX["PostgreSQL · SQLite<br/>(xstate-persistence)"]
+    DB -->|"SeaORM (Async ORM)"| SEA["SeaORM ActiveModel<br/>Entity State Transitions"]
+    DB -->|"Diesel (Sync ORM)"| DIE["Diesel Compile-Time ORM<br/>ToSql / FromSql Mappings"]
     DB -->|Redis| RD["Redis & Redis Streams<br/>Distributed Redlock"]
-    DB -->|In-Memory / None| EV
+    DB -->|"In-Memory / None"| EV
 
     SQLX --> EV{Event-Driven?}
     SEA --> EV
     DIE --> EV
     RD --> EV
 
-    EV -->|NATS / RabbitMQ / SQS| BRK["Message Brokers (xstate-eda)<br/>CloudEvents 1.0 · Outbox"]
-    EV -->|Internal Tokio Channels| TK["Tokio Actors & Workers<br/>Bounded Mailbox Backpressure"]
+    EV -->|"NATS / RabbitMQ / SQS"| BRK["Message Brokers (xstate-eda)<br/>CloudEvents 1.0 · Outbox"]
+    EV -->|"Internal Tokio Channels"| TK["Tokio Actors & Workers<br/>Bounded Mailbox Backpressure"]
 ```
 
 ---

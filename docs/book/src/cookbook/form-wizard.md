@@ -7,7 +7,7 @@ Manage multi-step forms, user onboarding, back/next navigation, step validation,
 ## 🎯 Statechart Topology
 
 ```mermaid
-statechart
+stateDiagram-v2
     [*] --> Step1_Profile
     Step1_Profile --> Step2_Preferences: NEXT [isProfileValid]
     Step2_Preferences --> Step1_Profile: BACK

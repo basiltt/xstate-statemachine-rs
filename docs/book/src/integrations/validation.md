@@ -10,10 +10,10 @@ This guide covers the Rust counterpart of Python's `pydantic` integration (`xsta
 
 ```mermaid
 flowchart LR
-    Event[Incoming Event: SUBMIT] --> Parse[Deserialize Payload]
-    Parse --> Validate{validator::Validate}
-    Validate -->|Valid| Guard[Guard passes -> Microstep transitions]
-    Validate -->|ValidationErrors| Reject[Return Validation Receipt / 422 Unprocessable]
+    Event["Incoming Event: SUBMIT"] --> Parse["Deserialize Payload"]
+    Parse --> Validate{"validator::Validate"}
+    Validate -->|Valid| Guard["Guard passes -> Microstep transitions"]
+    Validate -->|ValidationErrors| Reject["Return Validation Receipt / 422 Unprocessable"]
 ```
 
 In `xstate-statemachine`, validation can be applied at two levels:
