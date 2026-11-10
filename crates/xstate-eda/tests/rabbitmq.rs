@@ -556,7 +556,8 @@ mod sync_api {
         let reports = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         assert_eq!(reports.len(), 2);
         assert!(reports.iter().all(|(topic, _)| *topic == ns.topic));
-        assert_eq!(reports[0].1, "EnvelopeTooLargeError");
+        assert!(reports.iter().any(|(_, kind)| *kind == "EnvelopeTooLargeError"));
+        assert!(reports.iter().any(|(_, kind)| *kind == "EnvelopeCorruptError"));
     }
 
     #[test]
