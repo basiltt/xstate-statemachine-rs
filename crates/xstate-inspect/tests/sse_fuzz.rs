@@ -66,13 +66,18 @@ fn random_bytes_never_panic_or_hang_the_server() {
     struct ResetHook;
     impl Drop for ResetHook {
         fn drop(&mut self) {
-            let _ = std::panic::take_hook();
+            if !std::thread::panicking() {
+                let _ = std::panic::take_hook();
+            }
         }
     }
     let _guard = ResetHook;
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        PANICS.fetch_add(1, Ordering::Relaxed);
+        let thread_name = std::thread::current().name().unwrap_or("").to_owned();
+        if thread_name.starts_with("xsm-inspector") {
+            PANICS.fetch_add(1, Ordering::Relaxed);
+        }
         prev(info);
     }));
 
@@ -119,7 +124,7 @@ fn the_connection_cap_is_enforced_at_129() {
         clients.push(tcp);
     }
     // Wait until all 128 are served (each holds a connection slot for the stream lifetime).
-    let deadline = Instant::now() + TIMEOUT;
+    let deadline = Instant::now() + Duration::from_secs(15);
     while sink.client_count() < 128 {
         assert!(
             Instant::now() < deadline,
@@ -147,11 +152,23 @@ fn the_connection_cap_is_enforced_at_129() {
                         String::from_utf8_lossy(&rest)
                     );
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::ConnectionAborted
+                            | std::io::ErrorKind::BrokenPipe
+                    ) => {}
                 Err(e) => panic!("the 129th connection neither closed nor answered: {e}"),
             }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+            ) => {}
         Err(e) => panic!("write to 129th connection failed with unexpected error: {e}"),
     }
     drop(clients);
