@@ -11,6 +11,14 @@ raised only in a minor release.
 
 ### Added
 
+- Production Resilience & Concurrency Plugins Suite (`xstate-patterns::plugins` and `xstate_statemachine::plugins`):
+  - **`IdempotencyPlugin`**: Thread-safe in-memory LRU and store-backed idempotency cache; eliminates webhook replay races (e.g. Stripe/GitHub) and concurrent duplicate charges with RAII `IdempotencyGuard` and cached receipt returns.
+  - **`DrainPlugin`**: Coordinates graceful shutdown across Tokio microservices; tracks in-flight statechart operations with `DrainPermit`, provides `wait_drained` quiescence barrier, and cleanly isolates actor teardown from database pool drops.
+  - **`WatchdogPlugin`**: Eliminates silent async task hangs and deadlocks; enforces per-state SLA timeouts and emits automated fallback recovery events (`"xstate.watchdog.timeout"`).
+  - **`SequenceFencePlugin`**: Monotonic sequence guard for Kafka, RabbitMQ, and Redis Streams; drops stale out-of-order replayed packets (`seq <= last_seq`) and detects stream gaps via atomic CAS.
+  - **`RateLimiterPlugin`**: High-throughput token-bucket rate limiter with sub-10ns atomic token updates and zero heap allocations on the fast path; protects downstream APIs from traffic bursts.
+  - **`DiagnosticPlugin`**: Circular ring-buffer flight recorder capturing the last N transitions, leaf states, and actions for production post-mortem debugging.
+
 - First-class Plugin / Observer architecture (`xstate-core` and `xstate-statemachine`):
   - Added `Plugin<C>` trait alias for `Observer<C>` and `interp.plugin(Arc::new(...))` on `SyncInterpreter`.
   - Added `xstate_statemachine::plugins` module exposing `Observer`, `Plugin`, `TracingPlugin`, `MetricsPlugin`, `InspectorPlugin`, `AuditLogPlugin`, and `BudgetPlugin`.

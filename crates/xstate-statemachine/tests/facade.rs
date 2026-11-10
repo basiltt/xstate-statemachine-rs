@@ -29,6 +29,33 @@ fn plugins_module_exposes_observer_and_tracing() {
     let _plugin: std::sync::Arc<Plugin<serde_json::Value>> = std::sync::Arc::new(tracing);
 }
 
+#[cfg(feature = "patterns")]
+#[test]
+fn patterns_feature_exposes_production_resilience_plugins() {
+    use xstate_statemachine::plugins::{
+        DiagnosticPlugin, DrainPlugin, IdempotencyPlugin, RateLimiterPlugin, SequenceFencePlugin,
+        WatchdogPlugin,
+    };
+
+    let idempotency = IdempotencyPlugin::<serde_json::Value>::new(100);
+    assert_eq!(idempotency.check("tx-1"), xstate_statemachine::plugins::IdempotencyStatus::New);
+
+    let drain = DrainPlugin::<serde_json::Value>::new();
+    assert!(!drain.is_draining());
+
+    let watchdog = WatchdogPlugin::<serde_json::Value>::new(None);
+    assert_eq!(watchdog.alerts_triggered(), 0);
+
+    let sequence = SequenceFencePlugin::<serde_json::Value>::new(0);
+    assert_eq!(sequence.current_sequence(), 0);
+
+    let limiter = RateLimiterPlugin::<serde_json::Value>::new(10.0, 1.0);
+    assert!(limiter.try_acquire(1.0));
+
+    let diagnostic = DiagnosticPlugin::<serde_json::Value>::new(10);
+    assert_eq!(diagnostic.timeline().len(), 0);
+}
+
 #[test]
 fn core_module_is_the_engine_crate() {
     let machine: xstate_statemachine::core::Machine =

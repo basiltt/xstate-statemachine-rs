@@ -188,6 +188,14 @@ pub mod plugins {
 
     #[cfg(feature = "agents")]
     pub use xstate_agents::BudgetPlugin;
+
+    #[cfg(feature = "patterns")]
+    pub use xstate_patterns::{
+        DiagnosticPlugin, DrainPermit, DrainPlugin, DrainingError, FenceOutcome, FlightStep,
+        IdempotencyGuard, IdempotencyPlugin, IdempotencyRecord, IdempotencyStatus,
+        RateLimiterPlugin, SequenceFencePlugin, WATCHDOG_TIMEOUT_EVENT, WatchdogAlert,
+        WatchdogPlugin,
+    };
 }
 
 /// The everyday items. `use xstate_statemachine::prelude::*;` is enough for most programs.
@@ -223,6 +231,12 @@ pub mod prelude {
 
     #[cfg(feature = "agents")]
     pub use xstate_agents::BudgetPlugin;
+
+    #[cfg(feature = "patterns")]
+    pub use xstate_patterns::{
+        DiagnosticPlugin, DrainPlugin, IdempotencyPlugin, RateLimiterPlugin, SequenceFencePlugin,
+        WatchdogPlugin,
+    };
 
     // The derives live in the macro namespace, the traits above in the type namespace, so the
     // same names serve both (the way `serde::Serialize` does).

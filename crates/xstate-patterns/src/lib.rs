@@ -29,6 +29,7 @@
 pub mod choreography;
 pub mod circuit_breaker;
 mod ctx;
+pub mod plugins;
 pub mod retry;
 pub mod saga;
 
@@ -39,6 +40,11 @@ pub use circuit_breaker::{
     AdmitError, CIRCUIT_BREAKER_CONFIG, CallError, CircuitBreaker, CircuitBreakerBuilder,
     CircuitBreakerError, CircuitOpenError, CircuitState, Permit, circuit_breaker_config,
     circuit_breaker_logic, wrap,
+};
+pub use plugins::{
+    DiagnosticPlugin, DrainPermit, DrainPlugin, DrainingError, FenceOutcome, FlightStep,
+    IdempotencyGuard, IdempotencyPlugin, IdempotencyRecord, IdempotencyStatus, RateLimiterPlugin,
+    SequenceFencePlugin, WATCHDOG_TIMEOUT_EVENT, WatchdogAlert, WatchdogPlugin,
 };
 pub use retry::{JitterMode, RetryError, RetryPolicy};
 pub use saga::{SagaBuilder, SagaError, SagaStep};

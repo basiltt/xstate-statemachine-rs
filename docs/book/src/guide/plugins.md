@@ -214,6 +214,197 @@ interp.start()?;
 
 ---
 
+## 🛡️ Production Resilience & Concurrency Plugins (`features = ["patterns"]`)
+
+These plugins directly solve the most acute distributed systems challenges faced by Rust developers, replacing fragile ad-hoc workarounds with battle-tested statechart lifecycle guards:
+
+| Plugin | Real-World Problem Solved | What It Gives You |
+|:---|:---|:---|
+| **[`IdempotencyPlugin`]** | Webhook replays & concurrent duplicate races | LRU deduplication cache, in-flight reservation guards, and cached receipts |
+| **[`DrainPlugin`]** | The infamous Tokio graceful shutdown race | In-flight request counting, drain barrier (`wait_drained`), and clean teardown |
+| **[`WatchdogPlugin`]** | Hung async tasks, deadlocks & SLA breaches | Per-state SLA duration monitoring and automated fallback recovery events |
+| **[`SequenceFencePlugin`]** | Out-of-order Kafka/RabbitMQ/Redis messaging | Strict monotonic sequence ordering and gap detection |
+| **[`RateLimiterPlugin`]** | Downstream API cascades & traffic spikes | High-throughput token-bucket rate limiting with zero heap allocations |
+| **[`DiagnosticPlugin`]** | 3 AM production debugging nightmares | Ring-buffer flight recorder capturing the last N transitions for instant post-mortems |
+
+---
+
+### 1. `IdempotencyPlugin` (Webhook Deduplication & In-Flight Race Prevention)
+
+Webhooks (Stripe, GitHub, Shopify) and network retries frequently resend events with identical keys. If two requests hit concurrently, both might check the database, both see "not processed yet", and both execute the side-effect (e.g. duplicate credit card charges).
+
+`IdempotencyPlugin` solves this with an in-memory or persistent LRU cache that detects **new**, **in-flight**, and **completed** operations:
+
+```rust
+use std::sync::Arc;
+use xstate_statemachine::prelude::*;
+use xstate_statemachine::plugins::{IdempotencyPlugin, IdempotencyStatus};
+
+let idempotency = Arc::new(IdempotencyPlugin::<serde_json::Value>::new(10_000));
+
+// In your web request handler (Axum / Actix):
+match idempotency.admit("tx_stripe_9872") {
+    Ok(guard) => {
+        // First time seeing this key: execute transition
+        interp.send(Event::new("PROCESS_PAYMENT"))?;
+        guard.commit("PROCESS_PAYMENT", interp.state_ids(), true);
+    }
+    Err(IdempotencyStatus::InFlight) => {
+        // Another thread is processing this exact key right now!
+        return Err("Concurrent request in-flight; retry shortly");
+    }
+    Err(IdempotencyStatus::Duplicate(cached)) => {
+        // Already completed: return cached receipt without re-executing!
+        println!("Returning cached receipt from {:?}", cached.processed_at);
+    }
+}
+```
+
+---
+
+### 2. `DrainPlugin` (Tokio Graceful Shutdown & Teardown Coordination)
+
+Graceful shutdown in Tokio microservices is notoriously difficult. When receiving `SIGTERM`, an application must stop accepting new ingress events while allowing all active, in-flight statechart transactions and background effects to settle before dropping database pools.
+
+`DrainPlugin` models this teardown lifecycle directly on the statechart with zero runtime overhead:
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+use xstate_statemachine::prelude::*;
+use xstate_statemachine::plugins::DrainPlugin;
+
+let drain = Arc::new(DrainPlugin::<serde_json::Value>::new());
+
+// 1. Ingress handler acquires an in-flight permit
+let permit = drain.acquire().map_err(|_| "Service is draining; HTTP 503")?;
+interp.send(Event::new("SUBMIT_ORDER"))?;
+drop(permit); // In-flight counter decremented
+
+// 2. On SIGTERM / Ctrl+C signal:
+drain.initiate_drain(); // All new permit requests immediately fail with HTTP 503
+
+// 3. Wait for all in-flight work to reach quiescence (0 active operations)
+if drain.wait_drained(Duration::from_secs(30)) {
+    println!("✅ All statecharts drained cleanly. Safe to shut down database pool.");
+} else {
+    eprintln!("⚠️ Drain timed out after 30s. Forcing exit.");
+}
+```
+
+---
+
+### 3. `WatchdogPlugin` (Hung Async Tasks, Deadlocks & SLA Enforcer)
+
+In Tokio actors and worker loops, async tasks can silently hang indefinitely when an external HTTP request lacks a timeout, a database lock deadlocks, or a channel never sends.
+
+`WatchdogPlugin` tracks time spent in active states. If an active state exceeds its configured SLA deadline, it triggers an alert and generates an automated fallback recovery event (`"xstate.watchdog.timeout"`):
+
+```rust
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use xstate_statemachine::prelude::*;
+use xstate_statemachine::plugins::WatchdogPlugin;
+
+let watchdog = Arc::new(WatchdogPlugin::<serde_json::Value>::new(Some(Duration::from_secs(60)))
+    .with_state_timeout("processing_payment", Duration::from_secs(10))
+    .with_alert_handler(|alert| {
+        eprintln!("🚨 ALERT: State {:?} on machine '{}' stalled for {:?}",
+            alert.active_states, alert.machine_id, alert.elapsed);
+    }));
+
+interp.plugin(watchdog.clone());
+
+// Check periodically in actor loop:
+if let Some(_alert) = watchdog.check(Instant::now()) {
+    // Inject fallback event to transition to error/refund state
+    interp.send(watchdog.make_recovery_event())?;
+}
+```
+
+---
+
+### 4. `SequenceFencePlugin` (Monotonic Event Ordering in Kafka & Redis)
+
+In distributed streaming architectures (Kafka partitions, RabbitMQ retries, Redis Streams), network retransmissions and consumer rebalances often deliver events out of order.
+
+`SequenceFencePlugin` uses atomic CAS operations on the fast path to guarantee that statecharts only process strictly monotonically increasing sequence IDs (`seq > last_seq`):
+
+```rust
+use std::sync::Arc;
+use xstate_statemachine::prelude::*;
+use xstate_statemachine::plugins::{SequenceFencePlugin, FenceOutcome};
+
+let fence = Arc::new(SequenceFencePlugin::<serde_json::Value>::new(0));
+
+let incoming_kafka_offset = 1042;
+match fence.evaluate(incoming_kafka_offset) {
+    FenceOutcome::Accepted { seq } => {
+        interp.send(Event::new("PROCESS_UPDATE"))?;
+    }
+    FenceOutcome::Stale { received, current } => {
+        println!("⚠️ Stale replayed event dropped: seq {received} <= current {current}");
+    }
+    FenceOutcome::Gap { received, expected } => {
+        println!("⚠️ Sequence gap detected: received {received}, expected {expected}");
+    }
+}
+```
+
+---
+
+### 5. `RateLimiterPlugin` (Adaptive Token-Bucket Throttling)
+
+Protects statecharts and downstream third-party APIs (Stripe, OpenAI, external payment gateways) against burst floods with sub-10ns atomic token updates and zero heap allocations on the fast path:
+
+```rust
+use std::sync::Arc;
+use xstate_statemachine::prelude::*;
+use xstate_statemachine::plugins::RateLimiterPlugin;
+
+// Allow burst capacity of 100 events, refilling at 10 events/sec
+let limiter = Arc::new(RateLimiterPlugin::<serde_json::Value>::new(100.0, 10.0));
+
+if limiter.try_acquire(1.0) {
+    interp.send(Event::new("EXECUTE_TRADE"))?;
+} else {
+    println!("Throttled! Remaining tokens: {:.2}", limiter.available_tokens());
+}
+```
+
+---
+
+### 6. `DiagnosticPlugin` (Production Flight Recorder Ring Buffer)
+
+When an unhandled error occurs in production at 3 AM, standard logging either produces too little context or floods log collectors with gigabytes of spam.
+
+`DiagnosticPlugin` maintains an in-memory circular ring buffer of the last N transitions, generating an instant, formatted incident post-mortem report ready for Sentry or logs:
+
+```rust
+use std::sync::Arc;
+use xstate_statemachine::prelude::*;
+use xstate_statemachine::plugins::DiagnosticPlugin;
+
+let flight_recorder = Arc::new(DiagnosticPlugin::<serde_json::Value>::new(50));
+interp.plugin(flight_recorder.clone());
+
+// On unexpected error or panic:
+eprintln!("{}", flight_recorder.format_report("order_machine"));
+```
+
+Output:
+```text
+=== STATECHART FLIGHT RECORDER: order_machine ===
+🚨 LAST ERROR: payment_gateway_timeout
+📜 RECENT TRANSITIONS (3 steps):
+  [01] Event: SUBMIT_CART     -> States: ["validating"] (changed: true, actions: [validate_cart])
+  [02] Event: CART_VALIDATED  -> States: ["processing_payment"] (changed: true, actions: [charge_card])
+  [03] Event: PAYMENT_FAILED  -> States: ["failed"] (changed: true, actions: [notify_user])
+==============================================
+```
+
+---
+
 ## 🛠️ Writing a Custom Plugin: Step-by-Step
 
 Here is a complete, production-grade example of an **Audit Trail & Latency Monitor Plugin** that records transition history, timing, and unhandled event alerts:

@@ -318,6 +318,13 @@ flowchart LR
 ```
 
 * **[Plugins & Observability Guide](https://basiltt.github.io/xstate-statemachine-rs/guide/plugins.html):** Zero-allocation lifecycle hooks (`on_start`, `on_event`, `on_event_dropped`, `on_error`, `on_stop`), credential redaction, and custom plugin authoring.
+* **Production Resilience Plugins (`features = ["patterns"]`):** Turnkey solutions for acute Rust distributed challenges:
+  * 🔒 `IdempotencyPlugin`: Webhook deduplication, in-flight race prevention, and cached receipts.
+  * 🛑 `DrainPlugin`: Tokio graceful shutdown coordination, in-flight permit counting, and `wait_drained` barrier.
+  * ⏱️ `WatchdogPlugin`: Hung async task and deadlock detector with per-state SLA timeouts and fallback events.
+  * 🔢 `SequenceFencePlugin`: Monotonic event ordering and gap detection for Kafka/RabbitMQ/Redis streams.
+  * 🚰 `RateLimiterPlugin`: High-throughput token-bucket rate limiter with sub-10ns atomic updates.
+  * ✈️ `DiagnosticPlugin`: Circular ring-buffer flight recorder capturing the last N transitions for instant 3 AM post-mortems.
 * **[Ecosystem Integrations Matrix](https://basiltt.github.io/xstate-statemachine-rs/integrations/index.html):** Complete runnable guides and patterns for **Axum**, **Actix-web**, **Tower**, **SQLx**, **SeaORM**, **Diesel**, **Redis**, **NATS**, **RabbitMQ**, **AWS SQS**, **Tracing**, **Validator**, and **Tokio Workers**.
 
 ---
