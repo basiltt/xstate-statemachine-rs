@@ -67,31 +67,24 @@ foreach ($crate in $crates) {
     $published = $false
     while (-not $published) {
         Write-Host "`n==> Publishing $crate $version..." -ForegroundColor Cyan
-        $publishOutput = & cargo @publishArgs 2>&1
-        $outputText = $publishOutput -join "`n"
-        Write-Host $outputText
+        
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & cargo @publishArgs
+        $code = $LASTEXITCODE
+        $ErrorActionPreference = $prevEAP
 
-        if ($LASTEXITCODE -eq 0) {
+        if ($code -eq 0) {
             $published = $true
         } else {
-            if ($outputText -match 'try again after (.* GMT)') {
-                $targetTimeStr = $matches[1]
-                try {
-                    $targetTime = [DateTime]::Parse($targetTimeStr).ToUniversalTime()
-                    $secondsToWait = [Math]::Max(10, [int]($targetTime - [DateTime]::UtcNow).TotalSeconds + 5)
-                    Write-Host "`ncrates.io new-crate rate limit reached." -ForegroundColor Yellow
-                    Write-Host "Auto-resuming in $secondsToWait seconds (at $targetTimeStr)..." -ForegroundColor Yellow
-                    Start-Sleep -Seconds $secondsToWait
-                    continue
-                } catch {
-                    Write-Host "`ncrates.io rate limit reached. Waiting 600 seconds..." -ForegroundColor Yellow
-                    Start-Sleep -Seconds 600
-                    continue
-                }
-            } else {
-                Write-Error "Failed to publish $crate"
-                exit 1
+            if (Test-CratePublished $crate $version) {
+                $published = $true
+                break
             }
+            Write-Host "`nPublish attempt failed for $crate (exit code $code)." -ForegroundColor Yellow
+            Write-Host "If crates.io new-crate rate limit (429) was hit, waiting 5 minutes to auto-retry..." -ForegroundColor Yellow
+            Write-Host "Press Ctrl+C to abort if this is an unexpected failure." -ForegroundColor Gray
+            Start-Sleep -Seconds 300
         }
     }
 
