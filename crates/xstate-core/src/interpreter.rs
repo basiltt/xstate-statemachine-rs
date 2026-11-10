@@ -319,11 +319,11 @@ impl<C: Context> SyncInterpreter<C> {
     /// In steady-state operation—where no internal events are queued, no timers are pending,
     /// no observers are attached, and no deferred events are parked—this method bypasses the
     /// [`Receipt`] allocation, leaf calculation, and `Arc<Machine>` clone overhead of [`send`](Self::send).
-    /// It directly drives the sans-I/O step engine via [`engine::step_into`].
+    /// It directly drives the sans-I/O step engine via `engine::step_into`.
     ///
     /// If user actions produce effects (such as `raise`, `assign`, or actor spawns) or the event
     /// is unhandled and requires policy escalation, execution transparently falls back to the full
-    /// handler pipeline ([`apply_effects`](Self::apply_effects) and [`after_step`](Self::after_step)).
+    /// handler pipeline (`apply_effects` and `after_step`).
     ///
     /// # Errors
     /// Returns [`Error::InvalidEvent`] if the event type is empty, [`Error::InvalidLifecycle`] if
