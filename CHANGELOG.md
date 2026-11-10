@@ -56,8 +56,13 @@ raised only in a minor release.
   distributed e-commerce saga with automated compensation rollbacks, durable SQLite/PostgreSQL persistence
   with crash recovery, transactional outbox CloudEvents messaging over brokers, Axum HTTP service with live
   Stately Studio inspection, and LLM agent tool-calling loops with budget guardrails and human approval.
-- Top-level `README.md` redesigned with hero SVG visuals, mobile responsive presentation, complete competitor
-  matrix, verified nanosecond benchmarks (S1–S8), and visual Stately statechart diagrams.
+- Top-level `README.md` completely overhauled with developer psychology, trust signals, and clear onboarding:
+  - Addressed the real-world "Rust Enum Trap" (boolean flag soup, silent state corruption, combinatoric explosion).
+  - 60-second frictionless quickstart with compile-time checked `statechart!` macro, dynamic JSON, and Tokio actors.
+  - Showcase for the 6 production resilience plugins (`IdempotencyPlugin`, `DrainPlugin`, `WatchdogPlugin`, `SequenceFencePlugin`, `RateLimiterPlugin`, `DiagnosticPlugin`).
+  - Interactive Stately Studio visual two-way workflow links and visual diagrams.
+  - Comprehensive ecosystem integration matrix across Axum, SQLx, Redis, NATS, Tracing, and Prometheus.
+  - Sub-microsecond Criterion benchmark table (106 ns p50) and zero-allocation explanation.
 - Redesigned GitHub Pages documentation site with premium dark OLED (`#05050A`) Stately design system:
   - Sticky glass top navigation with logo, version badge, navigation links, `Ctrl+K` search modal, and dark/light theme toggle.
   - High-impact landing page with ambient glowing aurora gradients, release pill, live animated SVG state machine frame (`order.machine.json`), 12-card bento grid, 4-way code showcase tabs, and Criterion benchmark table.
