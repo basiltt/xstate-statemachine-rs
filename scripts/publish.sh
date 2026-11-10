@@ -69,18 +69,31 @@ if [ "$mode" = "dry-run" ]; then
   exit 0
 fi
 
-: "${CARGO_REGISTRY_TOKEN:?CARGO_REGISTRY_TOKEN must be set for --execute}"
-
 is_published() { # crate, version
   [ "$(curl -s -o /dev/null -w '%{http_code}' -A 'xstate-statemachine-release' \
     "https://crates.io/api/v1/crates/$1/$2")" = "200" ]
 }
 
+needed=()
 for crate in "${crates[@]}"; do
   if is_published "$crate" "$version"; then
     echo "$crate $version is already on crates.io, skipping"
-    continue
+  else
+    needed+=("$crate")
   fi
+done
+
+if [ "${#needed[@]}" -eq 0 ]; then
+  echo "All ${#crates[@]} crates are already published on crates.io at $version."
+  exit 0
+fi
+
+if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+  echo "publish.sh: CARGO_REGISTRY_TOKEN must be set for --execute to publish: ${needed[*]}" >&2
+  exit 1
+fi
+
+for crate in "${needed[@]}"; do
   echo "publishing $crate $version"
   cargo publish --locked -p "$crate" ${extra[@]+"${extra[@]}"}
   for _ in $(seq 1 30); do
@@ -92,4 +105,4 @@ for crate in "${crates[@]}"; do
     exit 1
   fi
 done
-echo "published ${#crates[@]} crates at $version"
+echo "published ${#needed[@]} crates at $version"
