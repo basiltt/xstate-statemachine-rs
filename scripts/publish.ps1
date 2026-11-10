@@ -61,14 +61,38 @@ foreach ($crate in $crates) {
         continue
     }
 
-    Write-Host "`n==> Publishing $crate $version..." -ForegroundColor Cyan
     $publishArgs = @("publish", "--locked", "-p", $crate)
     if ($AllowDirty) { $publishArgs += "--allow-dirty" }
-    
-    & cargo @publishArgs
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Failed to publish $crate"
-        exit 1
+
+    $published = $false
+    while (-not $published) {
+        Write-Host "`n==> Publishing $crate $version..." -ForegroundColor Cyan
+        $publishOutput = & cargo @publishArgs 2>&1
+        $outputText = $publishOutput -join "`n"
+        Write-Host $outputText
+
+        if ($LASTEXITCODE -eq 0) {
+            $published = $true
+        } else {
+            if ($outputText -match 'try again after (.* GMT)') {
+                $targetTimeStr = $matches[1]
+                try {
+                    $targetTime = [DateTime]::Parse($targetTimeStr).ToUniversalTime()
+                    $secondsToWait = [Math]::Max(10, [int]($targetTime - [DateTime]::UtcNow).TotalSeconds + 5)
+                    Write-Host "`ncrates.io new-crate rate limit reached." -ForegroundColor Yellow
+                    Write-Host "Auto-resuming in $secondsToWait seconds (at $targetTimeStr)..." -ForegroundColor Yellow
+                    Start-Sleep -Seconds $secondsToWait
+                    continue
+                } catch {
+                    Write-Host "`ncrates.io rate limit reached. Waiting 600 seconds..." -ForegroundColor Yellow
+                    Start-Sleep -Seconds 600
+                    continue
+                }
+            } else {
+                Write-Error "Failed to publish $crate"
+                exit 1
+            }
+        }
     }
 
     Write-Host "Waiting for $crate $version to appear in crates.io index..." -ForegroundColor Gray
