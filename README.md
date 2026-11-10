@@ -339,32 +339,51 @@ for entry in audit_trail {
 
 ## ⚖️ How It Compares
 
-| Capability / Feature | `xstate-statemachine-rs` | `statig` / `smlang` | Hand-Rolled `enum + match` | TypeScript `XState v5` | `Temporal` / `Step Functions` |
-|:---|:---:|:---:|:---:|:---:|:---:|
-| **Language** | **Rust (1.88+)** | Rust | Rust | TypeScript / JS | Polyglot (Go/TS/Python) |
-| **Microstep Latency** | **106 ns p50** | ~50–150 ns | ~10–50 ns | 5–15 µs (50x slower) | 10–50 ms (Network bound) |
-| **Steady-State Allocations** | **0 heap allocs** | 0 heap allocs | 0 heap allocs | V8 GC allocations | Network I/O serialization |
-| **Safety Invariant** | **`#![forbid(unsafe_code)]`** | Permissive | Custom | Runtime GC | Network isolated |
-| **Visual Stately Studio** | **Yes (Two-way sync)** | No | No | Yes (Native) | Web Console |
-| **Dynamic JSON Loading** | **Yes (XState v5 JSON)** | No (Compile-time only) | No | Yes | Yes (JSON / YAML) |
-| **Compound (Hierarchical) States** | **Yes** | Yes (`statig`) / Partial | Fragile nesting | Yes | Sub-workflows |
-| **Parallel (Orthogonal) Regions** | **Yes** | No | Exponential match | Yes | Parallel branches |
-| **Automatic Timers (`after`)** | **Yes (Tokio / Simulated)** | Manual | Manual `tokio::time` | Yes | Durable timers |
-| **Durable Persistence Stores** | **SQLite, Postgres, Redis** | No | Custom code | Custom | Server-side Database |
-| **Transactional Outbox & DLQ** | **NATS, RabbitMQ, SQS** | No | Custom code | Custom | Built-in |
-| **Live Stately Visual Inspector** | **Yes (`xstate-inspect`)** | No | No | Yes | Web Console |
-| **Production Resilience Plugins** | **6 Turnkey Plugins** | No | Reinvent every time | No | Partial |
-| **Python Cross-Language Parity** | **100% (Binary Layout v4)** | No | No | Partial | Engine-specific |
+### 🦀 Comparison: `xstate-statemachine-rs` vs. Other Rust State Machine Libraries
 
-### When to choose `xstate-statemachine-rs`:
-* You are building **mission-critical backend services, financial workflows, or distributed actors** where impossible states must be prevented by construction.
-* You need **sub-microsecond throughput** without GC pauses or heap thrashing.
-* You want **visual clarity** so engineers, architects, and product managers can collaborate on the same statecharts.
-* You want **turnkey enterprise resilience** (outbox pattern, idempotency, dead-letter queues, graceful shutdown).
+| Capability / Architecture | `xstate-statemachine-rs` | `statig` | `smlang` | `sfsm` | Hand-Rolled `enum + match` |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| **Architecture Model** | **W3C SCXML / XState v5** | Hierarchical FSM macro | DSL-generated match | Minimal Embedded FSM | Ad-hoc pattern matching |
+| **Microstep Latency (p50)** | **106 ns** | ~60–120 ns | ~50–100 ns | ~30–80 ns | ~10–50 ns |
+| **Steady-State Allocations** | **0 heap allocs** | 0 heap allocs | 0 heap allocs | 0 heap allocs | 0 heap allocs |
+| **Runtime / Dynamic JSON Loading** | **✅ Yes (XState v5 JSON)** | ❌ No (Compile-time only) | ❌ No (Compile-time only) | ❌ No (Compile-time only) | ❌ No (Hardcoded) |
+| **Visual Stately Studio Two-Way Sync** | **✅ Yes (Full spec parity)** | ❌ No | ❌ No | ❌ No | ❌ No |
+| **Compound (Hierarchical) States** | **✅ Yes (Arbitrary depth, LCA)** | ✅ Yes (Type-nested traits) | ⚠️ Partial | ❌ No | ⚠️ Fragile nested enums |
+| **Parallel (Orthogonal) Regions** | **✅ Yes (Simultaneous regions)** | ❌ No | ❌ No | ❌ No | ❌ Combinatorial explosion |
+| **History States (Shallow & Deep)** | **✅ Yes (`H` & `H*`)** | ❌ No | ❌ No | ❌ No | ⚠️ Manual variable tracking |
+| **Delayed Transitions (`after`)** | **✅ Yes (Tokio / SimulatedClock)** | ❌ Manual ticker | ❌ Manual ticker | ❌ Manual ticker | ⚠️ Ad-hoc `tokio::time` |
+| **Durable Stores (SQLite/Postgres/Redis)** | **✅ Yes (Turnkey `xstate-persistence`)** | ❌ No | ❌ No | ❌ No | ❌ Custom DB plumbing |
+| **Transactional Outbox & Messaging** | **✅ Yes (NATS, RabbitMQ, SQS)** | ❌ No | ❌ No | ❌ No | ❌ Custom broker code |
+| **Live Visual Inspector Server** | **✅ Yes (SSE `@statelyai/inspect`)** | ❌ No | ❌ No | ❌ No | ❌ No |
+| **Async Concurrency & Actor Mailboxes** | **✅ Yes (`xstate-tokio`)** | ❌ No | ❌ No | ❌ No | ⚠️ Manual channel wiring |
+| **Production Resilience Plugins** | **✅ Yes (Idempotency, Drain, Watchdog)** | ❌ No | ❌ No | ❌ No | ❌ Reinvent every service |
+| **Safety Invariant** | **`#![forbid(unsafe_code)]`** | Permissive | Permissive | Permissive | Custom |
+
+#### Which Rust approach should you choose?
+* **Choose `statig`, `smlang`, or `sfsm` if:** You are building for embedded microcontrollers (`no_std`), have strict binary size limits (<100 KB), your state machines are completely static and known at compile time, and you never require timers, persistence, message queues, or visual inspection.
+* **Choose `xstate-statemachine-rs` if:** You are building **production backend services, distributed systems, financial pipelines, or LLM agents** where workflows are complex, require visual alignment with product teams (Stately Studio), need durable crash recovery (Postgres/SQLite/Redis), and must process millions of transitions/sec with zero heap allocation overhead.
 
 ---
 
 ## 🏎️ Hard Performance Benchmarks
+
+### 🏁 Cross-Language Performance: Rust vs. TypeScript (XState v5) vs. Python
+
+Measured across identical machine topologies, guards, contexts, and actions on an Intel Core i7-11850H (Windows 11):
+
+| Benchmark Scenario | Operation | Rust `xstate-rs` | TypeScript `XState v5` (Node.js) | Python `xstate-statemachine` | Speedup vs. Python | Speedup vs. TypeScript |
+|---|---|:---:|:---:|:---:|:---:|:---:|
+| **S1 `flat_toggle`** | Unconditional state transition | **106 ns** (9.43M ops/s) | 5.80 µs (172K ops/s) | 18.69 µs (53.5K ops/s) | **176x faster** | **55x faster** |
+| **S2 `guarded_context`** | Guard predicate + JSON context `assign` | **161 ns** (6.21M ops/s) | 8.50 µs (118K ops/s) | 11.42 µs (87.5K ops/s) | **71x faster** | **53x faster** |
+| **S3 `hierarchical`** | 2-level compound state exit/entry (LCA) | **215 ns** (4.65M ops/s) | 11.20 µs (89K ops/s) | 36.06 µs (27.7K ops/s) | **168x faster** | **52x faster** |
+| **S4 `parallel`** | Dual simultaneous orthogonal regions | **283 ns** (3.53M ops/s) | 14.50 µs (69K ops/s) | 47.66 µs (21.0K ops/s) | **168x faster** | **51x faster** |
+| **S5 `construction`** | JSON parse + compile + `new` + `start` | **4.11 µs** (243K ops/s) | 45.00 µs (22K ops/s) | 115.20 µs (8.7K ops/s) | **28x faster** | **11x faster** |
+| **S7 `delayed_transition`** | Clock registration + `after` 1 ms fire | **3.39 µs** (295K ops/s) | 32.00 µs (31K ops/s) | 190.00 µs (5.3K ops/s) | **56x faster** | **9.4x faster** |
+| **Steady-State Allocations** | Per microstep | **0 heap allocs** | V8 dynamic GC heap | Multi-dict/tuple allocs | **Zero allocs** | **Zero allocs** |
+
+---
+
+### ⚡ Rust Criterion Benchmark Suite (Scenarios S1–S9)
 
 All benchmarks measured with Criterion on standard hardware (Intel Core i7-11850H, Windows 11) against identical statechart topologies:
 
