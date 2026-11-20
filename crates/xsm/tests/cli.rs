@@ -725,3 +725,50 @@ fn validate_json_surfaces_the_engine_error_for_an_invalid_state_type_with_its_pa
     assert!(finding["path"].as_str().unwrap().contains('a'), "{finding}");
     assert!(finding["message"].as_str().unwrap().contains("sideways"), "{finding}");
 }
+
+// ------------------------------------------------------------------------------------- codegen
+
+#[test]
+fn codegen_prints_rust_code_to_stdout() {
+    xsm()
+        .arg("codegen")
+        .arg(fixture("toggle.json"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("enum ToggleState"))
+        .stdout(predicate::str::contains("enum ToggleEvent"))
+        .stdout(predicate::str::contains("struct ToggleMachine"))
+        .stdout(predicate::str::contains("impl xstate_core::fsm::Fsm for ToggleMachine"));
+}
+
+#[test]
+fn codegen_writes_to_output_file_and_checks_drift() {
+    let dir = tempfile::tempdir().unwrap();
+    let out_file = dir.path().join("toggle.rs");
+
+    // 1. Generate to file
+    xsm().args(["codegen", "-o"]).arg(&out_file).arg(fixture("toggle.json")).assert().success();
+
+    assert!(out_file.exists());
+    let content = std::fs::read_to_string(&out_file).unwrap();
+    assert!(content.contains("enum ToggleState"));
+
+    // 2. Check matches
+    xsm()
+        .args(["codegen", "--check", "-o"])
+        .arg(&out_file)
+        .arg(fixture("toggle.json"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("up-to-date"));
+
+    // 3. Mutate file -> check fails with code 1
+    std::fs::write(&out_file, "// drift introduced").unwrap();
+    xsm()
+        .args(["codegen", "--check", "-o"])
+        .arg(&out_file)
+        .arg(fixture("toggle.json"))
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("Drift detected"));
+}

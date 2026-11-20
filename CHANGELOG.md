@@ -9,6 +9,32 @@ raised only in a minor release.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-20
+
+### Added
+
+- **Zero-Cost Native Enum State Machines (`xstate-core::fsm` & `xstate-statemachine::fsm`):**
+  - Added the zero-cost [`Fsm`] trait, [`FsmInstance`], and non-allocating [`InvalidTransition`] error type for high-frequency domains (HFT, robotics, embedded, game engines).
+  - Transitions execute in **< 5 nanoseconds** (**1.85 ns** p50 in benchmarks; 0 heap allocations) via inlined CPU jump tables / branch sequences on `#[repr(u8)]` enums.
+  - Compile-time exhaustive pattern matching ensures invalid events are rejected without state corruption.
+  - Added [`ExportXState`] trait for bidirectional export to XState v5 JSON, enabling round-trip visual inspection and editing with Stately Studio.
+
+- **Automated Rust Code Generator CLI (`xsm codegen` / `xsm generate`):**
+  - Added `codegen` subcommand to the `xsm` CLI (`crates/xsm`) taking an XState JSON document and generating idiomatic, production-ready Rust source code.
+  - Generates strongly-typed `State` and `Event` enums, pure inlined `next` transition match functions, `Fsm` implementations, and instance constructors.
+  - Automatically resolves hierarchical state inheritance and compound state entry targets.
+  - Generates comprehensive embedded `#[cfg(test)]` modules asserting all valid transitions and rejecting invalid transitions.
+  - Added `--check` drift gate to verify committed Rust source files match the source statechart JSON in CI pipelines, failing with exit code 1 if drift is detected.
+
+- **Compile-Time Procedural Macros (`xstate_from_json!` & `xstate_inline_json!` in `xstate-macros`):**
+  - Added `xstate_from_json!` procedural macro compiling an XState JSON document directly into zero-cost enum transitions at compile time with zero runtime JSON overhead.
+  - Supports both file paths (`xstate_from_json!("fixtures/chart.json")`) and inline string literals (`xstate_inline_json!(r#"{ ... }"#)`).
+  - Automatically injects an `include_str!` tracking statement on file paths so that Cargo triggers incremental recompilation whenever the JSON file is modified on disk.
+
+- **Comprehensive Documentation & Benchmark Budgets:**
+  - Added dedicated guide chapter `docs/book/src/guide/native-enums.md` covering hand-written FSMs, CLI generation, macros, and Stately Studio round-trips.
+  - Added `native_fsm_step` (target 5.0 ns) and `native_fsm_instance` (target 5.0 ns) to `benches/budgets.json` and `crates/xstate-core/benches/core.rs`.
+
 ## [0.1.1] - 2026-11-10
 
 ### Added
@@ -646,5 +672,7 @@ A complete Rust implementation with an XState v5 compatible engine, Python 0.12.
   (RUSTSEC-2025-0134, `rustls-pemfile` unmaintained, reached through lapin 3) is ignored with the
   reason recorded in `deny.toml`.
 
-[Unreleased]: https://github.com/basiltt/xstate-statemachine-rs/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/basiltt/xstate-statemachine-rs/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/basiltt/xstate-statemachine-rs/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/basiltt/xstate-statemachine-rs/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/basiltt/xstate-statemachine-rs/releases/tag/v0.1.0

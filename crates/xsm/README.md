@@ -10,6 +10,8 @@ cargo install xstate-statemachine-cli   # installs both `xsm` and `xsm-rs` binar
 xsm validate machine.json                 # build with the real engine, report every finding
 xsm inspect machine.json                  # state tree, transitions, logic, policies
 xsm diagram machine.json -f mermaid       # mermaid | plantuml | json
+xsm codegen machine.json -o src/fsm.rs        # generate zero-cost (< 5ns) native Rust enum state machine
+xsm codegen machine.json -o src/fsm.rs --check  # verify no drift between JSON and generated code (CI gate)
 xsm simulate machine.json -e GO,+500,STOP --record run.jsonl
 xsm paths machine.json --simple           # every acyclic path (default: a shortest path to each configuration)
 xsm inspect machine.json --live           # Stately Inspector over SSE, driven from stdin
@@ -23,7 +25,7 @@ xsm-rs validate machine.json
 
 | Command | Python `xsm` counterpart |
 |---|---|
-| `validate`, `inspect`, `diagram`, `docs`, `simulate`, `paths`, `snapshots`, `info`, `replay` | same names |
+| `validate`, `inspect`, `diagram`, `docs`, `simulate`, `paths`, `snapshots`, `info`, `replay`, `codegen` | `codegen` generates native Rust; others match |
 | not yet: `coverage`, `asyncapi`, `dlq`, `generate-template`, `list-templates`, `new`, `plugins`, `update`, `setup` | see the root README parity matrix |
 
 `snapshots --stale` follows the Python CLI: a record is stale when its `machine_version` label

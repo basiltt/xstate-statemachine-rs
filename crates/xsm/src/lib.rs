@@ -23,8 +23,9 @@ use anyhow::Result;
 use clap::{ArgAction, Parser, Subcommand};
 
 use commands::{
-    diagram::DiagramArgs, docs::DocsArgs, info::InfoArgs, inspect::InspectArgs, paths::PathsArgs,
-    replay::ReplayArgs, simulate::SimulateArgs, snapshots::SnapshotsArgs, validate::ValidateArgs,
+    codegen::CodegenArgs, diagram::DiagramArgs, docs::DocsArgs, info::InfoArgs,
+    inspect::InspectArgs, paths::PathsArgs, replay::ReplayArgs, simulate::SimulateArgs,
+    snapshots::SnapshotsArgs, validate::ValidateArgs,
 };
 use ui::Ui;
 
@@ -70,6 +71,9 @@ pub(crate) enum Command {
     Diagram(DiagramArgs),
     /// Generate a Markdown reference page per machine.
     Docs(DocsArgs),
+    /// Generate zero-cost native Rust enum state machine code from an XState JSON document.
+    #[command(visible_aliases = ["gen", "generate"])]
+    Codegen(CodegenArgs),
     /// Run a machine non-interactively on a simulated clock.
     #[command(visible_alias = "sim")]
     Simulate(SimulateArgs),
@@ -88,6 +92,7 @@ pub(crate) fn dispatch(ui: Ui, command: &Command) -> Result<u8> {
         Command::Replay(args) => commands::replay::run(ui, args),
         Command::Diagram(args) => commands::diagram::run(ui, args),
         Command::Docs(args) => commands::docs::run(ui, args),
+        Command::Codegen(args) => commands::codegen::run(ui, args),
         Command::Simulate(args) => commands::simulate::run(ui, args),
         Command::Paths(args) => commands::paths::run(ui, args),
         Command::Snapshots(args) => commands::snapshots::run(ui, args),

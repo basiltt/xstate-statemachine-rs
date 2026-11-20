@@ -133,6 +133,16 @@ pub use xstate_core::*;
 /// The engine: machine model, JSON parser, step engine, synchronous interpreter, snapshots.
 pub use xstate_core as core;
 
+/// Zero-cost native enum-based state machines (< 5 ns per transition).
+pub mod fsm {
+    pub use xstate_core::fsm::*;
+}
+
+/// Code generation from XState JSON to native Rust enum state machines.
+pub mod codegen {
+    pub use xstate_core::codegen::*;
+}
+
 /// The async interpreter on tokio: mailbox, timers, invoked services, actors.
 #[cfg(feature = "tokio")]
 pub use xstate_tokio as tokio;
@@ -207,8 +217,8 @@ pub mod plugins {
 /// `TypedEvent` / `TypedState` derives and the `statechart!` macro (`macros`).
 pub mod prelude {
     pub use xstate_core::{
-        Event, Machine, MachineLogic, Observer, Plugin, Snapshot, SyncInterpreter, TracingObserver,
-        TracingPlugin, TypedEvent, TypedState,
+        Event, ExportXState, Fsm, FsmInstance, InvalidTransition, Machine, MachineLogic, Observer,
+        Plugin, Snapshot, SyncInterpreter, TracingObserver, TracingPlugin, TypedEvent, TypedState,
     };
 
     #[cfg(feature = "tokio")]
@@ -241,5 +251,7 @@ pub mod prelude {
     // The derives live in the macro namespace, the traits above in the type namespace, so the
     // same names serve both (the way `serde::Serialize` does).
     #[cfg(feature = "macros")]
-    pub use xstate_macros::{TypedEvent, TypedState, statechart};
+    pub use xstate_macros::{
+        TypedEvent, TypedState, statechart, xstate_from_json, xstate_inline_json,
+    };
 }

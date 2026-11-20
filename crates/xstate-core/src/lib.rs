@@ -29,12 +29,14 @@
 
 pub mod builder;
 pub mod clock;
+pub mod codegen;
 pub mod config;
 pub mod context;
 pub mod engine;
 mod error;
 pub mod event;
 pub mod export;
+pub mod fsm;
 pub mod graph;
 mod ids;
 mod interpreter;
@@ -49,10 +51,12 @@ mod text;
 pub mod typed;
 
 pub use clock::{Clock, RealClock, SimulatedClock};
+pub use codegen::{CodegenOptions, generate_rust_code};
 pub use context::{Context, DynContext};
 pub use engine::{ActionList, ActiveState, Effect, Status, StepReport};
 pub use error::{Error, ErrorKind, Result};
 pub use event::{Event, EventOrigin};
+pub use fsm::{ExportXState, Fsm, FsmInstance, InvalidTransition};
 pub use ids::{StateId, TransitionId};
 pub use interpreter::{MAX_DEFERRED, Receipt, RestartTimers, RestoreOptions, SyncInterpreter};
 pub use logic::{ActionScope, AsyncServiceFn, MachineLogic, ServiceFuture, ServiceImpl};

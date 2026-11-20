@@ -1,6 +1,7 @@
 //! One module per subcommand, plus the shared analysis and model helpers.
 
 pub(crate) mod analysis;
+pub(crate) mod codegen;
 pub(crate) mod diagram;
 pub(crate) mod docs;
 pub(crate) mod info;

@@ -376,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "xstate-core"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "foldhash 0.1.5",
  "hex",
@@ -392,17 +392,19 @@ dependencies = [
 
 [[package]]
 name = "xstate-macros"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
+ "serde_json",
  "syn 2.0.119",
+ "xstate-core",
 ]
 
 [[package]]
 name = "xstate-statemachine"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "xstate-core",
  "xstate-macros",

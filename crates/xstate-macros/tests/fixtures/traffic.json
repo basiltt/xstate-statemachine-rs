@@ -1,0 +1,21 @@
+{
+  "id": "traffic_light",
+  "initial": "red",
+  "states": {
+    "red": {
+      "on": {
+        "NEXT": "green"
+      }
+    },
+    "green": {
+      "on": {
+        "NEXT": "yellow"
+      }
+    },
+    "yellow": {
+      "on": {
+        "NEXT": "red"
+      }
+    }
+  }
+}

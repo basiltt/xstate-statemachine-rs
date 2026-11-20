@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use serde_json::{Value, json};
+use xstate_core::fsm::Fsm;
 use xstate_core::{Machine, MachineLogic, SimulatedClock, SyncInterpreter};
 
 const TOGGLE: &str = r#"{"id":"toggle","initial":"inactive","states":{
@@ -197,8 +198,72 @@ fn snapshot_restore(c: &mut Criterion) {
     });
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum BenchState {
+    Inactive,
+    Active,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum BenchEvent {
+    Toggle,
+}
+
+struct BenchToggle;
+
+impl xstate_core::fsm::Fsm for BenchToggle {
+    type State = BenchState;
+    type Event = BenchEvent;
+
+    #[inline]
+    fn initial() -> Self::State {
+        BenchState::Inactive
+    }
+
+    #[inline]
+    fn step(
+        state: Self::State,
+        event: Self::Event,
+    ) -> Result<Self::State, xstate_core::fsm::InvalidTransition<Self::State, Self::Event>> {
+        match (state, event) {
+            (BenchState::Inactive, BenchEvent::Toggle) => Ok(BenchState::Active),
+            (BenchState::Active, BenchEvent::Toggle) => Ok(BenchState::Inactive),
+        }
+    }
+
+    fn all_states() -> &'static [Self::State] {
+        &[BenchState::Inactive, BenchState::Active]
+    }
+
+    fn all_events() -> &'static [Self::Event] {
+        &[BenchEvent::Toggle]
+    }
+}
+
+fn native_fsm_step(c: &mut Criterion) {
+    let mut state = BenchState::Inactive;
+    c.bench_function("native_fsm_step", |b| {
+        b.iter(|| {
+            let next = BenchToggle::step(state, black_box(BenchEvent::Toggle)).expect("step");
+            state = black_box(next);
+            state
+        });
+    });
+}
+
+fn native_fsm_instance(c: &mut Criterion) {
+    let mut inst = xstate_core::fsm::FsmInstance::<BenchToggle>::new();
+    c.bench_function("native_fsm_instance", |b| {
+        b.iter(|| inst.send(black_box(BenchEvent::Toggle)).expect("send"));
+    });
+}
+
 criterion_group!(
     benches,
+    native_fsm_step,
+    native_fsm_instance,
     send_flat,
     send_flat_fast,
     send_flat_str,

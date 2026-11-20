@@ -31,6 +31,7 @@
 - [HTTP integration (axum)](guide/axum.md)
 - [LLM agents](guide/agents.md)
 - [Typed DSL (macros)](guide/macros.md)
+- [Native Enums & Code Generation](guide/native-enums.md)
 - [Python bindings](guide/python-bindings.md)
 - [CLI reference](guide/cli.md)
 
