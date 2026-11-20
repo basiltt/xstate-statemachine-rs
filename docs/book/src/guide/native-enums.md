@@ -12,8 +12,8 @@ A pure enum transition compiles to an inlined direct CPU jump table or branch se
 
 | Mechanism | p50 Latency | Heap Allocations | Compile-Time Safety | Visual Editor Parity |
 |---|---|---|---|---|
-| **Native Enum FSM (`Fsm::step`)** | **1.85 ns** | **0 bytes** | Exhaustive compiler check | Full (via `ExportXState`) |
-| **FSM Instance (`FsmInstance::send`)** | **2.10 ns** | **0 bytes** | Exhaustive compiler check | Full (via `ExportXState`) |
+| **Native Enum FSM (`Fsm::step`)** | **1.15–1.63 ns** | **0 bytes** | Exhaustive compiler check | Full (via `ExportXState`) |
+| **FSM Instance (`FsmInstance::send`)** | **0.91–1.76 ns** | **0 bytes** | Exhaustive compiler check | Full (via `ExportXState`) |
 | **Dynamic `send_fast` (xstate-core)** | 69.8 ns | 0 bytes | Dynamic validation | Full (W3C SCXML / XState v5) |
 
 ---
@@ -52,12 +52,12 @@ impl Fsm for OrderMachine {
     type State = OrderState;
     type Event = OrderEvent;
 
-    #[inline(always)]
+    #[inline]
     fn initial() -> Self::State {
         OrderState::Pending
     }
 
-    #[inline(always)]
+    #[inline]
     fn step(
         state: Self::State,
         event: Self::Event,

@@ -60,7 +60,7 @@
                     </svg>
                 </span>
                 <span class="nav-title">xstate-statemachine-rs</span>
-                <span class="version-badge">v0.1.0</span>
+                <span class="version-badge">v0.1.2</span>
             </a>
             <div class="nav-links" id="navLinks">
                 <a href="{{ path_to_root }}guide/getting-started.html" class="nav-link">Guide</a>
@@ -119,9 +119,9 @@
 <section class="hero">
   <div class="hero-grid">
     <div class="hero-copy reveal">
-      <a class="pill" href="https://github.com/basiltt/xstate-statemachine-rs/releases/tag/v0.1.0">
+      <a class="pill" href="https://github.com/basiltt/xstate-statemachine-rs/releases/tag/v0.1.2">
         <span class="pill-dot"></span>
-        v0.1.0 is out &mdash; release notes
+        v0.1.2 is out &mdash; release notes
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
       </a>
       <h1>
@@ -461,6 +461,14 @@ async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
       </thead>
       <tbody>
         <tr>
+          <td><strong>S0</strong></td>
+          <td>Zero-cost native enum jump table (<code>Fsm::step</code> / <code>FsmInstance::send</code>)</td>
+          <td><strong style="color: var(--signal);">1.15&ndash;1.76 ns</strong></td>
+          <td>&mdash;</td>
+          <td><strong style="color: var(--signal);">&gt;568M ops/sec</strong></td>
+          <td><span class="badge" style="background: var(--signal-soft); color: var(--signal); padding: 2px 8px; border-radius: 6px; font-weight: 600;">0 allocs</span></td>
+        </tr>
+        <tr>
           <td><strong>S1</strong></td>
           <td>Plain microstep (no actions, no guards)</td>
           <td><strong style="color: var(--signal);">69.8 ns</strong></td>
@@ -537,6 +545,11 @@ async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
   </div>
 
   <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px;">
+    <a href="guide/native-enums.html" style="text-decoration: none; padding: 24px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); transition: all var(--fast); display: flex; flex-direction: column; gap: 8px;">
+      <h3 style="margin: 0; color: #10B981; font-size: 1.15rem;">⚡ Zero-Cost Native Enums (&lt; 5 ns)</h3>
+      <p style="margin: 0; color: var(--fg-dim); font-size: 0.95rem;">Compile-time exhaustive enums, pure inlined jump tables (1.15&ndash;1.76 ns p50), CLI codegen with drift gates, and proc macros.</p>
+    </a>
+
     <a href="guide/getting-started.html" style="text-decoration: none; padding: 24px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); transition: all var(--fast); display: flex; flex-direction: column; gap: 8px;">
       <h3 style="margin: 0; color: var(--signal); font-size: 1.15rem;">🚀 Getting Started Guide</h3>
       <p style="margin: 0; color: var(--fg-dim); font-size: 0.95rem;">Build your first statechart in 60 seconds. Learn the dynamic and macro APIs, actions, guards, and interpreters.</p>

@@ -27,7 +27,7 @@ the same name (`xstate_statemachine::tokio`, `::persistence`, ...) and the match
 | `patterns` | `xstate-patterns`: retry, circuit breaker, saga, choreography | `eda` | core (`patterns`) |
 | `observability` | `xstate-observability`: `MetricsObserver` | | `observability` |
 | `inspect` | `xstate-inspect`: Stately Inspector protocol, JSONL, replay, SSE sink | | core (`inspect`) |
-| `macros` | `xstate-macros`: `TypedEvent`, `TypedState`, `statechart!` | | the Pythonic DSL |
+| `macros` | `xstate-macros`: `TypedEvent`, `TypedState`, `statechart!`, `xstate_from_json!`, `xstate_inline_json!` | | the Pythonic DSL |
 | `axum` | `xstate-axum`: registry, REST, SSE, WebSocket, inspector endpoint | `persistence`, `inspect` | `starlette`, `fastapi` |
 | `agents` | `xstate-agents`: LLM agents as statecharts | | `agents` |
 | `testing` | `xstate-testing` (a skeleton today; see its README) | | `testing` |

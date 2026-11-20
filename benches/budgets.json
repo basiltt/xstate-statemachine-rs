@@ -3,12 +3,12 @@
   "allowed_slowdown": 1.25,
   "benchmarks": {
     "native_fsm_step": {
-      "baseline_p50_ns": 1.85,
+      "baseline_p50_ns": 1.63,
       "target_p50_ns": 5.0,
       "note": "pure enum match transition step (< 5 ns target; 0 heap allocations, register-passed state)"
     },
     "native_fsm_instance": {
-      "baseline_p50_ns": 2.10,
+      "baseline_p50_ns": 1.76,
       "target_p50_ns": 5.0,
       "note": "FsmInstance in-place send (< 5 ns target; inlined jump table / register assignment)"
     },

@@ -10,8 +10,9 @@ Operational brief and rulebook for AI coding agents (Claude, Codex, Antigravity,
 
 ### Key Tenets
 1. **Extreme Performance:** Sub-microsecond transitions (**69.8 ns p50** on `send_fast` fast path; >14.3M ops/s; **73.8 ns** bare engine step) with **0 heap allocations** on the fast path.
+   - Zero-cost native enum state machines (`xstate-core::fsm::Fsm` & `FsmInstance`) execute in **1.15–1.76 ns p50** (< 5 ns target) with **0 heap allocations** via inlined CPU jump tables / branch sequences on `#[repr(u8)]` enums.
 2. **Byte-Level Interoperability:** 100% binary snapshot format compatibility (Layout `v4`) and identical structure hashes (`SHA256(topology)[:16]`) with the Python library [`xstate-statemachine`](https://github.com/basiltt/xstate-statemachine) 0.12.1. Shared SQLite, PostgreSQL, and Redis stores.
-3. **Turnkey Production Toolset:** 15 modular workspace crates providing actor-model concurrency on Tokio, durable persistence, transactional outbox messaging (NATS, RabbitMQ, SQS, Redis Streams), resilience patterns (sagas, circuit breakers), Axum web integration, Stately visual inspection, Prometheus metrics, and LLM agent guards.
+3. **Turnkey Production Toolset:** 15 modular workspace crates providing actor-model concurrency on Tokio, durable persistence, transactional outbox messaging (NATS, RabbitMQ, SQS, Redis Streams), resilience patterns (sagas, circuit breakers), Axum web integration, Stately visual inspection, Prometheus metrics, LLM agent guards, compile-time macros (`xstate_from_json!`), and CLI code generation (`xsm codegen` with `--check` drift gate).
 4. **Absolute Safety:** `#![forbid(unsafe_code)]` enforced across all production crates. Complete panic containment in async dispatch and actors.
 
 ---
@@ -20,7 +21,7 @@ Operational brief and rulebook for AI coding agents (Claude, Codex, Antigravity,
 
 ```
 crates/
-├── xstate-core              # Sans-I/O W3C SCXML / XState v5 algorithm, bitsets, direct compiler, pure API
+├── xstate-core              # Sans-I/O W3C SCXML / XState v5 algorithm, bitsets, direct compiler, pure API, zero-cost Fsm & AST codegen
 ├── xstate-tokio             # Tokio actor runtime, bounded mailboxes, overflow policies, timers
 ├── xstate-persistence       # Durable stores (SQLite, Postgres, Redis, File), locks, durable deadlines
 ├── xstate-eda               # CloudEvents 1.0, transactional outbox, DLQ, AsyncAPI 3.0, NATS, RabbitMQ, SQS
@@ -29,11 +30,11 @@ crates/
 ├── xstate-inspect           # Stately Inspector protocol, SSE live server, JSONL deterministic recording
 ├── xstate-observability     # Prometheus metric set via metrics facade, label hygiene, timings
 ├── xstate-agents            # LLM agents as statecharts: tool loops, token budget guards, approvals
-├── xstate-macros            # Proc macros: statechart! DSL, #[derive(TypedEvent)], #[derive(TypedState)]
+├── xstate-macros            # Proc macros: statechart! DSL, #[derive(TypedEvent)], #[derive(TypedState)], xstate_from_json!, xstate_inline_json!
 ├── xstate-testing           # Test harness, virtual clocks, path walkers, mock logic
 ├── xstate-conformance       # 53 external conformance test runners (dev only, publish = false)
 ├── xstate-py                # PyO3 Python acceleration module xstate_rs (publish = false)
-├── xstate-statemachine-cli  # `xsm` CLI binary (validate, inspect --live, diagram, docs, simulate)
+├── xstate-statemachine-cli  # `xsm` CLI binary (validate, inspect --live, diagram, docs, simulate, codegen with --check drift gate)
 └── xstate-statemachine      # Unified facade crate re-exporting all crates behind feature flags
 ```
 
@@ -74,6 +75,9 @@ mypy --strict crates/xstate-py/python/xstate_rs
 
 # 9. Performance gate check (regression threshold: 1.25x baseline)
 python scripts/perf_gate.py --no-run
+
+# 10. Native FSM benchmark check (< 5 ns budget)
+cargo bench -p xstate-core --bench core -- native_fsm
 ```
 
 ---
@@ -114,6 +118,14 @@ When implementing code or modifying crates, preserve these core invariants:
 6. **Python Repository Isolation:** The cousin repository at `../PythonProjects/xstate-statemachine` is strictly **READ-ONLY**. Never write to, modify, or delete files in the Python repo.
 7. **Eager Plans Precomputation & Direct Selection:** Transition plans (`Plans`) are computed eagerly during machine assembly (`Machine::from_data`) so `machine.plans()` is a plain pointer dereference without `OnceLock` synchronization. Non-parallel statecharts bypass `Enabled` SmallVec collection via direct `select_in_chain`.
 8. **Steady-State Fast Path (`send_fast`, `send_str`, `step_ref`):** When no internal queue, timers, observers, or deferred events are pending, the interpreter invokes the step engine without `Receipt` allocation or `Arc<Machine>` cloning.
+9. **Zero-Cost Native Enum State Machine Invariants (`xstate-core::fsm`):**
+   - Transitions via `Fsm::step(state, event)` must remain pure and free of heap allocations, compiling into inline CPU branch/jump instructions.
+   - `FsmInstance<M>` manages active state in-place with a single register assignment.
+   - `InvalidTransition<S, E>` passes state and event by value with zero dynamic allocations (`Display` and `std::error::Error` implemented).
+   - Generated code must use fully-qualified `{krate}::fsm::...` paths rather than blanket glob imports (`use fsm::*;`) to avoid namespace pollution and E0252 re-import collisions in consumer crates.
+10. **Code Generation & Drift Detection:**
+   - `xsm codegen --check` must perform strict normalized string comparison and exit with code 1 if drift between committed Rust code and source XState JSON is detected.
+   - Procedural macro `xstate_from_json!` must track input file paths via `const _: &str = include_str!(#path_str);` so Cargo rebuilds immediately whenever the underlying JSON file is modified on disk.
 
 ---
 

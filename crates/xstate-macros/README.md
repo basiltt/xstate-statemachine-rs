@@ -6,13 +6,31 @@ Procedural macros for `xstate-core`:
   payload mapping, `From` / `TryFrom<Event>`, `declared_events()`, `check` against a `Machine`);
 * `#[derive(TypedState)]`: an enum naming a machine's leaf states (`is_active`, `check`);
 * `statechart!`: a Rust-literal chart DSL covering every XState construct, validated at compile
-  time (duplicates, initial children, target resolution, tree shape) and building a `Machine`.
+  time (duplicates, initial children, target resolution, tree shape) and building a `Machine`;
+* `xstate_from_json!`: compile-time generation of zero-cost (< 5 ns) enum state machines directly
+  from an XState JSON file path with automatic incremental Cargo rebuild tracking;
+* `xstate_inline_json!`: compile-time generation of zero-cost enum state machines from an inline
+  XState JSON string literal.
 
-Status: 0.1.0, with `trybuild` UI tests for the diagnostics. The `xstate-statemachine` facade
-(feature `macros`) is enough: the generated code resolves `xstate_core` and `serde_json` through
-it, and a CI job checks a crate that depends on the facade alone
-(`tests/facade-only/`). Using `xstate-macros` directly still needs `xstate-core` (and `serde` for
-payload types) in the calling crate, and `statechart!` additionally needs `serde_json`.
+Status: 0.1.2, with `trybuild` UI tests for diagnostics and integration tests covering compile-time
+JSON compilation. The `xstate-statemachine` facade (feature `macros`) is enough: the generated code
+resolves `xstate_core` and `serde_json` through it.
+
+### Compile-Time Macro Example (`xstate_from_json!`)
+
+```rust
+use xstate_macros::xstate_from_json;
+
+// Compiles directly from an XState JSON file into zero-cost Rust enums:
+xstate_from_json!("fixtures/traffic.json");
+
+let mut light = TrafficLightInstance::new();
+assert_eq!(light.state(), TrafficLightState::Green);
+light.send(TrafficLightEvent::Timer).unwrap();
+assert_eq!(light.state(), TrafficLightState::Yellow);
+```
+
+### Pure Rust Statechart DSL (`statechart!`)
 
 ```rust
 use xstate_core::{MachineLogic, SyncInterpreter};

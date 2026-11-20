@@ -35,13 +35,16 @@ python conformance/tools/generate_expected.py --check
 
 # Performance regression gate (against budgets.json)
 python scripts/perf_gate.py --no-run
+
+# Native FSM benchmark check (< 5 ns budget)
+cargo bench -p xstate-core --bench core -- native_fsm
 ```
 
 ---
 
 ## Workspace Architecture (15 Crates)
 
-- **`xstate-core`**: Core sans-I/O statechart engine, 69.8 ns fast-path bitsets (`send_fast`, `send_str`, `step_ref`), XState v5 JSON parser, snapshots, Mermaid/PlantUML exporters.
+- **`xstate-core`**: Core sans-I/O statechart engine, 69.8 ns fast-path bitsets (`send_fast`, `send_str`, `step_ref`), zero-cost native enum state machines (< 5 ns `Fsm` & `FsmInstance`), AST code generator (`Machine::to_rust_code`), bidirectional XState v5 JSON exporter (`ExportXState`), snapshots, Mermaid/PlantUML exporters.
 - **`xstate-tokio`**: Actor runtime, bounded mailboxes, backpressure policies, precision timers.
 - **`xstate-persistence`**: Storage engines (PostgreSQL, SQLite, Redis, File), optimistic locking, durable deadlines.
 - **`xstate-eda`**: CloudEvents 1.0, transactional outbox, dead letters, AsyncAPI 3.0, NATS, RabbitMQ, SQS, Redis Streams.
@@ -50,9 +53,9 @@ python scripts/perf_gate.py --no-run
 - **`xstate-inspect`**: Stately visual inspector protocol, live SSE server, deterministic JSONL recording & replay.
 - **`xstate-observability`**: Prometheus metric set via `metrics` facade.
 - **`xstate-agents`**: LLM agent loops as statecharts: tool allow-lists, token budget guards, human approvals.
-- **`xstate-macros`**: `statechart!` DSL, `#[derive(TypedEvent)]`, `#[derive(TypedState)]`.
+- **`xstate-macros`**: `statechart!` DSL, `#[derive(TypedEvent)]`, `#[derive(TypedState)]`, `xstate_from_json!`, `xstate_inline_json!`.
 - **`xstate-testing`**: Virtual simulated clocks, path walking, coverage.
-- **`xstate-statemachine-cli`**: `xsm` CLI binary.
+- **`xstate-statemachine-cli`**: `xsm` CLI binary (validate, inspect --live, diagram, docs, simulate, `codegen` with `--check` drift gate).
 - **`xstate-statemachine`**: Top-level facade crate re-exporting all components behind feature flags.
 - **`xstate-conformance`**: Conformance suite runner (`publish = false`).
 - **`xstate-py`**: PyO3 Python bindings (`publish = false`).
@@ -62,8 +65,9 @@ python scripts/perf_gate.py --no-run
 ## Critical Invariants
 
 1. **Safety:** `#![forbid(unsafe_code)]` in all library crates.
-2. **Zero-Allocation Fast Path:** Steady-state microsteps must allocate 0 heap bytes (`FixedBitSet`, `SmolStr`, `SmallVec`).
+2. **Zero-Allocation Fast Path:** Steady-state microsteps must allocate 0 heap bytes (`FixedBitSet`, `SmolStr`, `SmallVec`). Native enum transitions via `Fsm` execute in 1.15–1.76 ns p50 with 0 heap bytes.
 3. **Panic Containment:** Actors and message dispatchers must catch panics (`catch_unwind`) and transition to error states without crashing.
 4. **Wire Parity with Python:** Layout `v4` snapshots and 16-hex character structure hashes must match the Python library down to the byte.
-5. **Read-Only Python Repo:** Never modify files in the cousin Python repo (`../PythonProjects/xstate-statemachine`).
-6. **No Premature Release:** Do not push to git remotes or crates.io without explicit instruction from the owner.
+5. **Code Generation & Drift Verification:** `xsm codegen --check` acts as a CI gate verifying committed Rust code matches source statecharts. Macro file imports must use `include_str!` tracking.
+6. **Read-Only Python Repo:** Never modify files in the cousin Python repo (`../PythonProjects/xstate-statemachine`).
+7. **No Premature Release:** Do not push to git remotes or crates.io without explicit instruction from the owner.

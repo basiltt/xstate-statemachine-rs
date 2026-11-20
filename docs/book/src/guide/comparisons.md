@@ -11,7 +11,7 @@ This guide provides an honest, source-noted comparison between `xstate-statemach
 | Capability / Dimension | `xstate-statemachine-rs` | `statig` / `smlang` | `python-statemachine` | `XState v5` (TypeScript) | `Temporal` / `Step Functions` |
 |:---|:---:|:---:|:---:|:---:|:---:|
 | **Language & Ecosystem** | **Rust (MSRV 1.88+)** | Rust | Python | JavaScript / TypeScript | Polyglot (Go/Java/TS/Python) |
-| **Microstep Latency** | **69.8 ns (p50)** | ~50–150 ns | 18.7 µs (267x slower) | 5–15 µs (80x slower) | 10–50 ms (Network bound) |
+| **Microstep Latency** | **69.8 ns (p50)** (or **1.15–1.76 ns** via native `Fsm`) | ~50–150 ns | 18.7 µs (267x slower) | 5–15 µs (80x slower) | 10–50 ms (Network bound) |
 | **Steady-State Allocations** | **0 heap allocs** | 0 heap allocs | Multiple dicts/tuples | V8 object allocations | Network I/O serialization |
 | **Dynamic JSON / Runtime Loading** | **Yes (XState v5 JSON)** | No (Compile-time only) | No (Class DSL only) | Yes | Yes (JSON / YAML) |
 | **Visual Editor Integration** | **Yes (Stately Studio)** | No | No | Yes (Stately Studio) | Visual Workflow Designer |
@@ -43,9 +43,10 @@ Crates like `statig` and `smlang` define state machines entirely within the Rust
 - **Zero Overhead:** Transitions compile directly into native jumps and match statements.
 
 #### Why choose `xstate-statemachine-rs` instead:
-1. **Dynamic Topologies & JSON Schemas:** In real-world enterprise architectures, statecharts frequently originate from external sources: visual design in Stately Studio, customer-defined workflow graphs, database configs, or API payloads. `statig` cannot parse or construct a state machine at runtime.
-2. **True Statechart Semantics:** `xstate-statemachine-rs` supports the full W3C SCXML / XState v5 specification: parallel orthogonal regions, shallow/deep history states, dynamic eventless `always` microsteps, and compound state hierarchies with least common ancestor (LCA) resolution.
-3. **Turnkey Ecosystem:** Beyond raw transitions, `xstate-statemachine-rs` provides built-in durable persistence (Postgres, SQLite, Redis), CloudEvents messaging, Tokio actor mailboxes, and an Axum web integration.
+1. **Best of Both Worlds (Zero-Cost Enums + Enterprise Statecharts):** As of version 0.1.2, you no longer have to compromise between compile-time enum speed and statechart ergonomics. `xstate-statemachine-rs` provides **native enum state machines** (`xstate_core::fsm::Fsm`, `xstate_from_json!`, and `xsm codegen`) that compile down to pure inlined jump tables executing in **1.15–1.76 ns p50** with **0 heap allocations**, beating standalone macro crates while preserving bidirectional export to Stately Studio (`ExportXState`).
+2. **Dynamic Topologies & JSON Schemas:** In real-world enterprise architectures, statecharts frequently originate from external sources: visual design in Stately Studio, customer-defined workflow graphs, database configs, or API payloads. `statig` cannot parse or construct a state machine at runtime.
+3. **True Statechart Semantics:** `xstate-statemachine-rs` supports the full W3C SCXML / XState v5 specification: parallel orthogonal regions, shallow/deep history states, dynamic eventless `always` microsteps, and compound state hierarchies with least common ancestor (LCA) resolution.
+4. **Turnkey Ecosystem:** Beyond raw transitions, `xstate-statemachine-rs` provides built-in durable persistence (Postgres, SQLite, Redis), CloudEvents messaging, Tokio actor mailboxes, and an Axum web integration.
 
 ---
 
