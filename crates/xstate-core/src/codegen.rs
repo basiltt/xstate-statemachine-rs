@@ -461,11 +461,67 @@ mod tests {
 
     #[test]
     fn test_pascal_case_conversion() {
+        assert_eq!(to_pascal_case(""), "Unknown");
         assert_eq!(to_pascal_case("inactive"), "Inactive");
         assert_eq!(to_pascal_case("TOGGLE"), "Toggle");
         assert_eq!(to_pascal_case("submit-order"), "SubmitOrder");
         assert_eq!(to_pascal_case("order_paid"), "OrderPaid");
         assert_eq!(to_pascal_case("pedestrians.walk"), "PedestriansWalk");
         assert_eq!(to_pascal_case("2nd_attempt"), "_2ndAttempt");
+    }
+
+    #[test]
+    fn test_codegen_custom_options() {
+        let machine = Machine::from_json(TOGGLE_JSON).expect("valid machine");
+        let options = CodegenOptions {
+            machine_name: Some("CustomSwitch".to_owned()),
+            visibility: String::new(),
+            include_tests: false,
+            include_json_export: false,
+            crate_path: "crate".to_owned(),
+        };
+        let code = machine.to_rust_code(&options);
+        assert!(code.contains("enum CustomSwitchState"));
+        assert!(code.contains("enum CustomSwitchEvent"));
+        assert!(code.contains("struct CustomSwitchMachine;"));
+        assert!(!code.contains("pub enum CustomSwitchState"));
+        assert!(!code.contains("mod tests_"));
+        assert!(!code.contains("ExportXState"));
+    }
+
+    #[test]
+    fn test_codegen_targetless_and_wildcard() {
+        let json = r#"{
+            "id": "door",
+            "initial": "closed",
+            "states": {
+                "closed": {
+                    "on": {
+                        "LOG": {},
+                        "*": "opened"
+                    }
+                },
+                "opened": {}
+            }
+        }"#;
+        let machine = Machine::from_json(json).expect("valid machine");
+        let code = generate_rust_code(&machine, &CodegenOptions::default());
+        assert!(code.contains("enum DoorState"));
+        assert!(code.contains("(Self::Closed, DoorEvent::Log) => Ok(Self::Closed)"));
+    }
+
+    #[test]
+    fn test_codegen_no_events_fallback() {
+        let json = r#"{
+            "id": "static_chart",
+            "initial": "idle",
+            "states": {
+                "idle": {}
+            }
+        }"#;
+        let machine = Machine::from_json(json).expect("valid machine");
+        let code = generate_rust_code(&machine, &CodegenOptions::default());
+        assert!(code.contains("enum StaticChartEvent"));
+        assert!(code.contains("Tick,"));
     }
 }

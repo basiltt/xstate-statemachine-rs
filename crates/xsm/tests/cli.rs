@@ -771,4 +771,34 @@ fn codegen_writes_to_output_file_and_checks_drift() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains("Drift detected"));
+
+    // 4. Check on non-existent file -> code 1
+    let missing_file = dir.path().join("missing.rs");
+    xsm()
+        .args(["codegen", "--check", "-o"])
+        .arg(&missing_file)
+        .arg(fixture("toggle.json"))
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("does not exist"));
+
+    // 5. Output to directory resolves to toggle.rs
+    let out_dir = dir.path().join("sub");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    xsm().args(["codegen", "-o"]).arg(&out_dir).arg(fixture("toggle.json")).assert().success();
+    assert!(out_dir.join("toggle.rs").exists());
+
+    // 6. Test alias `gen` and `generate`
+    xsm().arg("gen").arg(fixture("toggle.json")).assert().success();
+    xsm().arg("generate").arg(fixture("toggle.json")).assert().success();
+}
+
+#[test]
+fn codegen_check_without_output_fails() {
+    xsm()
+        .args(["codegen", "--check"])
+        .arg(fixture("toggle.json"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--check requires -o/--output"));
 }

@@ -280,6 +280,41 @@ mod tests {
         assert_eq!(err.event, LightEvent::Reset);
         // State remains unchanged on rejection:
         assert_eq!(light.state(), LightState::Green);
+
+        // Test from_state and default
+        let custom = FsmInstance::<TrafficLight>::from_state(LightState::Yellow);
+        assert_eq!(custom.state(), LightState::Yellow);
+
+        let def = FsmInstance::<TrafficLight>::default();
+        assert_eq!(def.state(), LightState::Green);
+
+        assert_eq!(
+            TrafficLight::all_states(),
+            &[LightState::Green, LightState::Yellow, LightState::Red]
+        );
+        assert_eq!(TrafficLight::all_events(), &[LightEvent::Timer, LightEvent::Reset]);
+    }
+
+    impl ExportXState for TrafficLight {
+        fn to_xstate_json() -> serde_json::Value {
+            serde_json::json!({
+                "id": "traffic_light",
+                "initial": "green",
+                "states": {
+                    "green": { "on": { "Timer": "yellow" } },
+                    "yellow": { "on": { "Timer": "red" } },
+                    "red": { "on": { "Timer": "green", "Reset": "green" } }
+                }
+            })
+        }
+    }
+
+    #[test]
+    fn test_export_xstate() {
+        let json = TrafficLight::to_xstate_json();
+        assert_eq!(json["id"], "traffic_light");
+        let machine = TrafficLight::to_machine().expect("compiles to machine");
+        assert_eq!(machine.id(), "traffic_light");
     }
 
     #[test]

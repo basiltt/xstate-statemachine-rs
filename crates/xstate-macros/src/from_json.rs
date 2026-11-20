@@ -92,3 +92,30 @@ fn expand_json_string(
         #(#items)*
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quote::quote;
+
+    #[test]
+    fn test_expand_inline_json() {
+        let input = quote!(r#"{"id":"test","initial":"a","states":{"a":{}}}"#);
+        let res = expand_inline_json(input);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_expand_from_json_invalid() {
+        let input = quote!(r#"{"id":"test"}"#);
+        let res = expand_from_json(input);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_expand_from_json_missing_file() {
+        let input = quote!("non_existent_file.json");
+        let res = expand_from_json(input);
+        assert!(res.is_err());
+    }
+}
